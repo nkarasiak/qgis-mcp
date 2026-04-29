@@ -86,7 +86,7 @@ from .compat import (
 
 
 _DEFAULT_HOST = "localhost"
-_DEFAULT_PORT = 9876
+_DEFAULT_PORT = 9877  # qgis-mcp-north uses 9877 (vs upstream nkarasiak on 9876)
 _RECV_CHUNK_SIZE = 65536
 _MAX_MESSAGE_SIZE = 10 * 1024 * 1024  # 10 MB
 _HEADER_STRUCT = struct.Struct(">I")
@@ -95,7 +95,7 @@ _HEADER_STRUCT = struct.Struct(">I")
 class QgisMCPServer(QObject):
     """Server class to handle socket connections and execute QGIS commands"""
 
-    LOG_TAG: ClassVar[str] = "MCP"
+    LOG_TAG: ClassVar[str] = "MCP-NORTH"
     MAX_CLIENTS: ClassVar[int] = 10
 
     def __init__(self, host=_DEFAULT_HOST, port=_DEFAULT_PORT, iface=None):

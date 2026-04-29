@@ -22,8 +22,8 @@ import sys
 from pathlib import Path
 
 REPO_DIR = Path(__file__).resolve().parent
-PLUGIN_SRC = REPO_DIR / "qgis_mcp_plugin"
-GITHUB_URL = "git+https://github.com/nkarasiak/qgis-mcp.git"
+PLUGIN_SRC = REPO_DIR / "qgis_mcp_north_plugin"
+GITHUB_URL = "git+https://github.com/wattwong103/qgis-mcp-north.git"
 
 # ── Platform helpers ────────────────────────────────────────────────────────
 
@@ -99,12 +99,12 @@ def _venv_python() -> Path:
 
 
 def _is_venv_ready() -> bool:
-    """Check if the venv exists and qgis_mcp is importable."""
+    """Check if the venv exists and qgis_mcp_north is importable."""
     python = _venv_python()
     if not python.exists():
         return False
     result = subprocess.run(
-        [str(python), "-c", "import qgis_mcp"],
+        [str(python), "-c", "import qgis_mcp_north"],
         capture_output=True,
     )
     return result.returncode == 0
@@ -136,20 +136,20 @@ def _local_entry() -> dict:
     if shutil.which("uv"):
         return {
             "command": "uv",
-            "args": ["run", "--no-sync", "src/qgis_mcp/server.py"],
+            "args": ["run", "--no-sync", "src/qgis_mcp_north/server.py"],
             "cwd": str(REPO_DIR),
         }
     # Fallback: run directly from the venv Python
     return {
         "command": str(_venv_python()),
-        "args": [str(REPO_DIR / "src" / "qgis_mcp" / "server.py")],
+        "args": [str(REPO_DIR / "src" / "qgis_mcp_north" / "server.py")],
     }
 
 
 def _remote_entry() -> dict:
     return {
         "command": "uvx",
-        "args": ["--from", GITHUB_URL, "qgis-mcp-server"],
+        "args": ["--from", GITHUB_URL, "qgis-mcp-north-server"],
     }
 
 
@@ -158,7 +158,7 @@ def _zed_local_entry() -> dict:
         return {
             "command": {
                 "path": "uv",
-                "args": ["run", "--no-sync", "src/qgis_mcp/server.py"],
+                "args": ["run", "--no-sync", "src/qgis_mcp_north/server.py"],
                 "env": {"QGIS_MCP_TRANSPORT": "stdio"},
             },
             "settings": {},
@@ -166,7 +166,7 @@ def _zed_local_entry() -> dict:
     return {
         "command": {
             "path": str(_venv_python()),
-            "args": [str(REPO_DIR / "src" / "qgis_mcp" / "server.py")],
+            "args": [str(REPO_DIR / "src" / "qgis_mcp_north" / "server.py")],
             "env": {"QGIS_MCP_TRANSPORT": "stdio"},
         },
         "settings": {},
@@ -177,7 +177,7 @@ def _zed_remote_entry() -> dict:
     return {
         "command": {
             "path": "uvx",
-            "args": ["--from", GITHUB_URL, "qgis-mcp-server"],
+            "args": ["--from", GITHUB_URL, "qgis-mcp-north-server"],
             "env": {"QGIS_MCP_TRANSPORT": "stdio"},
         },
         "settings": {},
@@ -195,7 +195,7 @@ def _server_entry(client: str, remote: bool) -> dict:
 
 def install_plugin(profile: str) -> Path:
     plugins_dir = qgis_plugins_dir(profile)
-    target = plugins_dir / "qgis_mcp_plugin"
+    target = plugins_dir / "qgis_mcp_north_plugin"
 
     if target.is_symlink() or target.exists():
         if target.is_symlink() and target.resolve() == PLUGIN_SRC.resolve():
@@ -223,7 +223,7 @@ def install_plugin(profile: str) -> Path:
 
 
 def uninstall_plugin(profile: str) -> None:
-    target = qgis_plugins_dir(profile) / "qgis_mcp_plugin"
+    target = qgis_plugins_dir(profile) / "qgis_mcp_north_plugin"
     if target.is_symlink() or target.exists():
         if target.is_symlink() or target.is_file():
             target.unlink()
@@ -263,14 +263,14 @@ def configure_client(client_name: str, remote: bool) -> None:
     # Claude Code: print command only
     if info.get("print_only"):
         if remote:
-            cmd = f'claude mcp add qgis -- uvx --from "{GITHUB_URL}" qgis-mcp-server'
+            cmd = f'claude mcp add qgis-north -- uvx --from "{GITHUB_URL}" qgis-mcp-north-server'
         elif shutil.which("uv"):
-            cmd = "claude mcp add qgis -- uv run --no-sync src/qgis_mcp/server.py"
+            cmd = "claude mcp add qgis-north -- uv run --no-sync src/qgis_mcp_north/server.py"
             print(f"  Run this from {REPO_DIR}:")
         else:
             python = str(_venv_python())
-            server = str(REPO_DIR / "src" / "qgis_mcp" / "server.py")
-            cmd = f'claude mcp add qgis -- "{python}" "{server}"'
+            server = str(REPO_DIR / "src" / "qgis_mcp_north" / "server.py")
+            cmd = f'claude mcp add qgis-north -- "{python}" "{server}"'
         print(f"  {cmd}")
         return
 
@@ -283,7 +283,7 @@ def configure_client(client_name: str, remote: bool) -> None:
         _backup(path)
 
     config.setdefault(key, {})
-    config[key]["qgis"] = entry
+    config[key]["qgis-north"] = entry
     _write_json(path, config)
     print(f"  Wrote: {path}")
 
@@ -300,9 +300,9 @@ def unconfigure_client(client_name: str) -> None:
     key = info["key"]
 
     config = _read_json(path)
-    if key in config and "qgis" in config[key]:
+    if key in config and "qgis-north" in config[key]:
         _backup(path)
-        del config[key]["qgis"]
+        del config[key]["qgis-north"]
         if not config[key]:
             del config[key]
         _write_json(path, config)
@@ -417,4 +417,3 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()

@@ -1,18 +1,21 @@
 [project]
-name = "qgis-mcp"
-version = "0.2.1"
-description = "QGIS integration through the Model Context Protocol"
+name = "qgis-mcp-north"
+version = "0.1.0"
+description = "Focused QGIS MCP server for transportation research figure pipelines (PFLOW, GUFM). Forked from nkarasiak/qgis-mcp."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "mcp[cli]>=1.20.0",
+    "pydantic>=2.7",
 ]
-
-[project.scripts]
-qgis-mcp-server = "qgis_mcp.server:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-asyncio>=0.23"]
+pptx = ["python-pptx>=1.0"]
+trajectory = ["movingpandas>=0.20"]
+
+[project.scripts]
+qgis-mcp-north-server = "qgis_mcp_north.server:main"
 
 [tool.ruff]
 target-version = "py312"
@@ -25,8 +28,9 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101"]           # assert is fine in tests
-"benchmarks/*" = ["T201", "B023"]  # print is fine; loop-var closures are called within same iteration
+"tests/*" = ["S101"]
+"_archive/*" = ["ALL"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests"]

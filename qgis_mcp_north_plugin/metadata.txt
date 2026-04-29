@@ -1,0 +1,35 @@
+[general]
+name=QGIS MCP North
+qgisMinimumVersion=3.28
+qgisMaximumVersion=4.99
+description=Focused QGIS MCP plugin for transportation research figure pipelines (forked from nkarasiak/qgis-mcp).
+about=Companion QGIS plugin for the qgis-mcp-north MCP server. Exposes a TCP
+    socket that the server connects to so that LLMs can drive figure
+    rendering, choropleths, trajectory plots, and OD-flow maps without
+    leaving Claude.
+
+    This plugin is intentionally narrow — focused on transportation research
+    workflows (PFLOW, GUFM, weekly-deck figure pipelines). For the general
+    51-tool QGIS-MCP surface, install nkarasiak/qgis-mcp side-by-side
+    (different plugin folder, different socket port).
+
+    Pair this plugin with the qgis-mcp-north MCP server. See
+    https://github.com/wattwong103/qgis-mcp-north for setup instructions.
+
+    Default socket port: 9877 (vs upstream nkarasiak/qgis-mcp on 9876).
+
+version=0.1.0
+author=North
+email=
+tags=mcp,ai,claude,llm,transportation,research,pflow,gufm
+homepage=https://github.com/wattwong103/qgis-mcp-north
+tracker=https://github.com/wattwong103/qgis-mcp-north/issues
+repository=https://github.com/wattwong103/qgis-mcp-north
+license=MIT
+category=Plugins
+icon=icons/icon.png
+experimental=True
+deprecated=False
+changelog=0.1.0 : Initial fork — scaffolding only, 13 tool stubs registered, no functional implementations yet.
+    Forked from nkarasiak/qgis-mcp v0.2.1; cut to 12 workflow tools + 1 escape hatch.
+    See docs/DESIGN.md for tool surface.
