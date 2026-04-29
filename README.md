@@ -99,12 +99,25 @@ Go to `Claude` > `Settings` > `Developer` > `Edit Config` and add:
   "mcpServers": {
     "qgis": {
       "command": "uv",
-      "args": ["run", "src/qgis_mcp/server.py"],
-      "cwd": "/path/to/qgis-mcp"
+      "args": [
+        "--directory", "/path/to/qgis-mcp",
+        "run", "src/qgis_mcp/server.py"
+      ]
     }
   }
 }
 ```
+
+> **Microsoft Store (MSIX) Claude Desktop on Windows:** the `--directory` form
+> shown above is required — `cwd` will not work. Store-installed Claude Desktop
+> runs MCP servers inside an MSIX package sandbox that silently drops the `cwd`
+> field, so configs using `cwd` fail with
+> `Failed to spawn: src/qgis_mcp/server.py — The system cannot find the path specified`.
+> Standalone (`.exe` from claude.ai) installs honor `cwd` fine; the
+> `--directory` form works in both, so it's the safer default. You can spot a
+> Store install when the config file lives under
+> `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude\` instead of
+> the usual `%APPDATA%\Claude\`.
 
 Or for a remote install without cloning:
 

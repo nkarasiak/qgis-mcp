@@ -134,10 +134,19 @@ def setup_venv() -> None:
 
 def _local_entry() -> dict:
     if shutil.which("uv"):
+        # `--directory` is preferred over `cwd` because some MCP clients (notably
+        # MSIX-packaged Claude Desktop on Windows) run servers in a sandbox that
+        # silently ignores `cwd`. `--directory` bakes the project path into the
+        # command itself so it works regardless of the spawn environment.
         return {
             "command": "uv",
-            "args": ["run", "--no-sync", "src/qgis_mcp/server.py"],
-            "cwd": str(REPO_DIR),
+            "args": [
+                "--directory",
+                str(REPO_DIR),
+                "run",
+                "--no-sync",
+                "src/qgis_mcp/server.py",
+            ],
         }
     # Fallback: run directly from the venv Python
     return {
@@ -158,7 +167,13 @@ def _zed_local_entry() -> dict:
         return {
             "command": {
                 "path": "uv",
-                "args": ["run", "--no-sync", "src/qgis_mcp/server.py"],
+                "args": [
+                    "--directory",
+                    str(REPO_DIR),
+                    "run",
+                    "--no-sync",
+                    "src/qgis_mcp/server.py",
+                ],
                 "env": {"QGIS_MCP_TRANSPORT": "stdio"},
             },
             "settings": {},
@@ -193,19 +208,34 @@ def _server_entry(client: str, remote: bool) -> dict:
 # ── Plugin installation ────────────────────────────────────────────────────
 
 
+def _remove_target(target: Path) -> None:
+    """Remove a plugin target — handles files, symlinks, Windows junctions, and dirs.
+
+    Path.is_symlink() returns False for Windows directory junctions (created via
+    `mklink /J`), so we also check os.path.islink() and fall back to rmdir() for
+    junctions before resorting to shutil.rmtree() on real directories.
+    """
+    if target.is_symlink() or os.path.islink(target) or target.is_file():
+        target.unlink()
+    elif sys.platform == "win32":
+        try:
+            target.rmdir()  # cleanly removes a junction without touching the target
+        except OSError:
+            shutil.rmtree(target)
+    else:
+        shutil.rmtree(target)
+
+
 def install_plugin(profile: str) -> Path:
     plugins_dir = qgis_plugins_dir(profile)
     target = plugins_dir / "qgis_mcp_plugin"
 
-    if target.is_symlink() or target.exists():
+    if target.is_symlink() or target.exists() or os.path.islink(target):
         if target.is_symlink() and target.resolve() == PLUGIN_SRC.resolve():
             print(f"  Plugin already linked: {target}")
             return target
         print(f"  Removing existing: {target}")
-        if target.is_symlink() or target.is_file():
-            target.unlink()
-        else:
-            shutil.rmtree(target)
+        _remove_target(target)
 
     plugins_dir.mkdir(parents=True, exist_ok=True)
 
@@ -224,11 +254,8 @@ def install_plugin(profile: str) -> Path:
 
 def uninstall_plugin(profile: str) -> None:
     target = qgis_plugins_dir(profile) / "qgis_mcp_plugin"
-    if target.is_symlink() or target.exists():
-        if target.is_symlink() or target.is_file():
-            target.unlink()
-        else:
-            shutil.rmtree(target)
+    if target.is_symlink() or target.exists() or os.path.islink(target):
+        _remove_target(target)
         print(f"  Removed: {target}")
     else:
         print(f"  Not installed: {target}")
@@ -265,8 +292,10 @@ def configure_client(client_name: str, remote: bool) -> None:
         if remote:
             cmd = f'claude mcp add qgis -- uvx --from "{GITHUB_URL}" qgis-mcp-server'
         elif shutil.which("uv"):
-            cmd = "claude mcp add qgis -- uv run --no-sync src/qgis_mcp/server.py"
-            print(f"  Run this from {REPO_DIR}:")
+            cmd = (
+                f'claude mcp add qgis -- uv --directory "{REPO_DIR}" '
+                "run --no-sync src/qgis_mcp/server.py"
+            )
         else:
             python = str(_venv_python())
             server = str(REPO_DIR / "src" / "qgis_mcp" / "server.py")
