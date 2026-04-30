@@ -251,6 +251,68 @@ def _stub(tool_name: str, design_section: str) -> None:
     )
 
 
+_RASTER_EXTENSIONS = (".tif", ".tiff", ".geotiff", ".vrt", ".asc", ".img", ".jp2")
+
+
+def _is_raster_path(path: str) -> bool:
+    return path.lower().endswith(_RASTER_EXTENSIONS)
+
+
+def _translate_geometry_type(plugin_type: str) -> str:
+    """Plugin's ``vector_{0,1,2}`` / ``raster`` → DESIGN.md geometry_type enum."""
+    if plugin_type == "raster":
+        return "raster"
+    if plugin_type.startswith("vector_"):
+        idx = plugin_type.split("_", 1)[1]
+        return {"0": "point", "1": "line", "2": "polygon"}.get(idx, "no_geom")
+    return "no_geom"
+
+
+def _load_and_get_info(executor, abs_path: str, name: str | None = None):
+    """Load a layer + fetch metadata. Removes the layer if get_layer_info fails.
+
+    Returns ``(layer_id, info_dict, is_raster)``. Layer stays loaded on success
+    so the caller can decide whether to remove it (transient inspect) or keep it
+    (persistent load).
+    """
+    is_raster = _is_raster_path(abs_path)
+    load_cmd = "add_raster_layer" if is_raster else "add_vector_layer"
+    params = {"path": abs_path}
+    if name:
+        params["name"] = name
+    load_result = executor.dispatch(load_cmd, params)
+    layer_id = load_result["id"]
+    try:
+        info = executor.dispatch("get_layer_info", {"layer_id": layer_id})
+    except Exception:
+        try:
+            executor.dispatch("remove_layer", {"layer_id": layer_id})
+        except Exception:
+            logger.warning("post-error cleanup failed for %s", layer_id, exc_info=True)
+        raise
+    return layer_id, info, is_raster
+
+
+def _layer_info_kwargs(abs_path: str, info: dict, is_raster: bool) -> dict:
+    """Translate plugin's get_layer_info response into LayerInfo constructor kwargs."""
+    extent_dict = info["extent"]
+    fields = [
+        FieldInfo(name=f["name"], type=f["type"], n_unique=None)
+        for f in info.get("fields", [])
+    ]
+    return {
+        "path": abs_path,
+        "geometry_type": _translate_geometry_type(info["type"]),
+        "crs": info["crs"],
+        "n_features": 0 if is_raster else info.get("feature_count", 0),
+        "extent": [
+            extent_dict["xmin"], extent_dict["ymin"],
+            extent_dict["xmax"], extent_dict["ymax"],
+        ],
+        "fields": fields,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Tools — Inspection & loading (3)
 # ---------------------------------------------------------------------------
@@ -280,7 +342,18 @@ def qgis_layer_inspect(
     ``qgis_render_choropleth`` (pass ``zones_path=path``),
     ``qgis_render_trajectory`` (pass ``input_path=path``).
     """
-    _stub("qgis_layer_inspect", "4 / Inspection & Loading")
+    from qgis_mcp_north.executors import get_executor
+
+    abs_path = os.path.abspath(path)
+    executor = get_executor()
+    layer_id, info, is_raster = _load_and_get_info(executor, abs_path)
+    try:
+        return LayerInfo(**_layer_info_kwargs(abs_path, info, is_raster))
+    finally:
+        try:
+            executor.dispatch("remove_layer", {"layer_id": layer_id})
+        except Exception:
+            logger.warning("transient cleanup failed for %s", layer_id, exc_info=True)
 
 
 @mcp.tool(
@@ -306,7 +379,26 @@ def qgis_load_layer(
     Chains into: ``qgis_style_categorized``, ``qgis_style_graduated``,
     ``qgis_render_map``.
     """
-    _stub("qgis_load_layer", "4 / Inspection & Loading")
+    from qgis_mcp_north.errors import CrsMismatchError, ExecutorError
+    from qgis_mcp_north.executors import get_executor
+
+    abs_path = os.path.abspath(path)
+    executor = get_executor()
+    layer_id, info, is_raster = _load_and_get_info(executor, abs_path, name=name)
+    kwargs = _layer_info_kwargs(abs_path, info, is_raster)
+
+    if crs is not None:
+        try:
+            crs_result = executor.dispatch("set_layer_crs", {"layer_id": layer_id, "crs": crs})
+        except ExecutorError as err:
+            try:
+                executor.dispatch("remove_layer", {"layer_id": layer_id})
+            except Exception:
+                logger.warning("post-error cleanup failed for %s", layer_id, exc_info=True)
+            raise CrsMismatchError(crs, err.message) from err
+        kwargs["crs"] = crs_result.get("crs", crs)
+
+    return LoadedLayer(layer_id=layer_id, **kwargs)
 
 
 @mcp.tool(
@@ -415,7 +507,30 @@ def qgis_render_map(
 
     Chains into: ``qgis_figures_to_pptx``, ``qgis_batch_render``.
     """
-    _stub("qgis_render_map", "4 / Rendering")
+    from qgis_mcp_north.executors import get_executor
+
+    abs_output = os.path.abspath(output_png)
+    params: dict = {
+        "layer_ids": list(layer_ids),
+        "output_png": abs_output,
+        "width": width,
+        "height": height,
+        "dpi": dpi,
+        "background": background,
+    }
+    if extent is not None:
+        params["extent"] = list(extent)
+
+    result = get_executor().dispatch("render_layers_to_path", params, timeout=60)
+    return RenderResult(
+        output_path=result["output_path"],
+        width=result["width"],
+        height=result["height"],
+        dpi=result["dpi"],
+        extent=result["extent"],
+        crs=result["crs"],
+        n_layers=result["n_layers"],
+    )
 
 
 @mcp.tool(
@@ -460,7 +575,84 @@ def qgis_render_choropleth(
 
     Chains into: ``qgis_figures_to_pptx``, ``qgis_batch_render``.
     """
-    _stub("qgis_render_choropleth", "4 / Rendering")
+    import csv as _csv
+
+    from qgis_mcp_north.errors import ExecutorError, FieldNotFoundError, JoinError
+    from qgis_mcp_north.executors import get_executor
+
+    abs_zones = os.path.abspath(zones_path)
+    abs_output = os.path.abspath(output_png)
+    abs_basemaps = [os.path.abspath(p) for p in (basemap_paths or [])]
+    abs_csv = os.path.abspath(value_csv) if value_csv else None
+
+    value_dict: dict[str, float] | None = None
+    if abs_csv is not None:
+        with open(abs_csv, encoding="utf-8", newline="") as f:
+            reader = _csv.DictReader(f)
+            csv_columns = reader.fieldnames or []
+            if value_field not in csv_columns:
+                raise FieldNotFoundError(value_field, csv_columns)
+            if join_field not in csv_columns:
+                raise FieldNotFoundError(join_field, csv_columns)
+            value_dict = {}
+            for row in reader:
+                key = row[join_field]
+                raw = row[value_field]
+                try:
+                    value_dict[str(key)] = float(raw)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "skipping non-numeric value in %s: %s=%r → %s=%r",
+                        abs_csv, join_field, key, value_field, raw,
+                    )
+
+    params: dict = {
+        "zones_path": abs_zones,
+        "value_field": value_field,
+        "output_png": abs_output,
+        "value_dict": value_dict,
+        "join_field": join_field,
+        "n_classes": n_classes,
+        "mode": mode,
+        "palette": palette,
+        "basemap_paths": abs_basemaps,
+        "width": width,
+        "height": height,
+        "dpi": dpi,
+    }
+
+    try:
+        result = get_executor().dispatch("render_choropleth", params, timeout=60)
+    except ExecutorError as err:
+        if "JOIN_NO_MATCH" in str(err):
+            raise JoinError(err.message) from err
+        raise
+
+    join_block = None
+    if value_dict is not None:
+        join_block = JoinResult(
+            csv=abs_csv or "",
+            field=join_field,
+            n_matched=result["n_matched"],
+            n_unmatched=result["n_unmatched"],
+        )
+    return ChoroplethResult(
+        output_path=result["output_path"],
+        width=result["width"],
+        height=result["height"],
+        dpi=result["dpi"],
+        extent=result["extent"],
+        crs=result["crs"],
+        n_layers=result["n_layers"],
+        field=result["field"],
+        n_classes=result["n_classes"],
+        breaks=result["breaks"],
+        mode=result["mode"],
+        min_value=result["min_value"],
+        max_value=result["max_value"],
+        n_features=result["n_features"],
+        join=join_block,
+    )
 
 
 @mcp.tool(
@@ -623,7 +815,48 @@ def qgis_figures_to_pptx(
     Returns: ``PptxResult`` with pptx_path, slides added/total, and
     per-slide titles (None for slides without titles).
     """
-    _stub("qgis_figures_to_pptx", "4 / Export & Batch & Delivery")
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    # python-pptx default master layouts: 5 = Title Only, 6 = Blank.
+    # title_image_caption / two_column degrade to title_only for v0.3.
+    LAYOUT_INDEX = {
+        "title_and_image": 5,
+        "image_only": 6,
+        "two_column": 5,
+        "title_image_caption": 5,
+    }
+
+    if captions is not None and len(captions) != len(figure_paths):
+        raise ValueError(
+            f"captions length ({len(captions)}) must match figure_paths length "
+            f"({len(figure_paths)}). Pass captions=None to skip titles entirely."
+        )
+
+    abs_pptx = os.path.abspath(pptx_path)
+    prs = Presentation(os.path.abspath(template_pptx)) if template_pptx else Presentation()
+    layout_idx = LAYOUT_INDEX.get(layout, 5)
+    chosen_layout = prs.slide_layouts[layout_idx]
+
+    slide_titles: list[str | None] = []
+    for i, fig in enumerate(figure_paths):
+        slide = prs.slides.add_slide(chosen_layout)
+        title_text = None
+        if captions is not None and layout_idx != 6 and slide.shapes.title is not None:
+            title_text = captions[i]
+            slide.shapes.title.text = title_text
+        slide_titles.append(title_text)
+        slide.shapes.add_picture(
+            os.path.abspath(fig), Inches(0.5), Inches(1.5), height=Inches(5.5)
+        )
+
+    prs.save(abs_pptx)
+    return PptxResult(
+        pptx_path=abs_pptx,
+        n_slides_added=len(figure_paths),
+        n_slides_total=len(prs.slides),
+        slide_titles=slide_titles,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -658,13 +891,74 @@ def qgis_eval(
 
 
 # ---------------------------------------------------------------------------
+# Transport selection
+# ---------------------------------------------------------------------------
+
+
+def _plugin_reachable(host: str, port: int, timeout_s: float = 0.5) -> bool:
+    """Probe ``host:port`` with a short connect timeout. Used by ``auto`` mode."""
+    import socket as _socket
+
+    try:
+        with _socket.create_connection((host, port), timeout=timeout_s):
+            return True
+    except OSError:
+        return False
+
+
+def _build_executor(transport: str):
+    """Construct the executor for the chosen transport.
+
+    ``auto`` first probes the plugin port; falls back to headless if the plugin
+    is not reachable. Errors from headless construction propagate so the user
+    sees a single clear ``HeadlessUnavailableError`` rather than a silent fall.
+    """
+    from qgis_mcp_north.executors.plugin import PluginExecutor
+    from qgis_mcp_north.helpers import DEFAULT_HOST, DEFAULT_PORT
+
+    host = os.environ.get("QGIS_MCP_NORTH_HOST", DEFAULT_HOST)
+    port = int(os.environ.get("QGIS_MCP_NORTH_PORT", str(DEFAULT_PORT)))
+
+    if transport == "plugin":
+        return PluginExecutor(host=host, port=port), "plugin"
+    if transport == "headless":
+        from qgis_mcp_north.executors.headless import HeadlessExecutor
+
+        return HeadlessExecutor(), "headless"
+    if transport == "auto":
+        if _plugin_reachable(host, port):
+            return PluginExecutor(host=host, port=port), "plugin"
+        from qgis_mcp_north.executors.headless import HeadlessExecutor
+
+        return HeadlessExecutor(), "headless"
+    raise ValueError(f"Unknown transport: {transport!r}. Use plugin / headless / auto.")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 
 def main() -> None:
-    """Run the MCP server over stdio (default)."""
-    logger.info("qgis-mcp-north server starting (v0.1.0 scaffold, 13 tool stubs)")
+    """Run the MCP server. CLI flag ``--transport`` overrides the env default."""
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="qgis-mcp-north-server")
+    parser.add_argument(
+        "--transport",
+        choices=("plugin", "headless", "auto"),
+        default=os.environ.get("QGIS_MCP_NORTH_TRANSPORT", "auto"),
+        help="QGIS backend: plugin (TCP socket to running QGIS Desktop), "
+        "headless (PyQGIS subprocess), auto (probe plugin port, fall back to "
+        "headless). Default: auto. Env: QGIS_MCP_NORTH_TRANSPORT.",
+    )
+    args = parser.parse_args()
+
+    from qgis_mcp_north.executors import set_executor
+
+    executor, chosen = _build_executor(args.transport)
+    set_executor(executor)
+    logger.info("qgis-mcp-north server starting (v0.4.0, transport=%s)", chosen)
     mcp.run()
 
 

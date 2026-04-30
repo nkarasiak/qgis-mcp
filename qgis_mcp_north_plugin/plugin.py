@@ -17,6 +17,9 @@ from qgis.core import (
     QgsApplication,
     QgsCategorizedSymbolRenderer,
     QgsClassificationEqualInterval,
+    QgsClassificationJenks,
+    QgsClassificationPrettyBreaks,
+    QgsClassificationQuantile,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
     QgsExpression,
@@ -264,6 +267,8 @@ class QgisMCPServer(QObject):
                 "execute_processing": self.execute_processing,
                 "save_project": self.save_project,
                 "render_map_base64": self.render_map_base64,
+                "render_layers_to_path": self.render_layers_to_path,
+                "render_choropleth": self.render_choropleth,
                 "create_new_project": self.create_new_project,
                 "get_field_statistics": self.get_field_statistics,
                 "set_layer_visibility": self.set_layer_visibility,
@@ -965,6 +970,286 @@ class QgisMCPServer(QObject):
 
         except Exception as e:
             raise Exception(f"Render error: {e!s}") from e
+
+    def render_layers_to_path(
+        self,
+        layer_ids,
+        output_png,
+        width=1600,
+        height=1200,
+        dpi=150,
+        extent=None,
+        background="white",
+        **kwargs,
+    ):
+        """Render specified layers to a PNG file. Returns metadata only (no base64).
+
+        v0.3 addition for qgis-mcp-north qgis_render_map. Differs from
+        render_map_base64: explicit layer list, configurable DPI/background,
+        path-only output, extent inferred from union of layer extents (5%
+        padding) when not provided. No base64 in the response — DESIGN.md §5.
+        """
+        project = QgsProject.instance()
+        layers = []
+        for layer_id in layer_ids:
+            if layer_id not in project.mapLayers():
+                raise Exception(f"Layer not found: {layer_id}")
+            layers.append(project.mapLayer(layer_id))
+        if not layers:
+            raise Exception("render_layers_to_path requires at least one layer")
+
+        if extent is not None:
+            rect = QgsRectangle(float(extent[0]), float(extent[1]), float(extent[2]), float(extent[3]))
+        else:
+            rect = QgsRectangle(layers[0].extent())
+            for layer in layers[1:]:
+                rect.combineExtentWith(layer.extent())
+            dx = rect.width() * 0.05
+            dy = rect.height() * 0.05
+            rect = QgsRectangle(
+                rect.xMinimum() - dx, rect.yMinimum() - dy,
+                rect.xMaximum() + dx, rect.yMaximum() + dy,
+            )
+
+        ms = QgsMapSettings()
+        # QGIS renders ms.setLayers in TOP→BOTTOM order; our spec is bottom→top.
+        ms.setLayers(list(reversed(layers)))
+        ms.setExtent(rect)
+        ms.setOutputSize(QSize(int(width), int(height)))
+        ms.setOutputDpi(int(dpi))
+        ms.setDestinationCrs(layers[0].crs())
+
+        color = QColor(background)
+        if not color.isValid():
+            color = QColor(255, 255, 255)
+        ms.setBackgroundColor(color)
+
+        render = QgsMapRendererParallelJob(ms)
+        render.start()
+        render.waitForFinished()
+        img = render.renderedImage()
+        if not img.save(output_png):
+            raise Exception(f"Failed to save render to {output_png}")
+
+        return {
+            "output_path": output_png,
+            "width": int(width),
+            "height": int(height),
+            "dpi": int(dpi),
+            "extent": [rect.xMinimum(), rect.yMinimum(), rect.xMaximum(), rect.yMaximum()],
+            "crs": layers[0].crs().authid(),
+            "n_layers": len(layers),
+        }
+
+    _CLASSIFICATION_METHODS: ClassVar[dict] = {
+        "quantile": QgsClassificationQuantile,
+        "equal_interval": QgsClassificationEqualInterval,
+        "natural_breaks": QgsClassificationJenks,
+        "pretty": QgsClassificationPrettyBreaks,
+    }
+
+    def render_choropleth(
+        self,
+        zones_path,
+        value_field,
+        output_png,
+        value_dict=None,
+        join_field="zone_id",
+        n_classes=5,
+        mode="quantile",
+        palette="YlOrRd",
+        basemap_paths=None,
+        width=1600,
+        height=1200,
+        dpi=150,
+        background="white",
+        **kwargs,
+    ):
+        """Render a zone-level choropleth in one call. v0.3 workflow primitive.
+
+        Algorithm: load zones (transient) → memory-layer rebuild with optional
+        CSV-merged value column → graduated style → render with optional
+        basemaps → cleanup. The user's project sees no surviving state changes.
+        """
+        method_cls = self._CLASSIFICATION_METHODS.get(mode)
+        if method_cls is None:
+            raise Exception(
+                f"Unknown mode {mode!r}. Use one of: {list(self._CLASSIFICATION_METHODS)}."
+            )
+
+        project = QgsProject.instance()
+        transient_ids = []  # everything we need to remove on cleanup
+
+        try:
+            zones = QgsVectorLayer(zones_path, "_zones_in", "ogr")
+            if not zones.isValid():
+                raise Exception(f"Layer not found or invalid: {zones_path}")
+            project.addMapLayer(zones)
+            transient_ids.append(zones.id())
+
+            if zones.geometryType() != GEOM_POLYGON:
+                raise Exception(
+                    f"render_choropleth requires polygon zones, got geometryType={zones.geometryType()}"
+                )
+
+            zone_field_names = [f.name() for f in zones.fields()]
+            if value_dict is not None:
+                if join_field not in zone_field_names:
+                    raise Exception(
+                        f"Field {join_field!r} not found on zones; available: {zone_field_names}"
+                    )
+            elif value_field not in zone_field_names:
+                raise Exception(
+                    f"Field {value_field!r} not found on zones; available: {zone_field_names}"
+                )
+
+            crs_authid = zones.crs().authid() or "EPSG:4326"
+            uri = f"Polygon?crs={crs_authid}&field={join_field}:string&field={value_field}:double"
+            mem = QgsVectorLayer(uri, "_choropleth", "memory")
+            if not mem.isValid():
+                raise Exception(f"Failed to create memory layer: {uri}")
+            project.addMapLayer(mem)
+            transient_ids.append(mem.id())
+
+            mem_provider = mem.dataProvider()
+            join_idx_mem = mem.fields().indexOf(join_field)
+            value_idx_mem = mem.fields().indexOf(value_field)
+            n_matched = 0
+            n_unmatched = 0
+            sample_layer_keys: list[str] = []
+            new_features = []
+            for f in zones.getFeatures():
+                key = f.attribute(join_field) if value_dict is not None else None
+                if value_dict is not None:
+                    key_str = str(key) if key is not None else ""
+                    if len(sample_layer_keys) < 5:
+                        sample_layer_keys.append(key_str)
+                    val = value_dict.get(key_str)
+                    if val is None:
+                        n_unmatched += 1
+                    else:
+                        n_matched += 1
+                else:
+                    key_str = ""
+                    val = f.attribute(value_field)
+                    n_matched += 1
+
+                new_f = QgsFeature(mem.fields())
+                new_f.setGeometry(QgsGeometry(f.geometry()))
+                new_f.setAttribute(join_idx_mem, key_str)
+                new_f.setAttribute(value_idx_mem, val if val is not None else None)
+                new_features.append(new_f)
+
+            ok, _ = mem_provider.addFeatures(new_features)
+            if not ok:
+                raise Exception("Failed to add features to memory layer")
+            mem.updateExtents()
+
+            if value_dict is not None and n_matched == 0:
+                csv_sample = list(value_dict.keys())[:5]
+                raise Exception(
+                    f"JOIN_NO_MATCH on {join_field}: 0 matches. "
+                    f"Sample CSV keys: {csv_sample}; sample layer keys: {sample_layer_keys}"
+                )
+
+            symbol = QgsSymbol.defaultSymbol(mem.geometryType())
+            ramp = QgsStyle.defaultStyle().colorRamp(palette)
+            if not ramp:
+                ramp = QgsStyle.defaultStyle().colorRamp("Spectral")
+            renderer = QgsGraduatedSymbolRenderer(value_field)
+            renderer.setSourceSymbol(symbol.clone())
+            renderer.setSourceColorRamp(ramp)
+            renderer.setClassificationMethod(method_cls())
+            renderer.updateClasses(mem, int(n_classes))
+            mem.setRenderer(renderer)
+
+            ranges = list(renderer.ranges())
+            breaks: list[float] = []
+            if ranges:
+                breaks.append(float(ranges[0].lowerValue()))
+                for r in ranges:
+                    breaks.append(float(r.upperValue()))
+
+            values_only = []
+            for feat in mem.getFeatures():
+                v = feat.attribute(value_field)
+                if v is not None:
+                    try:
+                        values_only.append(float(v))
+                    except (TypeError, ValueError):
+                        pass
+            min_value = min(values_only) if values_only else 0.0
+            max_value = max(values_only) if values_only else 0.0
+
+            basemap_layers = []
+            for bm_path in basemap_paths or []:
+                bm = QgsVectorLayer(bm_path, os.path.basename(bm_path), "ogr")
+                if bm.isValid():
+                    project.addMapLayer(bm)
+                    transient_ids.append(bm.id())
+                    basemap_layers.append(bm)
+                else:
+                    QgsMessageLog.logMessage(
+                        f"Basemap skipped (invalid): {bm_path}", self.LOG_TAG, MSG_WARNING
+                    )
+
+            ordered_layers = [mem, *basemap_layers]  # top→bottom for setLayers
+
+            extent_rect = QgsRectangle(mem.extent())
+            for bm in basemap_layers:
+                extent_rect.combineExtentWith(bm.extent())
+            dx = extent_rect.width() * 0.05
+            dy = extent_rect.height() * 0.05
+            extent_rect = QgsRectangle(
+                extent_rect.xMinimum() - dx, extent_rect.yMinimum() - dy,
+                extent_rect.xMaximum() + dx, extent_rect.yMaximum() + dy,
+            )
+
+            ms = QgsMapSettings()
+            ms.setLayers(ordered_layers)
+            ms.setExtent(extent_rect)
+            ms.setOutputSize(QSize(int(width), int(height)))
+            ms.setOutputDpi(int(dpi))
+            ms.setDestinationCrs(mem.crs())
+            color = QColor(background)
+            if not color.isValid():
+                color = QColor(255, 255, 255)
+            ms.setBackgroundColor(color)
+
+            job = QgsMapRendererParallelJob(ms)
+            job.start()
+            job.waitForFinished()
+            img = job.renderedImage()
+            if not img.save(output_png):
+                raise Exception(f"Failed to save render to {output_png}")
+
+            return {
+                "output_path": output_png,
+                "width": int(width),
+                "height": int(height),
+                "dpi": int(dpi),
+                "extent": [
+                    extent_rect.xMinimum(), extent_rect.yMinimum(),
+                    extent_rect.xMaximum(), extent_rect.yMaximum(),
+                ],
+                "crs": mem.crs().authid(),
+                "n_layers": len(ordered_layers),
+                "field": value_field,
+                "n_classes": len(ranges),
+                "breaks": breaks,
+                "mode": mode,
+                "min_value": min_value,
+                "max_value": max_value,
+                "n_features": len(values_only),
+                "n_matched": n_matched,
+                "n_unmatched": n_unmatched,
+            }
+        finally:
+            for tid in transient_ids:
+                try:
+                    project.removeMapLayer(tid)
+                except Exception:
+                    pass
 
     # -----------------------------------------------------------------------
     # Phase 2 new handlers

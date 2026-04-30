@@ -18,7 +18,7 @@ about=Companion QGIS plugin for the qgis-mcp-north MCP server. Exposes a TCP
 
     Default socket port: 9877 (vs upstream nkarasiak/qgis-mcp on 9876).
 
-version=0.1.0
+version=0.4.0
 author=North
 email=
 tags=mcp,ai,claude,llm,transportation,research,pflow,gufm
@@ -30,6 +30,18 @@ category=Plugins
 icon=icons/icon.png
 experimental=True
 deprecated=False
-changelog=0.1.0 : Initial fork — scaffolding only, 13 tool stubs registered, no functional implementations yet.
+changelog=0.4.0 : v0.4 — headless transport. PyQGIS subprocess executor (src/qgis_mcp_north/executors/headless.py)
+    re-uses the plugin's QgisMCPServer.execute_command via a stub iface, so plugin and headless share one
+    handler codebase. Server gains --transport={plugin,headless,auto} (default auto: probe port 9877, fall
+    back to headless). qgis_load_layer(crs=...) wired through plugin's set_layer_crs with rollback on
+    failure; CrsMismatchError + HeadlessUnavailableError added.
+ 0.3.0 : v0.3 MVP — 5 of 13 MCP tools implemented end-to-end against the plugin transport.
+    Plugin: added render_layers_to_path and render_choropleth dispatch handlers.
+    MCP server: implemented qgis_layer_inspect, qgis_load_layer, qgis_render_map,
+    qgis_render_choropleth (memory-layer rebuild + CSV join), qgis_figures_to_pptx.
+    Executor abstraction (src/qgis_mcp_north/executors/plugin.py) shipped — headless
+    executor lands in v0.4. 25 unit tests (mocked-executor) + typed errors in errors.py.
+    8 tool stubs remain.
+ 0.1.0 : Initial fork — scaffolding only, 13 tool stubs registered, no functional implementations yet.
     Forked from nkarasiak/qgis-mcp v0.2.1; cut to 12 workflow tools + 1 escape hatch.
     See docs/DESIGN.md for tool surface.

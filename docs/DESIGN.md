@@ -326,9 +326,9 @@ If a v1 user needs any of these, the answer is: install upstream alongside, or w
 
 **v0.2 — scaffolding.** Rename plugin/package to `qgis_mcp_north_plugin` / `qgis_mcp_north`, change socket port to 9877, update pyproject. Strip the 51 upstream tools from `server.py`. Stub the 13 new tool signatures with `NotImplementedError`. Get `qgis-mcp-north-server` console script running, registering 13 stubs with FastMCP.
 
-**v0.3 — plugin transport, MVP tools.** Implement `qgis_layer_inspect`, `qgis_load_layer`, `qgis_render_map`, `qgis_render_choropleth`, `qgis_figures_to_pptx`. End-to-end test against a real PFLOW zone shapefile.
+**v0.3 — plugin transport, MVP tools.** ✅ Implemented `qgis_layer_inspect`, `qgis_load_layer`, `qgis_render_map`, `qgis_render_choropleth`, `qgis_figures_to_pptx`.
 
-**v0.4 — headless transport.** Implement the PyQGIS-subprocess executor. Verify all v0.3 tools work in both transports.
+**v0.4 — headless transport.** ✅ Shipped `executors/headless.py` (long-lived PyQGIS subprocess) + `executors/headless_runner.py` (re-uses plugin `QgisMCPServer.execute_command` via a stub `iface`). `--transport={plugin,headless,auto}` CLI flag with auto-probe of port 9877. `qgis_load_layer(crs=...)` wired through plugin's `set_layer_crs` with rollback on failure. New errors: `HeadlessUnavailableError`, `CrsMismatchError`. 3 live executor tests pass against OSGeo4W LTR Python.
 
 **v0.5 — remaining workflow tools.** `qgis_render_trajectory` (with optional MovingPandas), `qgis_render_od_flows`, `qgis_batch_render`, `qgis_export_layout`, `qgis_project_load`, `qgis_style_categorized`, `qgis_style_graduated`, `qgis_eval`.
 
@@ -365,6 +365,32 @@ Still open:
 8. **DRM-link aggregation (v2 candidate).** PFLOW trajectory CSVs include `link_id` referencing the DRM (Digital Road Map) network at `H:\Dropbox\PFLOW\data\network\drm_NN.tsv` (prefecture-sharded, ~14 GB total, EPSG:4326, WKT LINESTRING in column 14). Aggregating trajectories to link-level density and rendering as a graduated link layer would be a major visualization upgrade over raw GPS scatter — but the DRM ingest is itself a multi-step pipeline. Park as `qgis_render_link_density(traj_csvs[], drm_paths[], ...)` for v2.
 
 9. **JAXA LULC raster as basemap.** `2024JPN_v25.04_100m.tif` (uint8, 15 categorical classes, EPSG:4326) loads through `qgis_load_layer` → `qgis_render_map` already, no new tool needed. Worth documenting as an optional `basemap_paths` entry for choropleth/trajectory renders that want land-cover context. Default styling: per-class palette matching JAXA's published legend (assets/jaxa_lulc_legend.png available).
+
+Resolved during v0.3 (2026-04-30):
+
+10. ~~**`crs` override on `qgis_load_layer`**~~ → Resolved in v0.4. The MCP tool now dispatches `set_layer_crs(layer_id, crs)` after `add_vector_layer` / `add_raster_layer`. On failure, the partially-loaded layer is rolled back via `remove_layer` and the tool raises `CrsMismatchError` with a pointer to `qgis_layer_inspect`. Two unit tests cover the success and rollback paths.
+
+11. ~~**Choropleth memory-layer architecture**~~ → Implemented as a single plugin command (`render_choropleth`) rather than 8 MCP-side dispatch round-trips. Reason: plugin's `get_layer_features(include_geometry=True)` returns geometry summaries, not full WKT (token-efficiency optimisation in upstream). Decision: keep the CSV-parse + `value_dict` build on the MCP side (matches "approach B" intent — stdlib `csv` only), but push the geometry copy + style + render into one atomic plugin command that cleans up after itself.
+
+12. **`qgis_figures_to_pptx` layout fidelity.** v0.3 ships `title_and_image` and `image_only` with full python-pptx fidelity; `two_column` and `title_image_caption` are accepted but degrade to `title_only`. Promoting them is mechanical and can land in any later release.
+
+Still open after v0.3:
+
+13. **`polbnda_jpn_new.shp` prefecture-id field name.** Not yet verified against the live shapefile — requires running `qgis_layer_inspect` end-to-end with QGIS open. Once verified, drop the actual field name into the v0.3 demo prompt and §10 of this doc.
+
+Resolved during v0.4 (2026-05-01):
+
+14. ~~**Headless executor architecture**~~ → Decided to re-use the plugin's `QgisMCPServer.execute_command` from inside a long-lived QGIS Python subprocess, rather than ship a parallel command-handler implementation. The runner instantiates `QgisMCPServer(host="", port=0, iface=_StubIface())` where `_StubIface` no-ops the rare canvas/layer-tree calls and raises loudly when a Desktop-only operation is reached. Trade-off: plugin and headless share one codebase (good — every v0.5 handler will work in both transports for free), at the cost of any handler that *truly* needs `iface` failing only at runtime. Acceptable: those handlers (e.g., `get_canvas_extent`) shouldn't be reachable from v0.3+v0.5 workflow tools anyway.
+
+15. ~~**Headless launcher discovery**~~ → On Windows, auto-detect `python-qgis-ltr.bat` / `python-qgis.bat` from `M:\QGIS LTR\bin\`, common OSGeo4W roots, and `C:\Program Files\QGIS *\bin\`. Override via `QGIS_MCP_NORTH_QGIS_LAUNCHER`. On Linux/macOS we currently fall back to `sys.executable` and assume PyQGIS is on the active Python's path — needs revisiting if a Linux user reports it.
+
+16. ~~**Subprocess lifecycle**~~ → Lazy-spawn on first dispatch, hold open across the MCP server's lifetime, drain via a `{"type": "shutdown"}` message in `__del__`. `initQgis` costs ~1-2s per spawn, so keeping the process alive is essential. A single `threading.Lock` serializes dispatches — fine for MCP's per-tool-call model.
+
+Still open after v0.4:
+
+17. **`qgis_eval` headless behaviour.** v0.4 plumbs `set_layer_crs` through both transports but `qgis_eval` is still stubbed. v0.5 ships it; the headless implementation will run user code in the runner subprocess where it has full PyQGIS access — but no `iface`. Document this constraint in the tool docstring before shipping.
+
+18. **First headless render benchmark.** v0.4 verified `add_vector_layer` end-to-end through the subprocess (4.84s for cold-start ping + GeoJSON load). `qgis_render_choropleth` against a real shapefile + 47-row CSV has not yet been timed in headless mode — likely fast enough but should be confirmed before claiming v0.4 is production-grade for cron use.
 
 ---
 

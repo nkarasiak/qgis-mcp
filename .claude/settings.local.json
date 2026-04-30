@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git worktree *)",
+      "Read(//h/Dropbox/qgis-mcp-north-v0.3/**)",
+      "Bash(uv sync *)",
+      "Bash(uv run --no-sync python -c ' *)",
+      "Bash(uv run *)",
+      "Bash(uvx ruff *)",
+      "Bash(gh auth *)",
+      "Bash(git push *)",
+      "Bash(gh pr create --base main --head v0.3-mvp --title 'feat\\(v0.3\\): MVP — 5 tools, plugin extensions, executor abstraction' --body ' *)",
+      "Bash(git fetch *)",
+      "Bash(gh repo *)",
+      "Bash(gh pr create --repo wattwong103/qgis-mcp-north --base main --head v0.3-mvp --title 'feat\\(v0.3\\): MVP — 5 tools, plugin extensions, executor abstraction' --body ' *)",
+      "Bash(\"M:/QGIS LTR/bin/python-qgis-ltr.bat\" -c \"from qgis.core import Qgis, QgsApplication; print\\('Qgis version:', Qgis.QGIS_VERSION\\)\")",
+      "Bash(cmd //c '\"M:\\\\QGIS LTR\\\\bin\\\\python-qgis-ltr.bat\" -c \"from qgis.core import Qgis; print\\(Qgis.QGIS_VERSION\\)\"')",
+      "Bash(cmd //c \"\\\\\"M:\\\\\\\\QGIS LTR\\\\\\\\bin\\\\\\\\python-qgis-ltr.bat\\\\\" -c \\\\\"from qgis.core import Qgis; print\\(Qgis.QGIS_VERSION\\)\\\\\"\")",
+      "Bash(cp \"M:/QGIS LTR/bin/python-qgis-ltr.bat\" /tmp/run_qgis.bat)",
+      "Bash(/tmp/run_qgis.bat -c \"from qgis.core import Qgis; print\\(Qgis.QGIS_VERSION\\)\")",
+      "Bash(cp \"H:/Dropbox/qgis-mcp-north/qgis-mcp-north-v0.3/src/qgis_mcp_north/errors.py\" \"H:/Dropbox/qgis-mcp-north/src/qgis_mcp_north/errors.py\")",
+      "Bash(cp -r \"H:/Dropbox/qgis-mcp-north/qgis-mcp-north-v0.3/src/qgis_mcp_north/executors\" \"H:/Dropbox/qgis-mcp-north/src/qgis_mcp_north/\")",
+      "Bash(cp \"H:/Dropbox/qgis-mcp-north/qgis-mcp-north-v0.3/src/qgis_mcp_north/server.py\" \"H:/Dropbox/qgis-mcp-north/src/qgis_mcp_north/server.py\")",
+      "Bash(cp \"H:/Dropbox/qgis-mcp-north/qgis-mcp-north-v0.3/qgis_mcp_north_plugin/plugin.py\" \"H:/Dropbox/qgis-mcp-north/qgis_mcp_north_plugin/plugin.py\")",
+      "Bash(cp \"H:/Dropbox/qgis-mcp-north/qgis-mcp-north-v0.3/qgis_mcp_north_plugin/metadata.txt\" \"H:/Dropbox/qgis-mcp-north/qgis_mcp_north_plugin/metadata.txt\")",
+      "Bash(uv tool *)"
+    ]
+  }
+}
