@@ -103,13 +103,23 @@ class QgisMCPClient:
             return json.loads(resp_data)
 
         except TimeoutError:
+            # Frame state is unrecoverable: a delayed response may still
+            # arrive and pollute the recv buffer for the next call. Close
+            # the socket so the connection cache reconnects on the next call.
             logger.warning("Socket operation timed out after %ds", timeout)
-            return {"status": "error", "message": "Connection timed out"}
+            self.disconnect()
+            raise ConnectionError(f"Socket operation timed out after {timeout}s")
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, ConnectionError):
+            self.disconnect()
             raise  # Let callers handle reconnection
         except Exception as e:
+            # Any other exception during framed I/O (e.g. _recv_exact's
+            # "Response too large" guard, json errors, struct errors) leaves
+            # the socket in an unknown state — close it so we don't reuse a
+            # desynced stream on the next call.
             logger.exception("Error sending command")
-            return {"status": "error", "message": str(e)}
+            self.disconnect()
+            raise ConnectionError(f"Send command failed: {e}") from e
 
     # --- Convenience methods (existing) ---
 
