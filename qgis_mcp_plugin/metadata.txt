@@ -31,6 +31,7 @@ category=Plugins
 icon=icons/icon.png
 experimental=False
 deprecated=False
+supportsQt6=yes
 changelog=0.2.1 : Fix installer auto-setup deps (pip fallback for Windows),
     QGIS 4.0 compat (tree node truthiness, message log signal),
     113 integration tests (TDD + stress + concurrency)
