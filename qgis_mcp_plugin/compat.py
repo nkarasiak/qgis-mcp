@@ -16,7 +16,7 @@ from qgis.core import (
     QgsRasterBandStats,
     QgsWkbTypes,
 )
-from qgis.PyQt.QtCore import QIODevice, Qt
+from qgis.PyQt.QtCore import QIODevice, Qt, QVariant
 from qgis.PyQt.QtWidgets import QToolButton
 
 # ── Layer types ──────────────────────────────────────────────────────
