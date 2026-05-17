@@ -133,9 +133,13 @@ def setup_venv() -> None:
 
 
 def _local_entry() -> dict:
-    if shutil.which("uv"):
+    uv = shutil.which("uv")
+    if uv:
+        # Use the resolved absolute path so the config works when spawned by MCP clients
+        # (e.g. Node.js-based clients like Claude Code) that inherit a stripped PATH which
+        # may not include the directory where uv is installed (~/.cargo/bin, ~/.local/bin, etc.)
         return {
-            "command": "uv",
+            "command": uv,
             "args": ["run", "--no-sync", "src/qgis_mcp/server.py"],
             "cwd": str(REPO_DIR),
         }
@@ -154,10 +158,11 @@ def _remote_entry() -> dict:
 
 
 def _zed_local_entry() -> dict:
-    if shutil.which("uv"):
+    uv = shutil.which("uv")
+    if uv:
         return {
             "command": {
-                "path": "uv",
+                "path": uv,  # absolute path — Zed spawns outside the user shell, same PATH issue
                 "args": ["run", "--no-sync", "src/qgis_mcp/server.py"],
                 "env": {"QGIS_MCP_TRANSPORT": "stdio"},
             },
@@ -264,8 +269,10 @@ def configure_client(client_name: str, remote: bool) -> None:
     if info.get("print_only"):
         if remote:
             cmd = f'claude mcp add qgis -- uvx --from "{GITHUB_URL}" qgis-mcp-server'
-        elif shutil.which("uv"):
-            cmd = "claude mcp add qgis -- uv run --no-sync src/qgis_mcp/server.py"
+        elif uv := shutil.which("uv"):
+            # Use the absolute path to uv — Claude Code spawns MCP servers via Node.js,
+            # which does not inherit the shell PATH, so bare "uv" will not resolve.
+            cmd = f'claude mcp add qgis --cwd "{REPO_DIR}" -- "{uv}" run --no-sync src/qgis_mcp/server.py'
             print(f"  Run this from {REPO_DIR}:")
         else:
             python = str(_venv_python())
