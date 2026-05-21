@@ -101,3 +101,39 @@ class CrsMismatchError(QgisMcpNorthError):
         )
         self.requested_crs = requested_crs
         self.detail = detail
+
+
+class EmptyAfterFilterError(QgisMcpNorthError):
+    """An extent / sampling / filter step left zero features to render."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(
+            f"No rows survive the filter: {detail}. "
+            f"Next: widen extent, raise sample_rate, or call qgis_layer_inspect on the source to confirm coverage."
+        )
+        self.detail = detail
+
+
+class ProjectLoadError(QgisMcpNorthError):
+    """A QGIS project (.qgz / .qgs) failed to load."""
+
+    def __init__(self, path: str, reason: str) -> None:
+        super().__init__(
+            f"Failed to load project {path!r}: {reason}. "
+            f"Next: open the file in QGIS Desktop to confirm it loads cleanly, then retry."
+        )
+        self.path = path
+        self.reason = reason
+
+
+class LayoutNotFoundError(QgisMcpNorthError):
+    """A print-composer layout name is missing from the loaded project."""
+
+    def __init__(self, name: str, available: list[str]) -> None:
+        avail = ", ".join(available) if available else "(none)"
+        super().__init__(
+            f"Layout {name!r} not found in project. Available: {avail}. "
+            f"Next: call qgis_project_load to list available layouts, then retry with one of those names."
+        )
+        self.name = name
+        self.available = available

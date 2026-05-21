@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`qgis-mcp-north` (v0.4.0) is a focused fork of `nkarasiak/qgis-mcp` for transportation-research figure pipelines (PFLOW, GUFM). It exposes QGIS to Claude over MCP via **two transports**: a TCP-socket plugin running in QGIS Desktop, and a long-lived PyQGIS subprocess (headless mode) for cron / CI / unattended renders. The fork rationale, full tool surface, response shapes, error model, and roadmap live in [`docs/DESIGN.md`](docs/DESIGN.md) — that document is the spec; if code disagrees with it, update the doc first.
+`qgis-mcp-north` (v1.0.0) is a focused fork of `nkarasiak/qgis-mcp` for transportation-research figure pipelines (PFLOW, GUFM). It exposes QGIS to Claude over MCP via **two transports**: a TCP-socket plugin running in QGIS Desktop, and a long-lived PyQGIS subprocess (headless mode) for cron / CI / unattended renders. The fork rationale, full tool surface, response shapes, error model, and roadmap live in [`docs/DESIGN.md`](docs/DESIGN.md) — that document is the spec; if code disagrees with it, update the doc first.
 
 Key differences from upstream:
 - 12 workflow tools + 1 escape hatch (`qgis_eval`), not 51 PyQGIS-mirroring tools.
@@ -79,23 +79,23 @@ uv tool run ruff check src/ tests/
 | `QGIS_MCP_NORTH_LOG_FILE` | `~/.local/share/qgis-mcp-north/server.log` | Rotating log file (5MB × 3) — empty disables file logging |
 | `QGIS_MCP_NORTH_LOG_LEVEL` | `INFO` | File log level. Console (stderr) is always WARNING+ |
 
-## MCP Tools (13 total — see `docs/DESIGN.md` §4 for full signatures)
+## MCP Tools (13 total, all shipped as of v1.0; 5 grouped tools in compound mode. See `docs/DESIGN.md` §4 for full signatures.)
 
 | Tool | Status | Notes |
 |---|---|---|
 | `qgis_layer_inspect` | ✅ v0.3 | Read-only metadata; loads + removes transiently |
 | `qgis_load_layer` | ✅ v0.3 / v0.4 | `crs=` override (v0.4) wired through `set_layer_crs` with rollback |
-| `qgis_project_load` | ⏳ v0.5 | NotImplementedError stub |
-| `qgis_style_categorized` | ⏳ v0.5 | NotImplementedError stub |
-| `qgis_style_graduated` | ⏳ v0.5 | NotImplementedError stub |
+| `qgis_project_load` | ✅ v0.5 | Loads .qgz; returns layers + layouts; stateful (subsequent `export_layout`/`batch_render` reuse the loaded project) |
+| `qgis_style_categorized` | ✅ v1.0 | Categorical symbology via plugin's `set_layer_style(style_type="categorized")`; returns per-class feature counts + colors. |
+| `qgis_style_graduated` | ✅ v1.0 | Graduated symbology with `mode ∈ {quantile, equal_interval, natural_breaks, pretty}`; returns explicit `breaks` array. |
 | `qgis_render_map` | ✅ v0.3 | Plugin handler: `render_layers_to_path` |
 | `qgis_render_choropleth` | ✅ v0.3 | Plugin handler: `render_choropleth` (atomic load+style+render+cleanup) |
-| `qgis_render_trajectory` | ⏳ v0.5 | NotImplementedError stub |
-| `qgis_render_od_flows` | ⏳ v0.5 | NotImplementedError stub |
-| `qgis_export_layout` | ⏳ v0.5 | NotImplementedError stub |
-| `qgis_batch_render` | ⏳ v0.5 | NotImplementedError stub |
+| `qgis_render_trajectory` | ✅ v0.5 | Lines/points/heatmap from PFLOW CSV or GPX; stride sampling + `max_points` ceiling; optional `movingpandas` speed-binned line rendering when `[trajectory]` extra installed |
+| `qgis_render_od_flows` | ✅ v0.5 | Centroid arcs over a zones layer; data-defined stroke width; unmatched origin/destination counts surface in response |
+| `qgis_export_layout` | ✅ v0.5 | PNG/PDF/SVG via `QgsLayoutExporter`; loads `qgz_path` internally if not already loaded; `LayoutNotFoundError` when layout missing |
+| `qgis_batch_render` | ✅ v0.5 | Fan-out per attribute value; active-layer convention (saved-active → first vector fallback); manifest + per-value errors; `subset_string` reset in `finally` |
 | `qgis_figures_to_pptx` | ✅ v0.3 | Pure python-pptx; `two_column` + `title_image_caption` degrade to `title_only` |
-| `qgis_eval` | ⏳ v0.5 | NotImplementedError stub — escape hatch for the long tail |
+| `qgis_eval` | ✅ v1.0 | Arbitrary PyQGIS escape hatch with `return_vars` capture. Plugin's `execute_code` augmented with `_json_safe()` fallback (non-serializable values → `repr()`). |
 
 ## Key Details
 

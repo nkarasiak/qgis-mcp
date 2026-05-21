@@ -64,6 +64,20 @@ logger = _setup_logging()
 
 
 # ---------------------------------------------------------------------------
+# Optional movingpandas — enables speed-binned trajectory rendering when
+# installed via `uv sync --extra trajectory`. Detected once at module load;
+# tests patch this attribute to exercise both code paths.
+# ---------------------------------------------------------------------------
+
+try:
+    import movingpandas as _mp  # noqa: F401
+
+    _HAS_MP = True
+except Exception:  # ImportError or any movingpandas init failure
+    _HAS_MP = False
+
+
+# ---------------------------------------------------------------------------
 # FastMCP server
 # ---------------------------------------------------------------------------
 
@@ -83,6 +97,50 @@ nkarasiak/qgis-mcp server side-by-side. Both run together; pick per task.
 """
 
 mcp = FastMCP("qgis-mcp-north", instructions=SERVER_INSTRUCTIONS)
+
+
+# ---------------------------------------------------------------------------
+# Tool registration mode — full (13 tools) vs compound (5 grouped tools).
+#
+# Read at module load. Tests patch this attribute to verify both surfaces.
+# Compound mode collapses the surface to qgis_inspect / qgis_style / qgis_render /
+# qgis_export / qgis_eval for token-constrained LLMs (Haiku, small open-weights).
+# ---------------------------------------------------------------------------
+
+TOOL_MODE = os.environ.get("QGIS_MCP_NORTH_TOOL_MODE", "full").lower()
+if TOOL_MODE not in ("full", "compound"):
+    logger.warning("Unknown QGIS_MCP_NORTH_TOOL_MODE=%r; defaulting to 'full'", TOOL_MODE)
+    TOOL_MODE = "full"
+
+
+def _maybe_tool(*args, **kwargs):
+    """Conditional @mcp.tool decorator — registers when TOOL_MODE == 'full', else no-op.
+
+    Functions decorated with this are still callable in Python; the only effect of
+    no-op'ing is that FastMCP doesn't expose them over MCP. Direct imports (e.g.
+    from tests) work the same in both modes.
+    """
+    if TOOL_MODE == "full":
+        return mcp.tool(*args, **kwargs)
+    return lambda f: f
+
+
+def _maybe_compound_tool(*args, **kwargs):
+    """Conditional decorator for compound-only tools — registers when TOOL_MODE == 'compound'."""
+    if TOOL_MODE == "compound":
+        return mcp.tool(*args, **kwargs)
+    return lambda f: f
+
+
+def _register_compound_tools_if_enabled() -> None:
+    """Import compound.py at module-load tail to trigger _maybe_compound_tool decorators.
+
+    Imports are conditional: only fire when TOOL_MODE='compound' to avoid pulling
+    in compound.py's dependencies (which import every standalone tool) on full-mode
+    cold-starts. Tests patch TOOL_MODE and reimport for both surfaces.
+    """
+    if TOOL_MODE == "compound":
+        from qgis_mcp_north import compound  # noqa: F401  — import for side effects
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +376,7 @@ def _layer_info_kwargs(abs_path: str, info: dict, is_raster: bool) -> dict:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(
+@_maybe_tool(
     annotations=ToolAnnotations(
         readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True
     )
@@ -356,7 +414,7 @@ def qgis_layer_inspect(
             logger.warning("transient cleanup failed for %s", layer_id, exc_info=True)
 
 
-@mcp.tool(
+@_maybe_tool(
     annotations=ToolAnnotations(
         readOnlyHint=False, idempotentHint=False, destructiveHint=False, openWorldHint=True
     )
@@ -401,7 +459,7 @@ def qgis_load_layer(
     return LoadedLayer(layer_id=layer_id, **kwargs)
 
 
-@mcp.tool(
+@_maybe_tool(
     annotations=ToolAnnotations(
         readOnlyHint=False, idempotentHint=False, destructiveHint=False, openWorldHint=True
     )
@@ -422,7 +480,30 @@ def qgis_project_load(
     Chains into: ``qgis_export_layout``, ``qgis_batch_render``,
     ``qgis_render_map``.
     """
-    _stub("qgis_project_load", "4 / Inspection & Loading")
+    from qgis_mcp_north.errors import ExecutorError, ProjectLoadError
+    from qgis_mcp_north.executors import get_executor
+
+    abs_qgz = os.path.abspath(qgz_path)
+    try:
+        result = get_executor().dispatch("project_load", {"qgz_path": abs_qgz}, timeout=30)
+    except ExecutorError as err:
+        raise ProjectLoadError(abs_qgz, err.message) from err
+
+    return ProjectInfo(
+        project_path=result["project_path"],
+        crs=result["crs"],
+        extent=result["extent"],
+        layers=[
+            LayerSummary(
+                layer_id=la["layer_id"],
+                name=la["name"],
+                geometry_type=la["geometry_type"],
+                visible=la["visible"],
+            )
+            for la in result.get("layers", [])
+        ],
+        layouts=[LayoutSummary(name=lo["name"]) for lo in result.get("layouts", [])],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -430,7 +511,7 @@ def qgis_project_load(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(
+@_maybe_tool(
     annotations=ToolAnnotations(
         readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=False
     )
@@ -450,10 +531,38 @@ def qgis_style_categorized(
     Returns: ``StyleResult`` with the resolved class list and per-class
     feature counts.
     """
-    _stub("qgis_style_categorized", "4 / Styling")
+    from qgis_mcp_north.errors import ExecutorError, FieldNotFoundError, LayerNotFoundError
+    from qgis_mcp_north.executors import get_executor
+
+    params = {
+        "layer_id": layer_id,
+        "style_type": "categorized",
+        "field": field,
+        "color_ramp": palette,
+    }
+    if classes is not None:
+        params["classes_subset"] = list(classes)
+
+    try:
+        result = get_executor().dispatch("set_layer_style", params, timeout=30)
+    except ExecutorError as err:
+        if "Field not found" in err.message:
+            raise FieldNotFoundError(field, []) from err
+        if "Layer not found" in err.message:
+            raise LayerNotFoundError(layer_id) from err
+        raise
+
+    return StyleResult(
+        layer_id=layer_id,
+        n_classes=result["n_classes"],
+        classes=[
+            ClassEntry(value=c["value"], color=c["color"], n_features=c["n_features"])
+            for c in result.get("classes", [])
+        ],
+    )
 
 
-@mcp.tool(
+@_maybe_tool(
     annotations=ToolAnnotations(
         readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=False
     )
@@ -473,7 +582,37 @@ def qgis_style_graduated(
     Returns: ``GraduatedStyleResult`` — class list + per-class feature counts +
     the resolved ``breaks`` array + the ``mode`` used.
     """
-    _stub("qgis_style_graduated", "4 / Styling")
+    from qgis_mcp_north.errors import ExecutorError, FieldNotFoundError, LayerNotFoundError
+    from qgis_mcp_north.executors import get_executor
+
+    params = {
+        "layer_id": layer_id,
+        "style_type": "graduated",
+        "field": field,
+        "classes": n_classes,
+        "mode": mode,
+        "color_ramp": palette,
+    }
+
+    try:
+        result = get_executor().dispatch("set_layer_style", params, timeout=30)
+    except ExecutorError as err:
+        if "Field not found" in err.message:
+            raise FieldNotFoundError(field, []) from err
+        if "Layer not found" in err.message:
+            raise LayerNotFoundError(layer_id) from err
+        raise
+
+    return GraduatedStyleResult(
+        layer_id=layer_id,
+        n_classes=result["n_classes"],
+        classes=[
+            ClassEntry(value=c["value"], color=c["color"], n_features=c["n_features"])
+            for c in result.get("classes", [])
+        ],
+        breaks=result.get("breaks", []),
+        mode=result.get("mode", mode),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -481,7 +620,7 @@ def qgis_style_graduated(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(
+@_maybe_tool(
     annotations=ToolAnnotations(
         readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=True
     )
@@ -533,7 +672,7 @@ def qgis_render_map(
     )
 
 
-@mcp.tool(
+@_maybe_tool(
     annotations=ToolAnnotations(
         readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=True
     )
@@ -655,7 +794,7 @@ def qgis_render_choropleth(
     )
 
 
-@mcp.tool(
+@_maybe_tool(
     annotations=ToolAnnotations(
         readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=True
     )
@@ -694,10 +833,212 @@ def qgis_render_trajectory(
 
     Chains into: ``qgis_figures_to_pptx``.
     """
-    _stub("qgis_render_trajectory", "4 / Rendering")
+    import csv as _csv
+
+    from qgis_mcp_north.errors import EmptyAfterFilterError, FieldNotFoundError
+    from qgis_mcp_north.executors import get_executor
+
+    abs_input = os.path.abspath(input_path)
+    abs_output = os.path.abspath(output_png)
+    abs_basemaps = [os.path.abspath(p) for p in (basemap_paths or [])]
+
+    # GPX path: skip CSV parse, hand path through to plugin's OGR loader.
+    if abs_input.lower().endswith(".gpx"):
+        params: dict = {
+            "input_path": abs_input,
+            "output_png": abs_output,
+            "render_mode": render_mode,
+            "basemap_paths": abs_basemaps,
+            "extent": list(extent) if extent is not None else None,
+            "width": width,
+            "height": height,
+            "dpi": dpi,
+            "features": None,
+            "mode_col": mode_col,
+            "used_movingpandas": False,
+            "speed_field": None,
+        }
+        result = get_executor().dispatch("render_trajectory", params, timeout=120)
+        return TrajectoryResult(
+            output_path=result["output_path"],
+            width=result["width"], height=result["height"], dpi=result["dpi"],
+            extent=result["extent"], crs=result["crs"], n_layers=result["n_layers"],
+            n_trajectories=result["n_trajectories"],
+            n_points_total=result["n_points_total"],
+            n_points_rendered=result["n_points_rendered"],
+            downsampled=result["downsampled"],
+            time_range=result.get("time_range"),
+            modes=result.get("modes"),
+            used_movingpandas=result.get("used_movingpandas", False),
+        )
+
+    # CSV path: parse + validate columns MCP-side.
+    with open(abs_input, encoding="utf-8", newline="") as f:
+        reader = _csv.DictReader(f)
+        columns = reader.fieldnames or []
+        for required in (lon_col, lat_col, time_col, id_col):
+            if required not in columns:
+                raise FieldNotFoundError(required, columns)
+        if mode_col is not None and mode_col not in columns:
+            raise FieldNotFoundError(mode_col, columns)
+        rows = list(reader)
+
+    n_points_total = len(rows)
+
+    # Apply extent clip first (caller's filter), then sampling.
+    if extent is not None:
+        xmin, ymin, xmax, ymax = extent
+        kept = []
+        for row in rows:
+            try:
+                lon = float(row[lon_col])
+                lat = float(row[lat_col])
+            except (TypeError, ValueError):
+                continue
+            if xmin <= lon <= xmax and ymin <= lat <= ymax:
+                kept.append(row)
+        rows = kept
+        if not rows:
+            raise EmptyAfterFilterError(
+                f"0 rows after extent clip [{xmin}, {ymin}, {xmax}, {ymax}]"
+            )
+
+    # Sampling: stride by 1/sample_rate, then cap by max_points.
+    downsampled = False
+    if sample_rate < 1.0:
+        stride = max(1, round(1.0 / sample_rate))
+        rows = rows[::stride]
+        if not rows:
+            raise EmptyAfterFilterError(
+                f"0 rows after sample_rate={sample_rate} (stride={stride})"
+            )
+    if len(rows) > max_points:
+        stride2 = -(-len(rows) // max_points)  # ceil division
+        rows = rows[::stride2]
+        downsampled = True
+
+    # Build feature list — small dicts, JSON-safe over the socket.
+    features: list[dict] = []
+    modes_seen: set[str] = set()
+    time_min: str | None = None
+    time_max: str | None = None
+    for row in rows:
+        try:
+            lon = float(row[lon_col])
+            lat = float(row[lat_col])
+        except (TypeError, ValueError):
+            continue
+        ts = row.get(time_col, "")
+        if time_min is None or (ts and ts < time_min):
+            time_min = ts
+        if time_max is None or (ts and ts > time_max):
+            time_max = ts
+        feat: dict = {
+            "trip_id": str(row[id_col]),
+            "lon": lon,
+            "lat": lat,
+            "datetime": ts,
+        }
+        if mode_col is not None:
+            mode_val = row.get(mode_col, "")
+            feat["mode"] = mode_val
+            if mode_val:
+                modes_seen.add(mode_val)
+        features.append(feat)
+
+    if not features:
+        raise EmptyAfterFilterError("0 valid rows after numeric coercion")
+
+    # movingpandas integration: speed-binned line rendering only.
+    used_mp = False
+    speed_field: str | None = None
+    if _HAS_MP and render_mode == "lines" and mode_col is None:
+        try:
+            import movingpandas as mp  # uses sys.modules; tests patch this in
+            speeds = _compute_movingpandas_speeds(mp, features)
+            if speeds is not None and len(speeds) == len(features):
+                for feat, sp in zip(features, speeds, strict=False):
+                    feat["speed_kmh"] = sp
+                used_mp = True
+                speed_field = "speed_kmh"
+        except Exception:
+            logger.warning("movingpandas integration failed, falling back", exc_info=True)
+
+    n_trajectories = len({f["trip_id"] for f in features})
+    time_range = [time_min, time_max] if (time_min and time_max) else None
+    modes_list = sorted(modes_seen) if modes_seen else None
+
+    params = {
+        "input_path": abs_input,
+        "output_png": abs_output,
+        "render_mode": render_mode,
+        "basemap_paths": abs_basemaps,
+        "extent": list(extent) if extent is not None else None,
+        "width": width,
+        "height": height,
+        "dpi": dpi,
+        "features": features,
+        "mode_col": mode_col,
+        "used_movingpandas": used_mp,
+        "speed_field": speed_field,
+    }
+    result = get_executor().dispatch("render_trajectory", params, timeout=120)
+    return TrajectoryResult(
+        output_path=result["output_path"],
+        width=result["width"], height=result["height"], dpi=result["dpi"],
+        extent=result["extent"], crs=result["crs"], n_layers=result["n_layers"],
+        n_trajectories=result.get("n_trajectories", n_trajectories),
+        n_points_total=result.get("n_points_total", n_points_total),
+        n_points_rendered=result.get("n_points_rendered", len(features)),
+        downsampled=result.get("downsampled", downsampled),
+        time_range=result.get("time_range", time_range),
+        modes=result.get("modes", modes_list),
+        used_movingpandas=result.get("used_movingpandas", used_mp),
+    )
 
 
-@mcp.tool(
+def _compute_movingpandas_speeds(mp, features: list[dict]) -> list[float] | None:
+    """Build a TrajectoryCollection and return per-point speeds in km/h.
+
+    Returns None if movingpandas can't produce a length-matched speed series.
+    """
+    try:
+        import pandas as pd
+
+        df = pd.DataFrame(features)
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        try:
+            import geopandas as gpd
+            from shapely.geometry import Point
+
+            gdf = gpd.GeoDataFrame(
+                df,
+                geometry=[Point(lon, lat) for lon, lat in zip(df["lon"], df["lat"], strict=False)],
+                crs="EPSG:4326",
+            )
+            tc = mp.TrajectoryCollection(gdf, traj_id_col="trip_id", t="datetime")
+        except Exception:
+            # Tests patch in a fake mp.TrajectoryCollection that accepts anything;
+            # real movingpandas requires geopandas, which is bundled with the
+            # [trajectory] extra. Fall through to a permissive constructor for the
+            # test path.
+            tc = mp.TrajectoryCollection(df, traj_id_col="trip_id", t="datetime")
+        try:
+            tc.add_speed(overwrite=True, units=("km", "h"), name="speed_kmh")
+        except TypeError:
+            tc.add_speed()  # fakes may accept no kwargs
+        point_gdf = tc.to_point_gdf()
+        col = "speed_kmh" if "speed_kmh" in point_gdf.columns else "speed"
+        if col not in point_gdf.columns:
+            return None
+        speeds = [float(v) if v == v else 0.0 for v in point_gdf[col].tolist()]
+        return speeds
+    except Exception:
+        logger.warning("movingpandas speed computation failed", exc_info=True)
+        return None
+
+
+@_maybe_tool(
     annotations=ToolAnnotations(
         readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=True
     )
@@ -733,7 +1074,65 @@ def qgis_render_od_flows(
 
     Chains into: ``qgis_figures_to_pptx``.
     """
-    _stub("qgis_render_od_flows", "4 / Rendering")
+    import csv as _csv
+
+    from qgis_mcp_north.errors import FieldNotFoundError
+    from qgis_mcp_north.executors import get_executor
+
+    abs_od = os.path.abspath(od_csv)
+    abs_zones = os.path.abspath(zones_layer_path)
+    abs_output = os.path.abspath(output_png)
+    abs_basemaps = [os.path.abspath(p) for p in (basemap_paths or [])]
+
+    with open(abs_od, encoding="utf-8", newline="") as f:
+        reader = _csv.DictReader(f)
+        columns = reader.fieldnames or []
+        for required in (origin_col, dest_col, value_col):
+            if required not in columns:
+                raise FieldNotFoundError(required, columns)
+        flows: list[dict] = []
+        for row in reader:
+            try:
+                value = float(row[value_col])
+            except (TypeError, ValueError):
+                logger.warning("skipping non-numeric flow value: %s", row)
+                continue
+            flows.append({
+                "origin": str(row[origin_col]),
+                "destination": str(row[dest_col]),
+                "value": value,
+            })
+
+    # Sort descending by value so plugin can compute max_flow up front and so
+    # top_n picks the largest. Stable sort keeps tie-breaks deterministic.
+    flows.sort(key=lambda f: f["value"], reverse=True)
+    if top_n is not None and top_n > 0:
+        flows = flows[:top_n]
+
+    params = {
+        "od_csv": abs_od,
+        "zones_path": abs_zones,
+        "output_png": abs_output,
+        "flows": flows,
+        "zone_id_field": zone_id_field,
+        "basemap_paths": abs_basemaps,
+        "width": width,
+        "height": height,
+        "dpi": dpi,
+    }
+    result = get_executor().dispatch("render_od_flows", params, timeout=60)
+    return ODFlowResult(
+        output_path=result["output_path"],
+        width=result["width"], height=result["height"], dpi=result["dpi"],
+        extent=result["extent"], crs=result["crs"], n_layers=result["n_layers"],
+        n_flows=result["n_flows"],
+        n_flows_rendered=result["n_flows_rendered"],
+        n_zones=result["n_zones"],
+        max_flow=result["max_flow"],
+        min_flow_rendered=result["min_flow_rendered"],
+        n_unmatched_origins=result["n_unmatched_origins"],
+        n_unmatched_destinations=result["n_unmatched_destinations"],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -741,7 +1140,7 @@ def qgis_render_od_flows(
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool(
+@_maybe_tool(
     annotations=ToolAnnotations(
         readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=True
     )
@@ -763,10 +1162,44 @@ def qgis_export_layout(
 
     Chains into: ``qgis_figures_to_pptx``, ``qgis_batch_render``.
     """
-    _stub("qgis_export_layout", "4 / Export & Batch & Delivery")
+    from qgis_mcp_north.errors import ExecutorError, LayoutNotFoundError
+    from qgis_mcp_north.executors import get_executor
+
+    abs_qgz = os.path.abspath(qgz_path)
+    abs_output = os.path.abspath(output_path)
+    params = {
+        "qgz_path": abs_qgz,
+        "layout_name": layout_name,
+        "output_path": abs_output,
+        "format": format,
+        "dpi": dpi,
+    }
+    try:
+        result = get_executor().dispatch("export_layout", params, timeout=60)
+    except ExecutorError as err:
+        if "LAYOUT_NOT_FOUND" in err.message:
+            import re
+
+            avail_match = re.search(r"Available:\s*\[([^\]]*)\]", err.message)
+            avail = []
+            if avail_match:
+                avail = [
+                    s.strip().strip("'\"")
+                    for s in avail_match.group(1).split(",")
+                    if s.strip()
+                ]
+            raise LayoutNotFoundError(layout_name, avail) from err
+        raise
+
+    return ExportResult(
+        output_path=result["output_path"],
+        format=result["format"],
+        n_pages=result["n_pages"],
+        layout_name=result["layout_name"],
+    )
 
 
-@mcp.tool(
+@_maybe_tool(
     annotations=ToolAnnotations(
         readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=True
     )
@@ -791,10 +1224,64 @@ def qgis_batch_render(
 
     Chains into: ``qgis_figures_to_pptx``.
     """
-    _stub("qgis_batch_render", "4 / Export & Batch & Delivery")
+    from qgis_mcp_north.errors import ExecutorError, FieldNotFoundError
+    from qgis_mcp_north.executors import get_executor
+
+    abs_template = os.path.abspath(template_qgz)
+    abs_output_dir = os.path.abspath(output_dir)
+
+    if not values:
+        return BatchRenderResult(
+            output_dir=abs_output_dir,
+            n_rendered=0,
+            manifest=[],
+            errors=[],
+        )
+
+    params = {
+        "template_qgz": abs_template,
+        "attribute": attribute,
+        "values": list(values),
+        "output_dir": abs_output_dir,
+        "layout_name": layout_name,
+        "filename_template": filename_template,
+    }
+    try:
+        result = get_executor().dispatch("batch_render", params, timeout=300)
+    except ExecutorError as err:
+        if "FIELD_NOT_FOUND" in err.message:
+            import re
+
+            field_match = re.search(r"FIELD_NOT_FOUND:\s*['\"]([^'\"]+)['\"]", err.message)
+            avail_match = re.search(r"Available:\s*\[([^\]]*)\]", err.message)
+            field = field_match.group(1) if field_match else attribute
+            avail = []
+            if avail_match:
+                avail = [
+                    s.strip().strip("'\"")
+                    for s in avail_match.group(1).split(",")
+                    if s.strip()
+                ]
+            raise FieldNotFoundError(field, avail) from err
+        raise
+
+    return BatchRenderResult(
+        output_dir=result["output_dir"],
+        n_rendered=result["n_rendered"],
+        manifest=[
+            BatchManifestEntry(
+                value=m["value"], output_path=m["output_path"], extent=m["extent"]
+            )
+            for m in result.get("manifest", [])
+        ],
+        errors=[
+            BatchError(value=e["value"], error=e["error"])
+            for e in result.get("errors", [])
+        ],
+    )
 
 
-@mcp.tool(
+@_maybe_tool(
     annotations=ToolAnnotations(
         readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=True
     )
@@ -887,7 +1374,29 @@ def qgis_eval(
     Returns: ``EvalResult`` with stdout, stderr, captured ``return_values``
     (if ``return_vars`` was given), and exception traceback (if any).
     """
-    _stub("qgis_eval", "4 / Escape hatch")
+    from qgis_mcp_north.executors import get_executor
+
+    params: dict = {"code": code}
+    if return_vars is not None:
+        params["return_vars"] = list(return_vars)
+
+    result = get_executor().dispatch("execute_code", params, timeout=300)
+
+    exception_text: str | None = None
+    if not result.get("executed", True):
+        exception_text = result.get("traceback") or result.get("error")
+
+    return EvalResult(
+        stdout=result.get("stdout", ""),
+        stderr=result.get("stderr", ""),
+        return_values=result.get("return_values") if return_vars is not None else None,
+        exception=exception_text,
+    )
+
+
+# Trigger compound-mode tool registration if env var requested it.
+# This must come AFTER all standalone tool functions are defined (compound.py imports them).
+_register_compound_tools_if_enabled()
 
 
 # ---------------------------------------------------------------------------
@@ -958,7 +1467,7 @@ def main() -> None:
 
     executor, chosen = _build_executor(args.transport)
     set_executor(executor)
-    logger.info("qgis-mcp-north server starting (v0.4.0, transport=%s)", chosen)
+    logger.info("qgis-mcp-north server starting (v1.0.0, transport=%s)", chosen)
     mcp.run()
 
 

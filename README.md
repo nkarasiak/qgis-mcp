@@ -1,199 +1,204 @@
-# QGIS MCP
+# qgis-mcp-north
 
-Connect [QGIS](https://qgis.org/) to [Claude AI](https://claude.ai/) through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), enabling Claude to directly control QGIS — manage layers, edit features, run processing algorithms, render maps, and more.
+A focused fork of [`nkarasiak/qgis-mcp`](https://github.com/nkarasiak/qgis-mcp) for
+**transportation-research figure pipelines** — PFLOW, GUFM, weekly decks (the "W17"
+pattern). 13 workflow tools (collapsible to 5 in compound mode), two transports,
+CI-friendly.
 
-51 MCP tools covering layer management, feature editing, processing, rendering, styling, plugin development, and system management. Compatible with QGIS 3.28–4.x. Includes a one-command installer for 6+ MCP clients.
+![W17 demo screenshot](assets/screenshots/w17_demo.png)
+
+## What this is (and isn't)
+
+**This fork ships workflow tools, not PyQGIS API mirrors.** Each tool encapsulates
+an end-to-end action: render a choropleth, drop figures into a deck, batch a
+parameter sweep. The fork was cut from upstream's 51-tool surface specifically to
+make end-to-end figure pipelines a single LLM prompt.
+
+If you need feature editing, processing algorithms, layer-tree management, or
+plugin tooling — install [upstream `nkarasiak/qgis-mcp`](https://github.com/nkarasiak/qgis-mcp)
+**side by side**. The two run together: different plugin folders, different ports
+(9877 vs 9876), different package names. Claude Desktop sees both MCP servers and
+the LLM picks per request.
 
 ## Architecture
 
 ```
-Claude ←→ MCP Server (FastMCP) ←→ TCP socket ←→ QGIS Plugin (QTimer) ←→ PyQGIS API
+                   ┌───────────────────────────────────────┐
+                   │          MCP Server (FastMCP)         │
+                   │   src/qgis_mcp_north/server.py        │
+                   └───────────────┬───────────────────────┘
+                                   │
+                      ┌────────────┴────────────┐
+                  transport=plugin        transport=headless
+                      │                         │
+       TCP socket → port 9877    subprocess → PyQGIS Python
+       → QGIS Desktop plugin     (no QGIS Desktop needed)
+                      │                         │
+                      └──────────┬──────────────┘
+                                 ▼
+                             PyQGIS API
 ```
 
-1. **QGIS Plugin** (`qgis_mcp_plugin/`) — Runs inside QGIS. Non-blocking TCP socket server that processes JSON commands within QGIS's event loop.
-2. **MCP Server** (`src/qgis_mcp/server.py`) — Runs outside QGIS. Exposes QGIS operations as MCP tools via [FastMCP](https://gofastmcp.com/).
+Both transports execute the **same** plugin handler code (`QgisMCPServer.execute_command`).
+The headless runner injects a stub `iface` that no-ops UI calls. Every command
+handler that doesn't touch the canvas / layer-tree-view works in both transports
+for free — a v0.4 architectural promise that v0.5+ tools inherit.
 
-## Prerequisites
+## Tools (13 standalone, 5 in compound mode)
 
-- **QGIS** 3.28 or newer
+| Tool | Purpose |
+|---|---|
+| `qgis_layer_inspect` | Metadata-only inspect (no project mutation) |
+| `qgis_load_layer` | Register layer + return layer_id; optional CRS override |
+| `qgis_project_load` | Load `.qgz`/`.qgs` → layers + layouts |
+| `qgis_style_categorized` | Categorical (one color per value) symbology |
+| `qgis_style_graduated` | Graduated (value-binned) — quantile/equal/jenks/pretty |
+| `qgis_render_map` | Generic multi-layer render to PNG |
+| `qgis_render_choropleth` | Zone polygon + value CSV → choropleth, one call |
+| `qgis_render_trajectory` | Lines/points/heatmap from CSV/GPX. Stride sampling; optional `movingpandas` speed bins |
+| `qgis_render_od_flows` | Origin-destination arcs over a zones layer, data-defined widths |
+| `qgis_export_layout` | Print-composer → PNG/PDF/SVG |
+| `qgis_batch_render` | Fan-out per attribute value; manifest + per-value errors |
+| `qgis_figures_to_pptx` | Assemble PNGs into a PowerPoint deck |
+| `qgis_eval` | Arbitrary PyQGIS escape hatch with `return_vars` capture |
+
+Full input/output schemas, response shapes, and error taxonomy: [`docs/DESIGN.md`](docs/DESIGN.md).
+
+### Compound mode
+
+Set `QGIS_MCP_NORTH_TOOL_MODE=compound` to collapse the surface to 5 grouped tools
+for token-constrained LLMs (Haiku, small open-weights). Same plumbing, smaller
+schema:
+
+- `qgis_inspect(kind, path, register?)` → replaces `layer_inspect` / `load_layer` / `project_load`
+- `qgis_style(type, ...)` → replaces both styling tools
+- `qgis_render(mode, ...)` → replaces the 4 render tools
+- `qgis_export(kind, ...)` → replaces layout/batch/pptx
+- `qgis_eval` → unchanged
+
+## Quickstart
+
+### 1. Prerequisites
+
+- **QGIS** 3.28 or newer ([download](https://qgis.org/download/)). On Windows, the
+  OSGeo4W LTR installer is recommended.
 - **Python** 3.12+
 - **uv** package manager — [install uv](https://docs.astral.sh/uv/getting-started/installation/)
 
-## Installation
-
-### 1. Clone the repository
+### 2. Clone + install
 
 ```bash
-git clone https://github.com/nkarasiak/qgis-mcp.git
-cd qgis-mcp
-```
-
-### 2. Install with the one-command installer (recommended)
-
-```bash
+git clone https://github.com/wattwong103/qgis-mcp-north.git
+cd qgis-mcp-north
 python install.py
 ```
 
-This will:
-- Symlink the QGIS plugin into your QGIS profile
-- Configure your MCP client(s) — supports Claude Desktop, Claude Code, Cursor, VS Code Copilot, Windsurf, and Zed
+The installer:
+- Symlinks `qgis_mcp_north_plugin/` into your active QGIS profile.
+- Sets up the Python venv (`uv sync`).
+- Optionally configures MCP clients (Claude Desktop, Cursor, VS Code, Windsurf, Zed, Claude Code).
 
-Options: `--non-interactive --clients claude-desktop,cursor` for CI, `--remote` for uvx-based installs, `--profile myprofile` for non-default QGIS profiles, `--uninstall` to remove.
-
-Restart QGIS, then enable the plugin: `Plugins` > `Manage and Install Plugins` > search "QGIS MCP" > check the box.
-
-<details>
-<summary><b>Manual installation</b></summary>
-
-#### Install the QGIS plugin manually
-
-Copy (or symlink) the `qgis_mcp_plugin/` folder into your QGIS plugins directory:
-
-**Find your plugins folder:** In QGIS, go to `Settings` > `User Profiles` > `Open Active Profile Folder`, then navigate to `python/plugins/`.
-
-| OS | Typical path |
-|----|-------------|
-| Linux | `~/.local/share/QGIS/QGIS3/profiles/default/python/plugins/` |
-| macOS | `~/Library/Application Support/QGIS/QGIS3/profiles/default/python/plugins/` |
-| Windows | `%APPDATA%\QGIS\QGIS3\profiles\default\python\plugins\` |
+Non-interactive:
 
 ```bash
-# Example on Linux (symlink recommended for development)
-ln -s /path/to/qgis-mcp/qgis_mcp_plugin ~/.local/share/QGIS/QGIS3/profiles/default/python/plugins/qgis_mcp_plugin
+python install.py --non-interactive --clients claude-desktop,cursor
 ```
 
-Restart QGIS, then enable the plugin: `Plugins` > `Manage and Install Plugins` > search "QGIS MCP" > check the box.
-
-#### Connect your MCP client manually
-
-##### Claude Code — project-level config (recommended)
-
-Create a `.mcp.json` file at the root of your clone:
-
-```json
-{
-  "mcpServers": {
-    "qgis": {
-      "command": "uv",
-      "args": ["run", "src/qgis_mcp/server.py"],
-      "cwd": "/path/to/qgis-mcp"
-    }
-  }
-}
-```
-
-Claude Code automatically detects `.mcp.json` when you open the project — no manual `claude mcp add` needed.
-
-##### Claude Code — one-liner (remote install)
+Remote mode (no clone needed; uses `uvx` from GitHub):
 
 ```bash
-claude mcp add --transport stdio qgis-mcp -- uvx --from git+https://github.com/nkarasiak/qgis-mcp qgis-mcp-server
+python install.py --remote --clients claude-desktop
 ```
 
-##### Claude Desktop
+### 3. Enable the plugin in QGIS
 
-Go to `Claude` > `Settings` > `Developer` > `Edit Config` and add:
+1. Restart QGIS.
+2. Plugins menu → Manage and Install Plugins → enable "QGIS MCP North".
+3. Click "Start Server" in the MCP dock widget (listens on `localhost:9877`).
 
-```json
-{
-  "mcpServers": {
-    "qgis": {
-      "command": "uv",
-      "args": ["run", "src/qgis_mcp/server.py"],
-      "cwd": "/path/to/qgis-mcp"
-    }
-  }
-}
-```
+### 4. Use it
 
-Or for a remote install without cloning:
-
-```json
-{
-  "mcpServers": {
-    "qgis": {
-      "command": "uvx",
-      "args": [
-        "--from", "git+https://github.com/nkarasiak/qgis-mcp",
-        "qgis-mcp-server"
-      ]
-    }
-  }
-}
-```
-
-##### Cursor / other MCP clients
-
-Use the same JSON configuration above in your client's MCP settings file.
-
-</details>
-
-## Usage
-
-1. **Start the plugin** — In QGIS, click the MCP toolbar button (or `Plugins` > `QGIS MCP`) and click "Start Server"
-2. **Talk to Claude** — The MCP tools will appear automatically. Ask Claude to work with your QGIS project.
-
-### Example prompt
+From any MCP client:
 
 ```
-You have access to QGIS tools. Do the following:
-1. Ping to check the connection
-2. Create a new project and save it at "/tmp/my_project.qgz"
-3. Load the vector layer "/data/cities.shp" and name it "Cities"
-4. Get field statistics for the "population" field
-5. Create a graduated symbology on the "population" field with 5 classes
-6. Render the map and show me the result
-7. Save the project
+> Render a choropleth of zone_trips.csv joined to polbnda_jpn_new.shp on zone_id,
+  total_trips field, YlOrRd palette, quantile breaks. Save to C:\temp\choropleth.png.
 ```
 
-## Tools (51)
-
-| Category | Tools |
-|----------|-------|
-| **Project** | `load_project`, `create_new_project`, `save_project`, `get_project_info` |
-| **Layers** | `get_layers`, `add_vector_layer`, `add_raster_layer`, `remove_layer`, `find_layer`, `create_memory_layer`, `set_layer_visibility`, `zoom_to_layer`, `get_layer_extent`, `set_layer_property` |
-| **Features** | `get_layer_features`, `add_features`, `update_features`, `delete_features`, `select_features`, `get_selection`, `clear_selection`, `get_field_statistics` |
-| **Styling** | `set_layer_style` (single, categorized, graduated) |
-| **Rendering** | `render_map`, `get_canvas_screenshot`, `get_canvas_extent`, `set_canvas_extent` |
-| **Processing** | `execute_processing`, `list_processing_algorithms`, `get_algorithm_help` |
-| **Layouts** | `list_layouts`, `export_layout` |
-| **Layer tree** | `get_layer_tree`, `create_layer_group`, `move_layer_to_group` |
-| **Plugins** | `list_plugins`, `get_plugin_info`, `reload_plugin` |
-| **System** | `ping`, `diagnose`, `get_qgis_info`, `get_raster_info`, `get_message_log`, `execute_code`, `batch_commands`, `validate_expression`, `get_project_variables`, `set_project_variable`, `get_setting`, `set_setting`, `transform_coordinates` |
-
-All tools are async with human-readable titles and annotations (`readOnly`, `destructive`, `idempotent`). Destructive tools ask for confirmation via MCP elicitation when supported; clients without elicitation proceed normally (fail-open) since tools are already gated by `ToolAnnotations`. Long-running tools report progress via MCP logging.
-
-### Compound tool mode
-
-Set `QGIS_MCP_TOOL_MODE=compound` to reduce the 51 granular tools to ~19 grouped tools, cutting schema overhead per LLM turn. Each compound tool takes an `action` parameter:
-
-```bash
-QGIS_MCP_TOOL_MODE=compound uv run --no-sync src/qgis_mcp/server.py
-```
-
-Groups: `system`, `project`, `layer`, `features`, `selection`, `style`, `canvas`, `render`, `processing`, `code`, `batch`, `layer_tree`, `plugins`, `variables`, `settings`, `expression`, `transform`, `message_log`, `layer_property`.
+Concrete PFLOW recipes: [`docs/pflow-usage.md`](docs/pflow-usage.md).
 
 ## Configuration
 
-| Environment variable | Default | Description |
-|---------------------|---------|-------------|
-| `QGIS_MCP_HOST` | `localhost` | Host for socket connection |
-| `QGIS_MCP_PORT` | `9876` | Port for socket connection |
-| `QGIS_MCP_TRANSPORT` | `stdio` | MCP transport: `stdio` or `streamable-http` |
-| `QGIS_MCP_LOG_FILE` | `~/.local/share/qgis-mcp/server.log` | Log file path (empty to disable) |
-| `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level |
-| `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (51 tools) or `compound` (~19 grouped) |
+| Variable | Default | Description |
+|---|---|---|
+| `QGIS_MCP_NORTH_TRANSPORT` | `auto` | `plugin` / `headless` / `auto` (probe :9877, fall back to headless) |
+| `QGIS_MCP_NORTH_TOOL_MODE` | `full` | `full` (13 tools) / `compound` (5 grouped tools) |
+| `QGIS_MCP_NORTH_HOST` | `localhost` | Plugin socket host |
+| `QGIS_MCP_NORTH_PORT` | `9877` | Plugin socket port (upstream uses 9876) |
+| `QGIS_MCP_NORTH_QGIS_LAUNCHER` | (auto-detected on Windows) | Headless: full path to `python-qgis(-ltr).bat` |
+| `QGIS_MCP_NORTH_LOG_FILE` | `~/.local/share/qgis-mcp-north/server.log` | Rotating log (5MB × 3); empty disables |
+| `QGIS_MCP_NORTH_LOG_LEVEL` | `INFO` | File log level (console always WARNING+) |
+
+CLI flag `--transport=plugin|headless|auto` overrides the env var.
+
+## Headless mode (cron / unattended renders)
+
+```powershell
+$env:QGIS_MCP_NORTH_TRANSPORT='headless'
+$env:QGIS_MCP_NORTH_QGIS_LAUNCHER='M:\QGIS LTR\bin\python-qgis-ltr.bat'
+uv run --no-sync qgis-mcp-north-server
+```
+
+`HeadlessExecutor` lazy-spawns a PyQGIS subprocess on first dispatch and keeps it
+open for the MCP session lifetime. `initQgis` costs ~1-2s per cold start; never
+restart per call.
+
+## Platform support
+
+- **Windows** is the supported target for v1.0. Tested with OSGeo4W LTR.
+- **Linux/macOS** may work via PyQGIS-on-PATH (set `QGIS_MCP_NORTH_QGIS_LAUNCHER`
+  to a `python-qgis` wrapper or compatible Python). Unverified — refinement deferred
+  until a non-Windows user reports.
 
 ## Development
 
 ```bash
-# Run unit tests (no QGIS needed — mocked socket)
-uv run --no-sync pytest tests/test_mcp_tools.py -v
+# Unit tests (no QGIS needed — mocked executor)
+uv run --no-sync pytest tests/
 
-# Run integration tests (requires QGIS plugin running)
-uv run --no-sync pytest tests/test_qgis_live.py -v
+# Lint
+uv tool run ruff check src/ tests/ scripts/
+
+# Benchmarks (opt-in)
+uv sync --extra bench --extra trajectory
+uv run --no-sync --extra bench pytest tests/benchmarks/ -m bench
+
+# End-to-end W17 demo (synthetic fixtures only — runnable in CI)
+uv run --no-sync scripts/demo_w17.py
 ```
+
+## Coexistence with upstream
+
+Both `qgis-mcp-north` (this fork) and `nkarasiak/qgis-mcp` can run side-by-side:
+
+| | This fork | Upstream |
+|---|---|---|
+| Plugin folder | `qgis_mcp_north_plugin/` | `qgis_mcp_plugin/` |
+| Default port | 9877 | 9876 |
+| Package name | `qgis_mcp_north` | `qgis_mcp` |
+| Tool count | 13 (or 5 compound) | 51 |
+| Headless | yes | no |
+
+Claude Desktop sees both servers; the LLM picks per request. Use **upstream** when
+you need the long tail of PyQGIS primitives (feature editing, processing
+algorithms, layer-tree groups). Use **this fork** for the figure-rendering
+workflows above.
+
+## Project status
+
+- **v1.0.0** (2026-05-14): Tool surface complete. 99 unit tests pass.
+- See [`CHANGELOG.md`](CHANGELOG.md) for the full history.
 
 ## License
 
-This project is licensed under the GNU GPL v2 or later.
+GPL-3.0 — inherited from upstream `nkarasiak/qgis-mcp`. See [`LICENSE`](LICENSE).

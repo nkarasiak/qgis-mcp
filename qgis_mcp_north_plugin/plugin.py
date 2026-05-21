@@ -29,14 +29,18 @@ from qgis.core import (
     QgsFeatureRequest,
     QgsGeometry,
     QgsGraduatedSymbolRenderer,
+    QgsHeatmapRenderer,
     QgsLayerTreeGroup,
     QgsLayerTreeLayer,
     QgsLayoutExporter,
+    QgsLineSymbol,
     QgsMapRendererParallelJob,
     QgsMapSettings,
+    QgsMarkerSymbol,
     QgsMessageLog,
     QgsPointXY,
     QgsProject,
+    QgsProperty,
     QgsRasterLayer,
     QgsRectangle,
     QgsRendererCategory,
@@ -44,6 +48,7 @@ from qgis.core import (
     QgsSingleSymbolRenderer,
     QgsStyle,
     QgsSymbol,
+    QgsSymbolLayer,
     QgsVectorLayer,
     QgsWkbTypes,
 )
@@ -269,6 +274,10 @@ class QgisMCPServer(QObject):
                 "render_map_base64": self.render_map_base64,
                 "render_layers_to_path": self.render_layers_to_path,
                 "render_choropleth": self.render_choropleth,
+                "render_trajectory": self.render_trajectory,
+                "render_od_flows": self.render_od_flows,
+                "project_load": self.project_load,
+                "batch_render": self.batch_render,
                 "create_new_project": self.create_new_project,
                 "get_field_statistics": self.get_field_statistics,
                 "set_layer_visibility": self.set_layer_visibility,
@@ -488,7 +497,14 @@ class QgisMCPServer(QObject):
         except Exception:
             return None
 
-    def execute_code(self, code, **kwargs):
+    def execute_code(self, code, return_vars=None, **kwargs):
+        """Execute arbitrary PyQGIS. Optionally capture named local-scope variables
+        and return them JSON-serialized (falling back to repr() for non-serializable
+        PyQGIS objects like QgsGeometry / QgsVectorLayer).
+
+        Unbound variable names in return_vars are omitted from the response (a
+        deliberate choice — None would be ambiguous with "var was assigned None").
+        """
         QgsMessageLog.logMessage(f"Executing code ({len(code)} chars)", self.LOG_TAG, MSG_INFO)
         stdout_capture = io.StringIO()
         stderr_capture = io.StringIO()
@@ -511,11 +527,20 @@ class QgisMCPServer(QObject):
 
             exec(code, namespace)  # nosec B102 — intentional: MCP execute_code tool
 
-            return {
+            captured = {}
+            if return_vars:
+                for var in return_vars:
+                    if var in namespace:
+                        captured[var] = self._json_safe(namespace[var])
+
+            response = {
                 "executed": True,
                 "stdout": stdout_capture.getvalue(),
                 "stderr": stderr_capture.getvalue(),
             }
+            if return_vars:
+                response["return_values"] = captured
+            return response
         except Exception as e:
             error_traceback = traceback.format_exc()
             return {
@@ -528,6 +553,20 @@ class QgisMCPServer(QObject):
         finally:
             sys.stdout = original_stdout
             sys.stderr = original_stderr
+
+    @staticmethod
+    def _json_safe(value):
+        """Best-effort JSON-serializable form of a Python or PyQGIS value.
+
+        Tries json.dumps round-trip; on failure, falls back to repr(). This lets
+        callers capture QgsGeometry / QgsVectorLayer / QgsRectangle as their
+        debugging repr() string rather than failing the whole call.
+        """
+        try:
+            json.dumps(value)
+            return value
+        except (TypeError, ValueError):
+            return repr(value)
 
     def add_vector_layer(self, path, name=None, provider="ogr", **kwargs):
         if not name:
@@ -1252,6 +1291,436 @@ class QgisMCPServer(QObject):
                     pass
 
     # -----------------------------------------------------------------------
+    # v0.5 workflow handlers — trajectory + OD flows
+    # -----------------------------------------------------------------------
+
+    def render_trajectory(
+        self,
+        output_png,
+        render_mode="lines",
+        features=None,
+        input_path=None,
+        basemap_paths=None,
+        extent=None,
+        width=1600,
+        height=1200,
+        dpi=150,
+        mode_col=None,
+        used_movingpandas=False,
+        speed_field=None,
+        background="white",
+        **kwargs,
+    ):
+        """Render trajectories from a parsed feature list (CSV path) or a GPX file.
+
+        ``features`` is a list of dicts ``{trip_id, lon, lat, datetime, mode?, speed_kmh?}``
+        already sampled / clipped by the MCP layer. ``input_path`` is set instead when
+        the source was a .gpx file; then we go through OGR directly.
+
+        render_mode ∈ {"lines", "points", "heatmap"}.
+        """
+        project = QgsProject.instance()
+        transient_ids = []
+
+        try:
+            if features is not None:
+                traj_layer, n_trajectories = self._build_trajectory_layer(
+                    features, render_mode, mode_col, speed_field
+                )
+            else:
+                if not input_path:
+                    raise Exception("render_trajectory: features or input_path required")
+                traj_layer = QgsVectorLayer(input_path, "_traj_gpx", "ogr")
+                if not traj_layer.isValid():
+                    raise Exception(f"GPX layer not readable: {input_path}")
+                n_trajectories = traj_layer.featureCount()
+
+            project.addMapLayer(traj_layer)
+            transient_ids.append(traj_layer.id())
+
+            self._apply_trajectory_renderer(
+                traj_layer, render_mode, mode_col, speed_field
+            )
+
+            basemap_layers = []
+            for bm_path in basemap_paths or []:
+                bm = QgsVectorLayer(bm_path, os.path.basename(bm_path), "ogr")
+                if bm.isValid():
+                    project.addMapLayer(bm)
+                    transient_ids.append(bm.id())
+                    basemap_layers.append(bm)
+                else:
+                    QgsMessageLog.logMessage(
+                        f"Basemap skipped (invalid): {bm_path}", self.LOG_TAG, MSG_WARNING
+                    )
+
+            ordered_layers = [traj_layer, *basemap_layers]
+
+            if extent is not None:
+                xmin, ymin, xmax, ymax = extent
+                extent_rect = QgsRectangle(xmin, ymin, xmax, ymax)
+            else:
+                extent_rect = QgsRectangle(traj_layer.extent())
+                for bm in basemap_layers:
+                    extent_rect.combineExtentWith(bm.extent())
+                dx = extent_rect.width() * 0.05
+                dy = extent_rect.height() * 0.05
+                extent_rect = QgsRectangle(
+                    extent_rect.xMinimum() - dx, extent_rect.yMinimum() - dy,
+                    extent_rect.xMaximum() + dx, extent_rect.yMaximum() + dy,
+                )
+
+            ms = QgsMapSettings()
+            ms.setLayers(ordered_layers)
+            ms.setExtent(extent_rect)
+            ms.setOutputSize(QSize(int(width), int(height)))
+            ms.setOutputDpi(int(dpi))
+            ms.setDestinationCrs(traj_layer.crs())
+            color = QColor(background)
+            if not color.isValid():
+                color = QColor(255, 255, 255)
+            ms.setBackgroundColor(color)
+
+            job = QgsMapRendererParallelJob(ms)
+            job.start()
+            job.waitForFinished()
+            img = job.renderedImage()
+            if not img.save(output_png):
+                raise Exception(f"Failed to save render to {output_png}")
+
+            n_points_rendered = (
+                len(features) if features is not None
+                else traj_layer.featureCount()
+            )
+            modes = sorted({f.get("mode") for f in (features or []) if f.get("mode")}) or None
+
+            return {
+                "output_path": output_png,
+                "width": int(width),
+                "height": int(height),
+                "dpi": int(dpi),
+                "extent": [
+                    extent_rect.xMinimum(), extent_rect.yMinimum(),
+                    extent_rect.xMaximum(), extent_rect.yMaximum(),
+                ],
+                "crs": traj_layer.crs().authid() or "EPSG:4326",
+                "n_layers": len(ordered_layers),
+                "n_trajectories": int(n_trajectories),
+                "n_points_total": int(n_points_rendered),
+                "n_points_rendered": int(n_points_rendered),
+                "downsampled": False,
+                "time_range": None,
+                "modes": modes,
+                "used_movingpandas": bool(used_movingpandas),
+            }
+        finally:
+            for tid in transient_ids:
+                try:
+                    project.removeMapLayer(tid)
+                except Exception:
+                    pass
+
+    def _build_trajectory_layer(self, features, render_mode, mode_col, speed_field):
+        """Build a transient point or line memory layer from the features list.
+
+        For lines mode, groups by trip_id and emits one polyline per trajectory.
+        For points/heatmap, emits one point per feature.
+
+        Returns (layer, n_trajectories).
+        """
+        if render_mode == "lines":
+            fields = "field=trip_id:string"
+            if speed_field:
+                fields += "&field=speed_kmh:double"
+            if mode_col:
+                fields += "&field=mode:string"
+            uri = f"LineString?crs=EPSG:4326&{fields}"
+            mem = QgsVectorLayer(uri, "_trajectory", "memory")
+            if not mem.isValid():
+                raise Exception(f"Failed to create memory layer: {uri}")
+            provider = mem.dataProvider()
+
+            # Group features by trip_id, preserving order.
+            buckets: dict[str, list[dict]] = {}
+            order: list[str] = []
+            for f in features:
+                tid = str(f["trip_id"])
+                if tid not in buckets:
+                    buckets[tid] = []
+                    order.append(tid)
+                buckets[tid].append(f)
+
+            new_features = []
+            for tid in order:
+                points = [QgsPointXY(float(p["lon"]), float(p["lat"])) for p in buckets[tid]]
+                if len(points) < 2:
+                    continue  # need at least 2 points for a line
+                feat = QgsFeature(mem.fields())
+                feat.setGeometry(QgsGeometry.fromPolylineXY(points))
+                attrs = [tid]
+                if speed_field:
+                    # Average speed across the trajectory's points; per-segment
+                    # rendering would need cutting into segments, which we defer.
+                    speeds = [float(p.get("speed_kmh", 0.0)) for p in buckets[tid]]
+                    attrs.append(sum(speeds) / max(1, len(speeds)))
+                if mode_col:
+                    # Most common mode in the trajectory
+                    modes = [p.get("mode", "") for p in buckets[tid]]
+                    attrs.append(max(set(modes), key=modes.count) if modes else "")
+                feat.setAttributes(attrs)
+                new_features.append(feat)
+            provider.addFeatures(new_features)
+            mem.updateExtents()
+            return mem, len(order)
+
+        # points / heatmap → one point per feature
+        fields = "field=trip_id:string"
+        if mode_col:
+            fields += "&field=mode:string"
+        uri = f"Point?crs=EPSG:4326&{fields}"
+        mem = QgsVectorLayer(uri, "_trajectory", "memory")
+        if not mem.isValid():
+            raise Exception(f"Failed to create memory layer: {uri}")
+        provider = mem.dataProvider()
+        new_features = []
+        seen_trips = set()
+        for p in features:
+            seen_trips.add(str(p["trip_id"]))
+            feat = QgsFeature(mem.fields())
+            feat.setGeometry(QgsGeometry.fromPointXY(
+                QgsPointXY(float(p["lon"]), float(p["lat"]))
+            ))
+            attrs = [str(p["trip_id"])]
+            if mode_col:
+                attrs.append(p.get("mode", ""))
+            feat.setAttributes(attrs)
+            new_features.append(feat)
+        provider.addFeatures(new_features)
+        mem.updateExtents()
+        return mem, len(seen_trips)
+
+    def _apply_trajectory_renderer(self, layer, render_mode, mode_col, speed_field):
+        """Attach a renderer suited to the chosen mode + available fields."""
+        if render_mode == "heatmap":
+            renderer = QgsHeatmapRenderer()
+            renderer.setRadius(15.0)
+            renderer.setRadiusUnit(Qgis.RenderUnit.Pixels if hasattr(Qgis, "RenderUnit") else 1)
+            ramp = QgsStyle.defaultStyle().colorRamp("Spectral")
+            if ramp:
+                inverted = ramp.clone()
+                try:
+                    inverted.invert()
+                except Exception:
+                    pass
+                renderer.setColorRamp(inverted)
+            layer.setRenderer(renderer)
+            return
+
+        if render_mode == "lines":
+            if speed_field:
+                symbol = QgsLineSymbol.createSimple({"line_color": "#1f78b4", "line_width": "0.6"})
+                ramp = QgsStyle.defaultStyle().colorRamp("Spectral")
+                if not ramp:
+                    ramp = QgsStyle.defaultStyle().colorRamp("Viridis")
+                renderer = QgsGraduatedSymbolRenderer("speed_kmh")
+                renderer.setSourceSymbol(symbol.clone())
+                renderer.setSourceColorRamp(ramp)
+                renderer.setClassificationMethod(QgsClassificationQuantile())
+                renderer.updateClasses(layer, 5)
+                layer.setRenderer(renderer)
+                return
+            if mode_col:
+                self._apply_categorical_by_mode(layer, "mode")
+                return
+            symbol = QgsLineSymbol.createSimple({"line_color": "#1f78b4", "line_width": "0.6"})
+            layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+            return
+
+        # points mode
+        if mode_col:
+            self._apply_categorical_by_mode(layer, "mode")
+            return
+        symbol = QgsMarkerSymbol.createSimple(
+            {"name": "circle", "color": "#1f78b4", "size": "1.5", "outline_style": "no"}
+        )
+        layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+
+    def _apply_categorical_by_mode(self, layer, field):
+        """Build a categorized renderer one color per unique value of field."""
+        unique = sorted({str(f.attribute(field)) for f in layer.getFeatures()})
+        ramp = QgsStyle.defaultStyle().colorRamp("Set2")
+        categories = []
+        for i, val in enumerate(unique):
+            symbol = QgsSymbol.defaultSymbol(layer.geometryType())
+            if ramp:
+                color = ramp.color(i / max(1, len(unique) - 1)) if len(unique) > 1 else ramp.color(0.5)
+                symbol.setColor(color)
+            categories.append(QgsRendererCategory(val, symbol, val))
+        renderer = QgsCategorizedSymbolRenderer(field, categories)
+        layer.setRenderer(renderer)
+
+    def render_od_flows(
+        self,
+        output_png,
+        zones_path,
+        zone_id_field="zone_id",
+        flows=None,
+        basemap_paths=None,
+        width=1600,
+        height=1200,
+        dpi=150,
+        background="white",
+        **kwargs,
+    ):
+        """Render origin-destination arcs over a polygon zones layer.
+
+        ``flows`` is a list of dicts ``{origin, destination, value}`` already sorted /
+        truncated by the MCP layer. Centroid lookup happens here so we don't ship
+        polygon geometries over the socket.
+        """
+        if flows is None:
+            raise Exception("render_od_flows: flows list required")
+
+        project = QgsProject.instance()
+        transient_ids = []
+
+        try:
+            zones = QgsVectorLayer(zones_path, "_od_zones", "ogr")
+            if not zones.isValid():
+                raise Exception(f"Zones layer not readable: {zones_path}")
+            project.addMapLayer(zones)
+            transient_ids.append(zones.id())
+
+            zone_field_names = [f.name() for f in zones.fields()]
+            if zone_id_field not in zone_field_names:
+                raise Exception(
+                    f"Field {zone_id_field!r} not found on zones; available: {zone_field_names}"
+                )
+
+            centroids: dict[str, QgsPointXY] = {}
+            for f in zones.getFeatures():
+                key = str(f.attribute(zone_id_field))
+                centroid = f.geometry().centroid().asPoint()
+                centroids[key] = QgsPointXY(centroid.x(), centroid.y())
+
+            crs_authid = zones.crs().authid() or "EPSG:4326"
+            uri = (
+                f"LineString?crs={crs_authid}"
+                "&field=origin:string&field=destination:string&field=trip_count:double"
+            )
+            mem = QgsVectorLayer(uri, "_od_flows", "memory")
+            if not mem.isValid():
+                raise Exception(f"Failed to create memory layer: {uri}")
+            project.addMapLayer(mem)
+            transient_ids.append(mem.id())
+
+            unmatched_o = 0
+            unmatched_d = 0
+            rendered_flows = []
+            for flow in flows:
+                o_key = str(flow["origin"])
+                d_key = str(flow["destination"])
+                o_pt = centroids.get(o_key)
+                d_pt = centroids.get(d_key)
+                if o_pt is None:
+                    unmatched_o += 1
+                    continue
+                if d_pt is None:
+                    unmatched_d += 1
+                    continue
+                rendered_flows.append((o_key, d_key, float(flow["value"]), o_pt, d_pt))
+
+            new_features = []
+            max_flow = max((f[2] for f in rendered_flows), default=1.0)
+            min_flow = min((f[2] for f in rendered_flows), default=0.0)
+            for o, d, v, op, dp in rendered_flows:
+                feat = QgsFeature(mem.fields())
+                feat.setGeometry(QgsGeometry.fromPolylineXY([op, dp]))
+                feat.setAttributes([o, d, v])
+                new_features.append(feat)
+            mem.dataProvider().addFeatures(new_features)
+            mem.updateExtents()
+
+            # Line symbol with data-defined stroke width based on trip_count.
+            symbol = QgsLineSymbol.createSimple({"line_color": "#1f78b4", "line_width": "0.4"})
+            symbol_layer = symbol.symbolLayer(0)
+            width_expr = f'"trip_count" / {max(max_flow, 1e-9)} * 4.0 + 0.3'
+            try:
+                symbol_layer.setDataDefinedProperty(
+                    QgsSymbolLayer.PropertyStrokeWidth,
+                    QgsProperty.fromExpression(width_expr),
+                )
+            except Exception:
+                # Older QGIS API surface; fall back to a uniform medium width.
+                QgsMessageLog.logMessage(
+                    "data-defined stroke width unavailable; using uniform 1.0",
+                    self.LOG_TAG, MSG_WARNING,
+                )
+            mem.setRenderer(QgsSingleSymbolRenderer(symbol))
+
+            basemap_layers = []
+            for bm_path in basemap_paths or []:
+                bm = QgsVectorLayer(bm_path, os.path.basename(bm_path), "ogr")
+                if bm.isValid():
+                    project.addMapLayer(bm)
+                    transient_ids.append(bm.id())
+                    basemap_layers.append(bm)
+
+            ordered_layers = [mem, zones, *basemap_layers]
+
+            extent_rect = QgsRectangle(zones.extent())
+            dx = extent_rect.width() * 0.05
+            dy = extent_rect.height() * 0.05
+            extent_rect = QgsRectangle(
+                extent_rect.xMinimum() - dx, extent_rect.yMinimum() - dy,
+                extent_rect.xMaximum() + dx, extent_rect.yMaximum() + dy,
+            )
+
+            ms = QgsMapSettings()
+            ms.setLayers(ordered_layers)
+            ms.setExtent(extent_rect)
+            ms.setOutputSize(QSize(int(width), int(height)))
+            ms.setOutputDpi(int(dpi))
+            ms.setDestinationCrs(zones.crs())
+            color = QColor(background)
+            if not color.isValid():
+                color = QColor(255, 255, 255)
+            ms.setBackgroundColor(color)
+
+            job = QgsMapRendererParallelJob(ms)
+            job.start()
+            job.waitForFinished()
+            img = job.renderedImage()
+            if not img.save(output_png):
+                raise Exception(f"Failed to save render to {output_png}")
+
+            return {
+                "output_path": output_png,
+                "width": int(width),
+                "height": int(height),
+                "dpi": int(dpi),
+                "extent": [
+                    extent_rect.xMinimum(), extent_rect.yMinimum(),
+                    extent_rect.xMaximum(), extent_rect.yMaximum(),
+                ],
+                "crs": zones.crs().authid() or "EPSG:4326",
+                "n_layers": len(ordered_layers),
+                "n_flows": len(flows),
+                "n_flows_rendered": len(rendered_flows),
+                "n_zones": len(centroids),
+                "max_flow": float(max_flow) if rendered_flows else 0.0,
+                "min_flow_rendered": float(min_flow) if rendered_flows else 0.0,
+                "n_unmatched_origins": unmatched_o,
+                "n_unmatched_destinations": unmatched_d,
+            }
+        finally:
+            for tid in transient_ids:
+                try:
+                    project.removeMapLayer(tid)
+                except Exception:
+                    pass
+
+    # -----------------------------------------------------------------------
     # Phase 2 new handlers
     # -----------------------------------------------------------------------
 
@@ -1328,14 +1797,29 @@ class QgisMCPServer(QObject):
         return {"deleted": len(target_fids)}
 
     def set_layer_style(
-        self, layer_id, style_type, field=None, classes=5, color_ramp="Spectral", **kwargs
+        self,
+        layer_id,
+        style_type,
+        field=None,
+        classes=5,
+        color_ramp="Spectral",
+        mode="equal_interval",
+        **kwargs,
     ):
+        """Apply categorical / graduated / single-symbol style to a vector layer.
+
+        v0.5 augmentation: returns rich response shapes matching DESIGN.md §4 for
+        both `categorized` (n_classes + per-class color + n_features) and
+        `graduated` (breaks + mode). `mode` arg honors {quantile, equal_interval,
+        natural_breaks, pretty} for graduated style.
+        """
         layer = self._get_vector_layer(layer_id)
 
         if style_type == "single":
             symbol = QgsSymbol.defaultSymbol(layer.geometryType())
             renderer = QgsSingleSymbolRenderer(symbol)
             layer.setRenderer(renderer)
+            response = {"ok": True, "n_classes": 1, "classes": []}
 
         elif style_type == "categorized":
             if not field:
@@ -1351,16 +1835,34 @@ class QgisMCPServer(QObject):
             if not ramp:
                 ramp = QgsStyle.defaultStyle().colorRamp("Spectral")
 
+            # Count features per value in a single pass (cheap for typical N).
+            counts: dict = {}
+            for f in layer.getFeatures():
+                v = f.attribute(field)
+                counts[v] = counts.get(v, 0) + 1
+
             categories = []
+            class_entries = []
             n = max(len(unique_values) - 1, 1)
             for i, value in enumerate(unique_values):
                 symbol = QgsSymbol.defaultSymbol(layer.geometryType())
-                symbol.setColor(ramp.color(i / n))
+                color = ramp.color(i / n)
+                symbol.setColor(color)
                 label = str(value) if value is not None else "NULL"
                 categories.append(QgsRendererCategory(value, symbol, label))
+                class_entries.append({
+                    "value": label,
+                    "color": color.name(),  # hex string
+                    "n_features": int(counts.get(value, 0)),
+                })
 
             renderer = QgsCategorizedSymbolRenderer(field, categories)
             layer.setRenderer(renderer)
+            response = {
+                "ok": True,
+                "n_classes": len(class_entries),
+                "classes": class_entries,
+            }
 
         elif style_type == "graduated":
             if not field:
@@ -1368,6 +1870,12 @@ class QgisMCPServer(QObject):
             idx = layer.fields().indexOf(field)
             if idx < 0:
                 raise Exception(f"Field not found: {field}")
+
+            method_cls = self._CLASSIFICATION_METHODS.get(mode)
+            if method_cls is None:
+                raise Exception(
+                    f"Unknown mode {mode!r}. Use one of: {list(self._CLASSIFICATION_METHODS)}."
+                )
 
             symbol = QgsSymbol.defaultSymbol(layer.geometryType())
             ramp = QgsStyle.defaultStyle().colorRamp(color_ramp)
@@ -1377,19 +1885,56 @@ class QgisMCPServer(QObject):
             renderer = QgsGraduatedSymbolRenderer(field)
             renderer.setSourceSymbol(symbol.clone())
             renderer.setSourceColorRamp(ramp)
-
-            renderer.setClassificationMethod(QgsClassificationEqualInterval())
-            renderer.updateClasses(layer, classes)
-
+            renderer.setClassificationMethod(method_cls())
+            renderer.updateClasses(layer, int(classes))
             layer.setRenderer(renderer)
+
+            ranges = list(renderer.ranges())
+            breaks = []
+            if ranges:
+                breaks.append(float(ranges[0].lowerValue()))
+                for r in ranges:
+                    breaks.append(float(r.upperValue()))
+
+            # Per-range feature counts via in-memory iteration (no QGIS API for this).
+            class_entries = []
+            for r in ranges:
+                lo, hi = r.lowerValue(), r.upperValue()
+                n_in = 0
+                for f in layer.getFeatures():
+                    val = f.attribute(field)
+                    try:
+                        v = float(val)
+                    except (TypeError, ValueError):
+                        continue
+                    if lo <= v <= hi:
+                        n_in += 1
+                color = r.symbol().color().name() if r.symbol() else "#000000"
+                class_entries.append({
+                    "value": f"{lo}-{hi}",
+                    "color": color,
+                    "n_features": int(n_in),
+                })
+
+            response = {
+                "ok": True,
+                "n_classes": len(class_entries),
+                "classes": class_entries,
+                "breaks": breaks,
+                "mode": mode,
+            }
         else:
             raise Exception(
                 f"Unknown style_type: {style_type}. Use 'single', 'categorized', or 'graduated'"
             )
 
         layer.triggerRepaint()
-        self.iface.layerTreeView().refreshLayerSymbology(layer.id())
-        return {"ok": True}
+        try:
+            if self.iface is not None and hasattr(self.iface, "layerTreeView"):
+                self.iface.layerTreeView().refreshLayerSymbology(layer.id())
+        except Exception:
+            pass  # headless stub iface — no UI to refresh
+        return response
 
     def select_features(self, layer_id, expression=None, fids=None, **kwargs):
         layer = self._get_vector_layer(layer_id)
@@ -1530,11 +2075,39 @@ class QgisMCPServer(QObject):
             )
         return {"layouts": layouts, "count": len(layouts)}
 
-    def export_layout(self, layout_name, path, format="pdf", dpi=300, **kwargs):
+    def export_layout(
+        self,
+        layout_name,
+        format="pdf",
+        dpi=300,
+        qgz_path=None,
+        output_path=None,
+        path=None,
+        **kwargs,
+    ):
+        """Export a print-composer layout. v0.5 signature accepts qgz_path + output_path;
+        legacy upstream signature used positional ``path``. We support both for
+        backward compatibility with existing callers.
+        """
+        if qgz_path:
+            project = QgsProject.instance()
+            current = project.fileName()
+            if current != qgz_path:
+                project.clear()
+                if not project.read(qgz_path):
+                    raise Exception(f"Failed to load project from {qgz_path}")
+
+        out = output_path or path
+        if not out:
+            raise Exception("export_layout: output_path required")
+
         manager = QgsProject.instance().layoutManager()
         layout = manager.layoutByName(layout_name)
         if not layout:
-            raise Exception(f"Layout not found: {layout_name}")
+            available = [lo.name() for lo in manager.layouts()]
+            raise Exception(
+                f"LAYOUT_NOT_FOUND: {layout_name!r}. Available: {available}"
+            )
 
         exporter = QgsLayoutExporter(layout)
         fmt = format.lower()
@@ -1542,22 +2115,238 @@ class QgisMCPServer(QObject):
         if fmt == "pdf":
             settings = QgsLayoutExporter.PdfExportSettings()
             settings.dpi = dpi
-            result = exporter.exportToPdf(path, settings)
+            result = exporter.exportToPdf(out, settings)
         elif fmt in ("png", "jpg", "jpeg", "tif", "tiff", "bmp"):
             settings = QgsLayoutExporter.ImageExportSettings()
             settings.dpi = dpi
-            result = exporter.exportToImage(path, settings)
+            result = exporter.exportToImage(out, settings)
         elif fmt == "svg":
             settings = QgsLayoutExporter.SvgExportSettings()
             settings.dpi = dpi
-            result = exporter.exportToSvg(path, settings)
+            result = exporter.exportToSvg(out, settings)
         else:
             raise Exception(f"Unsupported format: {format}")
 
         if result != LAYOUT_SUCCESS:
             raise Exception(f"Export failed with code: {result}")
 
-        return {"ok": True, "path": path}
+        n_pages = 1
+        try:
+            n_pages = layout.pageCollection().pageCount()
+        except Exception:
+            pass
+
+        return {
+            "ok": True,
+            "path": out,
+            "output_path": out,
+            "format": fmt,
+            "n_pages": int(n_pages),
+            "layout_name": layout_name,
+        }
+
+    def project_load(self, qgz_path, **kwargs):
+        """Load a saved .qgz/.qgs and return its layers + layouts in one call.
+
+        Stateful — leaves the project loaded so subsequent export_layout or
+        batch_render see the same project state.
+        """
+        project = QgsProject.instance()
+        project.clear()
+        if not project.read(qgz_path):
+            raise Exception(f"Failed to read project: {qgz_path}")
+
+        try:
+            if self.iface is not None and hasattr(self.iface, "mapCanvas"):
+                self.iface.mapCanvas().refresh()
+        except Exception:
+            pass
+
+        layers_info = []
+        layer_tree = project.layerTreeRoot()
+        for layer_id, layer in project.mapLayers().items():
+            geom_type = self._get_layer_type(layer)
+            visible = True
+            try:
+                node = layer_tree.findLayer(layer_id)
+                if node is not None:
+                    visible = bool(node.isVisible())
+            except Exception:
+                pass
+            # Translate plugin's "vector_{0,1,2}" → DESIGN-doc geometry enum.
+            if geom_type == "raster":
+                geom_out = "raster"
+            elif geom_type.startswith("vector_"):
+                idx = geom_type.split("_", 1)[1]
+                geom_out = {"0": "point", "1": "line", "2": "polygon"}.get(idx, "no_geom")
+            else:
+                geom_out = "no_geom"
+            layers_info.append(
+                {
+                    "layer_id": layer_id,
+                    "name": layer.name(),
+                    "geometry_type": geom_out,
+                    "visible": visible,
+                }
+            )
+
+        layouts = [{"name": lo.name()} for lo in project.layoutManager().layouts()]
+
+        extent = QgsRectangle()
+        layers = list(project.mapLayers().values())
+        if layers:
+            extent = QgsRectangle(layers[0].extent())
+            for la in layers[1:]:
+                extent.combineExtentWith(la.extent())
+
+        return {
+            "project_path": qgz_path,
+            "crs": project.crs().authid() or "EPSG:4326",
+            "extent": [
+                extent.xMinimum(), extent.yMinimum(),
+                extent.xMaximum(), extent.yMaximum(),
+            ],
+            "layers": layers_info,
+            "layouts": layouts,
+        }
+
+    def batch_render(
+        self,
+        template_qgz,
+        attribute,
+        values,
+        output_dir,
+        layout_name=None,
+        filename_template="{value}.png",
+        width=1600,
+        height=1200,
+        dpi=150,
+        background="white",
+        **kwargs,
+    ):
+        """Fan-out: open template_qgz, iterate values, filter the active layer,
+        render each to output_dir. Returns a manifest + errors list.
+
+        Active-layer convention: project's saved active layer if set; else the
+        first vector layer. Documented loudly in the MCP tool docstring.
+        """
+        project = QgsProject.instance()
+        if project.fileName() != template_qgz:
+            project.clear()
+            if not project.read(template_qgz):
+                raise Exception(f"Failed to read template: {template_qgz}")
+
+        # Resolve target layer.
+        target = None
+        try:
+            target = project.mapLayer(project.readPath("ActiveLayerID"))
+        except Exception:
+            target = None
+        if target is None or target.type() != LAYER_VECTOR:
+            for la in project.mapLayers().values():
+                if la.type() == LAYER_VECTOR:
+                    target = la
+                    QgsMessageLog.logMessage(
+                        f"batch_render: using first vector layer as filter target: {la.name()}",
+                        self.LOG_TAG, MSG_INFO,
+                    )
+                    break
+        if target is None:
+            raise Exception("batch_render: no vector layer found in template")
+
+        field_names = [f.name() for f in target.fields()]
+        if attribute not in field_names:
+            raise Exception(
+                f"FIELD_NOT_FOUND: {attribute!r}. Available: {field_names}"
+            )
+
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+        except Exception as err:
+            raise Exception(f"Failed to create output_dir: {err}") from err
+
+        manifest = []
+        errors = []
+
+        try:
+            for value in values:
+                safe_value = str(value).replace("'", "''")
+                expr = f'"{attribute}" = \'{safe_value}\''
+                try:
+                    target.setSubsetString(expr)
+                    if target.featureCount() == 0:
+                        errors.append({"value": str(value), "error": "No features match filter"})
+                        continue
+
+                    filename = filename_template.format(value=value)
+                    out_path = os.path.join(output_dir, filename)
+
+                    extent_rect = QgsRectangle(target.extent())
+                    dx = extent_rect.width() * 0.05
+                    dy = extent_rect.height() * 0.05
+                    extent_rect = QgsRectangle(
+                        extent_rect.xMinimum() - dx, extent_rect.yMinimum() - dy,
+                        extent_rect.xMaximum() + dx, extent_rect.yMaximum() + dy,
+                    )
+
+                    if layout_name:
+                        layout = project.layoutManager().layoutByName(layout_name)
+                        if not layout:
+                            available = [lo.name() for lo in project.layoutManager().layouts()]
+                            raise Exception(
+                                f"LAYOUT_NOT_FOUND: {layout_name!r}. Available: {available}"
+                            )
+                        exporter = QgsLayoutExporter(layout)
+                        settings = QgsLayoutExporter.ImageExportSettings()
+                        settings.dpi = dpi
+                        result = exporter.exportToImage(out_path, settings)
+                        if result != LAYOUT_SUCCESS:
+                            errors.append({"value": str(value), "error": f"Export code {result}"})
+                            continue
+                    else:
+                        ms = QgsMapSettings()
+                        ms.setLayers(list(project.mapLayers().values()))
+                        ms.setExtent(extent_rect)
+                        ms.setOutputSize(QSize(int(width), int(height)))
+                        ms.setOutputDpi(int(dpi))
+                        ms.setDestinationCrs(target.crs())
+                        color = QColor(background)
+                        if not color.isValid():
+                            color = QColor(255, 255, 255)
+                        ms.setBackgroundColor(color)
+
+                        job = QgsMapRendererParallelJob(ms)
+                        job.start()
+                        job.waitForFinished()
+                        img = job.renderedImage()
+                        if not img.save(out_path):
+                            errors.append({"value": str(value), "error": "Image save failed"})
+                            continue
+
+                    manifest.append(
+                        {
+                            "value": str(value),
+                            "output_path": out_path,
+                            "extent": [
+                                extent_rect.xMinimum(), extent_rect.yMinimum(),
+                                extent_rect.xMaximum(), extent_rect.yMaximum(),
+                            ],
+                        }
+                    )
+                except Exception as err:
+                    errors.append({"value": str(value), "error": str(err)})
+        finally:
+            try:
+                target.setSubsetString("")
+            except Exception:
+                pass
+
+        return {
+            "output_dir": output_dir,
+            "n_rendered": len(manifest),
+            "manifest": manifest,
+            "errors": errors,
+        }
 
     # -----------------------------------------------------------------------
     # Phase 3 — Plugin development & system management handlers

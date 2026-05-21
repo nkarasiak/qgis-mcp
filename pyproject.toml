@@ -7,7 +7,7 @@ packages = ["src/qgis_mcp_north"]
 
 [project]
 name = "qgis-mcp-north"
-version = "0.4.0"
+version = "1.0.0"
 description = "Focused QGIS MCP server for transportation research figure pipelines (PFLOW, GUFM). Forked from nkarasiak/qgis-mcp."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -20,6 +20,7 @@ dependencies = [
 dev = ["pytest>=7.0", "pytest-asyncio>=0.23"]
 pptx = ["python-pptx>=1.0"]
 trajectory = ["movingpandas>=0.20"]
+bench = ["pytest-benchmark>=4.0"]
 
 [project.scripts]
 qgis-mcp-north-server = "qgis_mcp_north.server:main"
@@ -41,3 +42,8 @@ ignore = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "bench: long-running benchmarks (skipped by default; run with `pytest -m bench`)",
+    "slow: integration tests that take >10s",
+]
+addopts = "-m 'not bench'"

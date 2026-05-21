@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import socket
 from collections.abc import Callable
 from typing import Any
@@ -19,10 +20,29 @@ def _plugin_reachable(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> boo
         return False
 
 
+def _headless_available() -> bool:
+    """Headless transport requires an explicit launcher path env var, OR PyQGIS on PATH."""
+    if os.environ.get("QGIS_MCP_NORTH_QGIS_LAUNCHER"):
+        return True
+    # Best-effort: check if `qgis` or `qgis-bin` is on PATH (Linux/macOS unverified).
+    import shutil
+
+    for candidate in ("python-qgis-ltr.bat", "python-qgis.bat", "qgis", "qgis-bin"):
+        if shutil.which(candidate):
+            return True
+    return False
+
+
 PLUGIN_AVAILABLE = _plugin_reachable()
+HEADLESS_AVAILABLE = _headless_available()
+
 requires_plugin = pytest.mark.skipif(
     not PLUGIN_AVAILABLE,
     reason=f"QGIS plugin not reachable at {DEFAULT_HOST}:{DEFAULT_PORT} — start QGIS with the plugin enabled",
+)
+requires_headless = pytest.mark.skipif(
+    not HEADLESS_AVAILABLE,
+    reason="Set QGIS_MCP_NORTH_QGIS_LAUNCHER to a python-qgis(-ltr).bat (Windows) to run headless tests",
 )
 
 

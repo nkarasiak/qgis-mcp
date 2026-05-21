@@ -1,0 +1,7 @@
+origin,destination,trip_count,avg_distance_km
+Z01,Z02,100,5.2
+Z01,Z03,50,8.7
+Z02,Z03,200,4.1
+Z02,Z04,75,6.9
+Z03,Z04,150,3.5
+Z04,Z01,25,11.3

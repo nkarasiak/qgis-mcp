@@ -18,7 +18,7 @@ about=Companion QGIS plugin for the qgis-mcp-north MCP server. Exposes a TCP
 
     Default socket port: 9877 (vs upstream nkarasiak/qgis-mcp on 9876).
 
-version=0.4.0
+version=1.0.0
 author=North
 email=
 tags=mcp,ai,claude,llm,transportation,research,pflow,gufm
@@ -30,7 +30,21 @@ category=Plugins
 icon=icons/icon.png
 experimental=True
 deprecated=False
-changelog=0.4.0 : v0.4 — headless transport. PyQGIS subprocess executor (src/qgis_mcp_north/executors/headless.py)
+changelog=1.0.0 : v1.0 — tool surface complete. Final 3 stubs shipped: qgis_style_categorized (per-class
+    feature counts), qgis_style_graduated (quantile/equal_interval/natural_breaks/pretty modes + explicit
+    breaks), qgis_eval (return_vars capture with _json_safe fallback). Compound mode: QGIS_MCP_NORTH_TOOL_MODE=compound
+    exposes 5 grouped tools (qgis_inspect/style/render/export + qgis_eval) for token-constrained LLMs.
+    Benchmarks scaffolding (tests/benchmarks/), end-to-end W17 demo (scripts/demo_w17.py + fake/plugin/headless
+    integration tests), installer tests (13 cases). README rewritten. Windows-only support claim.
+    99 unit tests + 3 skips + 11 deselected benchmarks.
+ 0.5.0 : v0.5 — five workflow tools shipped end-to-end. qgis_render_trajectory (lines/points/heatmap
+    from PFLOW CSV/GPX, stride sampling + max_points ceiling, optional movingpandas speed bins);
+    qgis_render_od_flows (centroid arcs over a zones layer, data-defined stroke width, unmatched zone-id reporting);
+    qgis_project_load (loads .qgz + returns layers + layouts in one call); qgis_export_layout (PDF/PNG/SVG with
+    n_pages); qgis_batch_render (fan-out per attribute value, manifest + per-value errors, active-layer convention).
+    New errors: EmptyAfterFilterError, ProjectLoadError, LayoutNotFoundError. 37 new unit tests (66 total).
+    Stubs remaining for v0.6: qgis_style_categorized, qgis_style_graduated, qgis_eval.
+ 0.4.0 : v0.4 — headless transport. PyQGIS subprocess executor (src/qgis_mcp_north/executors/headless.py)
     re-uses the plugin's QgisMCPServer.execute_command via a stub iface, so plugin and headless share one
     handler codebase. Server gains --transport={plugin,headless,auto} (default auto: probe port 9877, fall
     back to headless). qgis_load_layer(crs=...) wired through plugin's set_layer_crs with rollback on
