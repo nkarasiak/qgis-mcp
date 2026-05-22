@@ -1,38 +1,44 @@
 [general]
-name=QGIS MCP North
+name=QGIS MCP Workflows
 qgisMinimumVersion=3.28
 qgisMaximumVersion=4.99
-description=Focused QGIS MCP plugin for transportation research figure pipelines (forked from nkarasiak/qgis-mcp).
-about=Companion QGIS plugin for the qgis-mcp-north MCP server. Exposes a TCP
+description=Focused QGIS MCP plugin with workflow tools for transportation research figure pipelines (forked from nkarasiak/qgis-mcp).
+about=Companion QGIS plugin for the qgis-mcp-workflows MCP server. Exposes a TCP
     socket that the server connects to so that LLMs can drive figure
     rendering, choropleths, trajectory plots, and OD-flow maps without
     leaving Claude.
 
-    This plugin is intentionally narrow — focused on transportation research
-    workflows (PFLOW, GUFM, weekly-deck figure pipelines). For the general
-    51-tool QGIS-MCP surface, install nkarasiak/qgis-mcp side-by-side
-    (different plugin folder, different socket port).
+    This plugin is intentionally narrow — focused on workflow tools for
+    transportation research (PFLOW, GUFM, weekly-deck figure pipelines).
+    For the general 51-tool QGIS-MCP surface, install nkarasiak/qgis-mcp
+    side-by-side (different plugin folder, different socket port).
 
-    Pair this plugin with the qgis-mcp-north MCP server. See
-    https://github.com/wattwong103/qgis-mcp-north for setup instructions.
+    Pair this plugin with the qgis-mcp-workflows MCP server. See
+    https://github.com/wattwong103/qgis-mcp-workflows for setup instructions.
 
     Default socket port: 9877 (vs upstream nkarasiak/qgis-mcp on 9876).
 
-version=1.0.0
+version=1.1.0
 author=North
 email=
-tags=mcp,ai,claude,llm,transportation,research,pflow,gufm
-homepage=https://github.com/wattwong103/qgis-mcp-north
-tracker=https://github.com/wattwong103/qgis-mcp-north/issues
-repository=https://github.com/wattwong103/qgis-mcp-north
+tags=mcp,ai,claude,llm,workflows,transportation,research,pflow,gufm
+homepage=https://github.com/wattwong103/qgis-mcp-workflows
+tracker=https://github.com/wattwong103/qgis-mcp-workflows/issues
+repository=https://github.com/wattwong103/qgis-mcp-workflows
 license=MIT
 category=Plugins
 icon=icons/icon.png
 experimental=True
 deprecated=False
-changelog=1.0.0 : v1.0 — tool surface complete. Final 3 stubs shipped: qgis_style_categorized (per-class
+changelog=1.1.0 : Rename release. The package, plugin, and console script move from
+    qgis-mcp-north → qgis-mcp-workflows to put the fork's positioning (workflow tools
+    not 51 PyQGIS primitives) in the name. No behavior changes. Co-existence with
+    upstream nkarasiak/qgis-mcp unchanged: different plugin folder, port 9877 stays.
+    Env vars renamed QGIS_MCP_NORTH_* → QGIS_MCP_WORKFLOWS_*. Installed config key
+    in MCP clients changes 'qgis-north' → 'qgis-workflows'.
+ 1.0.0 : v1.0 — tool surface complete. Final 3 stubs shipped: qgis_style_categorized (per-class
     feature counts), qgis_style_graduated (quantile/equal_interval/natural_breaks/pretty modes + explicit
-    breaks), qgis_eval (return_vars capture with _json_safe fallback). Compound mode: QGIS_MCP_NORTH_TOOL_MODE=compound
+    breaks), qgis_eval (return_vars capture with _json_safe fallback). Compound mode: QGIS_MCP_WORKFLOWS_TOOL_MODE=compound
     exposes 5 grouped tools (qgis_inspect/style/render/export + qgis_eval) for token-constrained LLMs.
     Benchmarks scaffolding (tests/benchmarks/), end-to-end W17 demo (scripts/demo_w17.py + fake/plugin/headless
     integration tests), installer tests (13 cases). README rewritten. Windows-only support claim.
@@ -44,7 +50,7 @@ changelog=1.0.0 : v1.0 — tool surface complete. Final 3 stubs shipped: qgis_st
     n_pages); qgis_batch_render (fan-out per attribute value, manifest + per-value errors, active-layer convention).
     New errors: EmptyAfterFilterError, ProjectLoadError, LayoutNotFoundError. 37 new unit tests (66 total).
     Stubs remaining for v0.6: qgis_style_categorized, qgis_style_graduated, qgis_eval.
- 0.4.0 : v0.4 — headless transport. PyQGIS subprocess executor (src/qgis_mcp_north/executors/headless.py)
+ 0.4.0 : v0.4 — headless transport. PyQGIS subprocess executor (src/qgis_mcp_workflows/executors/headless.py)
     re-uses the plugin's QgisMCPServer.execute_command via a stub iface, so plugin and headless share one
     handler codebase. Server gains --transport={plugin,headless,auto} (default auto: probe port 9877, fall
     back to headless). qgis_load_layer(crs=...) wired through plugin's set_layer_crs with rollback on
@@ -53,7 +59,7 @@ changelog=1.0.0 : v1.0 — tool surface complete. Final 3 stubs shipped: qgis_st
     Plugin: added render_layers_to_path and render_choropleth dispatch handlers.
     MCP server: implemented qgis_layer_inspect, qgis_load_layer, qgis_render_map,
     qgis_render_choropleth (memory-layer rebuild + CSV join), qgis_figures_to_pptx.
-    Executor abstraction (src/qgis_mcp_north/executors/plugin.py) shipped — headless
+    Executor abstraction (src/qgis_mcp_workflows/executors/plugin.py) shipped — headless
     executor lands in v0.4. 25 unit tests (mocked-executor) + typed errors in errors.py.
     8 tool stubs remain.
  0.1.0 : Initial fork — scaffolding only, 13 tool stubs registered, no functional implementations yet.

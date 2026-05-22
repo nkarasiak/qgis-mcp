@@ -103,7 +103,7 @@ _HEADER_STRUCT = struct.Struct(">I")
 class QgisMCPServer(QObject):
     """Server class to handle socket connections and execute QGIS commands"""
 
-    LOG_TAG: ClassVar[str] = "MCP-NORTH"
+    LOG_TAG: ClassVar[str] = "MCP-WORKFLOWS"
     MAX_CLIENTS: ClassVar[int] = 10
 
     def __init__(self, host=_DEFAULT_HOST, port=_DEFAULT_PORT, iface=None):
