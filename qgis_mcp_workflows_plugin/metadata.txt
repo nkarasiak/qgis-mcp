@@ -18,7 +18,7 @@ about=Companion QGIS plugin for the qgis-mcp-workflows MCP server. Exposes a TCP
 
     Default socket port: 9877 (vs upstream nkarasiak/qgis-mcp on 9876).
 
-version=1.2.0
+version=1.3.0
 author=North
 email=
 tags=mcp,ai,claude,llm,workflows,transportation,research,pflow,gufm,drm
@@ -30,7 +30,14 @@ category=Plugins
 icon=icons/icon.png
 experimental=True
 deprecated=False
-changelog=1.2.0 : New tool qgis_render_link_density for DRM-link traffic density choropleths
+changelog=1.3.0 : Vault ingest pipeline (v0.6 milestone from DESIGN.md §7). The qgis project
+    is now wired into the obsidian-vault knowledge system. New: scripts/weekly_figures.py
+    (orchestrator for the weekly figure set — choropleth + trajectory + optional link_density,
+    writes a manifest.json so /kb-report can discover what to embed); docs/vault-integration.md
+    (cross-repo workflow guide). Vault-side: 7 concept pages + 3 source summaries seeded via
+    /kb-ingest + /kb-compile; cross-link stubs at wiki/{pflow,gufm}/applications-qgis.md; first
+    /kb-report at reports/qgis/v1.3-ship-readout.md. No tool surface changes — 14 tools unchanged.
+ 1.2.0 : New tool qgis_render_link_density for DRM-link traffic density choropleths
     from PFLOW trajectories. Streams trajectory CSVs row-by-row MCP-side; only the per-link
     aggregated dict crosses the wire. Companion one-time prep script scripts/build_drm_network.py
     builds assets/drm_network.gpkg from 47 prefecture-sharded DRM TSVs (requires new [drm] extra:
