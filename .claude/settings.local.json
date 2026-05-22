@@ -23,7 +23,12 @@
       "Bash(cp \"H:/Dropbox/qgis-mcp-north/qgis-mcp-north-v0.3/src/qgis_mcp_north/server.py\" \"H:/Dropbox/qgis-mcp-north/src/qgis_mcp_north/server.py\")",
       "Bash(cp \"H:/Dropbox/qgis-mcp-north/qgis-mcp-north-v0.3/qgis_mcp_north_plugin/plugin.py\" \"H:/Dropbox/qgis-mcp-north/qgis_mcp_north_plugin/plugin.py\")",
       "Bash(cp \"H:/Dropbox/qgis-mcp-north/qgis-mcp-north-v0.3/qgis_mcp_north_plugin/metadata.txt\" \"H:/Dropbox/qgis-mcp-north/qgis_mcp_north_plugin/metadata.txt\")",
-      "Bash(uv tool *)"
+      "Bash(uv tool *)",
+      "Bash(grep -n '^```' \"/h/Dropbox/qgis-mcp-north/docs/superpowers/plans/2026-05-22-render-link-density-tool.md\")",
+      "Bash(grep *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git rm *)"
     ]
   }
 }
