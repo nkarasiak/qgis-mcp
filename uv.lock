@@ -1290,6 +1290,10 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
+drm = [
+    { name = "geopandas" },
+    { name = "pyogrio" },
+]
 pptx = [
     { name = "python-pptx" },
 ]
@@ -1299,15 +1303,17 @@ trajectory = [
 
 [package.metadata]
 requires-dist = [
+    { name = "geopandas", marker = "extra == 'drm'", specifier = ">=0.14" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.20.0" },
     { name = "movingpandas", marker = "extra == 'trajectory'", specifier = ">=0.20" },
     { name = "pydantic", specifier = ">=2.7" },
+    { name = "pyogrio", marker = "extra == 'drm'", specifier = ">=0.7" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "pytest-benchmark", marker = "extra == 'bench'", specifier = ">=4.0" },
     { name = "python-pptx", marker = "extra == 'pptx'", specifier = ">=1.0" },
 ]
-provides-extras = ["dev", "pptx", "trajectory", "bench"]
+provides-extras = ["dev", "pptx", "trajectory", "bench", "drm"]
 
 [[package]]
 name = "referencing"
