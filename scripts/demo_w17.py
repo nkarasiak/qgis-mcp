@@ -18,11 +18,16 @@ Run:
     $env:QGIS_MCP_WORKFLOWS_TOOL_MODE='compound'
     uv run --no-sync scripts/demo_w17.py
 
+    # Include a DRM link-density figure (requires assets/drm_network.gpkg)
+    uv run --no-sync scripts/demo_w17.py --with-link-density
+    uv run --no-sync scripts/demo_w17.py --with-link-density --drm-network path/to/drm_network.gpkg
+
 Exit code 0 on success; non-zero if any step fails or output is missing.
 """
 
 from __future__ import annotations
 
+import argparse
 import csv
 import os
 import sys
@@ -71,8 +76,14 @@ def _set_executor_from_env():
     return "headless"
 
 
-def run_demo(output_dir: Path) -> Path:
-    """Run the 6-step W17 pipeline. Returns the path to the produced .pptx.
+def run_demo(
+    output_dir: Path,
+    *,
+    with_link_density: bool = False,
+    drm_network_path: Path | None = None,
+    link_density_traj_csv: Path | None = None,
+) -> Path:
+    """Run the W17 pipeline. Returns the path to the produced .pptx.
 
     Steps:
       1. Inspect tiny_zones.geojson (sanity check)
@@ -80,7 +91,20 @@ def run_demo(output_dir: Path) -> Path:
       3. Render choropleth
       4. Render trajectory heatmap
       5. Render OD flows
-      6. Assemble PPTX
+      6. [Optional] Render DRM link-density (if with_link_density=True)
+      7. Assemble PPTX
+
+    Args:
+        output_dir: Directory to write all output files into.
+        with_link_density: If True, also render a DRM link-density figure.
+            Requires ``drm_network_path`` to point at a valid GeoPackage.
+        drm_network_path: Path to the pre-built DRM network GeoPackage.
+            Defaults to ``assets/drm_network.gpkg`` under the repo root.
+            Ignored when ``with_link_density=False``.
+        link_density_traj_csv: Trajectory CSV with a ``link_id`` column for
+            the link-density step. Defaults to
+            ``tests/fixtures/tiny_trajectory_linkid.csv``. Ignored when
+            ``with_link_density=False``.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -98,13 +122,13 @@ def run_demo(output_dir: Path) -> Path:
 
     # 1. Sanity check zones.
     info = qgis_layer_inspect(path=str(zones))
-    print(f"  [1/6] tiny_zones: {info.n_features} features, CRS {info.crs}")
+    print(f"  [1] tiny_zones: {info.n_features} features, CRS {info.crs}")
     assert info.n_features == 4, f"expected 4 zones, got {info.n_features}"
 
     # 2. Build synthetic values CSV.
     values_csv = output_dir / "values.csv"
     _build_synthetic_value_csv(values_csv)
-    print(f"  [2/6] values.csv written ({values_csv.stat().st_size} bytes)")
+    print(f"  [2] values.csv written ({values_csv.stat().st_size} bytes)")
 
     # 3. Choropleth.
     choro_png = output_dir / "01_choropleth.png"
@@ -115,7 +139,7 @@ def run_demo(output_dir: Path) -> Path:
         join_field="zone_id",
         output_png=str(choro_png),
     )
-    print(f"  [3/6] choropleth → {choro_png.name} ({choro_result.n_classes} classes)")
+    print(f"  [3] choropleth → {choro_png.name} ({choro_result.n_classes} classes)")
 
     # 4. Trajectory heatmap.
     traj_png = output_dir / "02_trajectory.png"
@@ -124,7 +148,7 @@ def run_demo(output_dir: Path) -> Path:
         output_png=str(traj_png),
         render_mode="heatmap",
     )
-    print(f"  [4/6] trajectory heatmap → {traj_png.name} ({traj_result.n_points_rendered} points)")
+    print(f"  [4] trajectory heatmap → {traj_png.name} ({traj_result.n_points_rendered} points)")
 
     # 5. OD flows.
     od_png = output_dir / "03_od_flows.png"
@@ -133,29 +157,82 @@ def run_demo(output_dir: Path) -> Path:
         zones_layer_path=str(zones),
         output_png=str(od_png),
     )
-    print(f"  [5/6] od_flows → {od_png.name} ({od_result.n_flows_rendered} flows)")
+    print(f"  [5] od_flows → {od_png.name} ({od_result.n_flows_rendered} flows)")
 
-    # 6. PPTX.
+    # Collect figures + captions for PPTX (may grow if with_link_density).
+    figure_paths = [str(choro_png), str(traj_png), str(od_png)]
+    captions = ["Trip totals by zone", "Sample trajectories", "OD flows"]
+
+    # 6. Optional: DRM link-density.
+    if with_link_density:
+        from qgis_mcp_workflows.server import qgis_render_link_density
+
+        drm_path = (drm_network_path or REPO_ROOT / "assets" / "drm_network.gpkg").resolve()
+        if not drm_path.exists():
+            sys.exit(
+                f"DRM network not found at {drm_path}; "
+                "run scripts/build_drm_network.py first."
+            )
+        ld_traj = (
+            link_density_traj_csv or FIXTURE_DIR / "tiny_trajectory_linkid.csv"
+        ).resolve()
+        density_png = output_dir / "04_link_density.png"
+        density_result = qgis_render_link_density(
+            trajectory_csvs=[str(ld_traj)],
+            drm_network_path=str(drm_path),
+            output_png=str(density_png),
+        )
+        print(
+            f"  [6] link density → {density_png.name} "
+            f"({density_result.n_links_rendered} links rendered)"
+        )
+        figure_paths.append(str(density_png))
+        captions.append("DRM link density")
+
+    # 7. PPTX.
+    step_label = "7" if with_link_density else "6"
     pptx_path = output_dir / "w17.pptx"
     pptx_result = qgis_figures_to_pptx(
-        figure_paths=[str(choro_png), str(traj_png), str(od_png)],
+        figure_paths=figure_paths,
         pptx_path=str(pptx_path),
         layout="title_and_image",
-        captions=["Trip totals by zone", "Sample trajectories", "OD flows"],
+        captions=captions,
     )
-    print(f"  [6/6] deck → {pptx_path.name} ({pptx_result.n_slides_added} slides)")
+    print(f"  [{step_label}] deck → {pptx_path.name} ({pptx_result.n_slides_added} slides)")
 
-    # Verify outputs.
+    # Verify core outputs (link-density PNG verified separately when present).
     for png in (choro_png, traj_png, od_png):
         assert png.exists(), f"missing render: {png}"
         size = png.stat().st_size
         assert size > 5 * 1024, f"render too small ({size} bytes): {png}"
+    if with_link_density:
+        assert density_png.exists(), f"missing link-density render: {density_png}"
+        assert density_png.stat().st_size > 5 * 1024, f"link-density render too small: {density_png}"
     assert pptx_path.exists() and pptx_path.stat().st_size > 10 * 1024, "pptx missing or too small"
 
     return pptx_path
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="qgis-mcp-workflows v1.0 — W17 deck demo",
+    )
+    parser.add_argument(
+        "--with-link-density",
+        action="store_true",
+        help="Also render a DRM link-density figure (requires assets/drm_network.gpkg).",
+    )
+    parser.add_argument(
+        "--drm-network",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Path to the DRM network GeoPackage "
+            "(default: assets/drm_network.gpkg under the repo root)."
+        ),
+    )
+    args = parser.parse_args()
+
     print("qgis-mcp-workflows v1.0 — W17 deck demo")
     print("=" * 60)
 
@@ -167,11 +244,19 @@ def main() -> int:
 
     tool_mode = os.environ.get("QGIS_MCP_WORKFLOWS_TOOL_MODE", "full")
     print(f"Transport: {transport}  |  Tool mode: {tool_mode}")
+    if args.with_link_density:
+        drm_label = args.drm_network or "(default: assets/drm_network.gpkg)"
+        print(f"Link density: enabled  |  DRM network: {drm_label}")
     print()
 
+    drm_path = Path(args.drm_network).resolve() if args.drm_network else None
     output_dir = REPO_ROOT / "tmp" / f"demo_w17_{transport}"
     try:
-        pptx = run_demo(output_dir)
+        pptx = run_demo(
+            output_dir,
+            with_link_density=args.with_link_density,
+            drm_network_path=drm_path,
+        )
     except Exception as e:
         print(f"\nFAIL: {e}", file=sys.stderr)
         import traceback
