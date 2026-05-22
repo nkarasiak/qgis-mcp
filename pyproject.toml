@@ -43,6 +43,7 @@ ignore = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
     "bench: long-running benchmarks (skipped by default; run with `pytest -m bench`)",
     "slow: integration tests that take >10s",
