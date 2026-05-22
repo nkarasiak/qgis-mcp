@@ -1,6 +1,6 @@
-# qgis-mcp-north — Design Doc
+# qgis-mcp-workflows — Design Doc
 
-Status: **draft v0.1**, 2026-04-30
+Status: **draft v0.2 (post-rename)**, 2026-05-22
 Owner: North
 Upstream: forked from `nkarasiak/qgis-mcp` @ v0.2.1
 
@@ -27,7 +27,7 @@ Out of scope: replacing upstream as a general-purpose QGIS MCP. We intentionally
 ```
                     ┌───────────────────────────────────────┐
                     │          MCP Server (FastMCP)         │
-                    │   src/qgis_mcp_north/server.py        │
+                    │   src/qgis_mcp_workflows/server.py    │
                     └───────────────┬───────────────────────┘
                                     │
                        ┌────────────┴────────────┐
@@ -46,18 +46,18 @@ Out of scope: replacing upstream as a general-purpose QGIS MCP. We intentionally
                   PyQGIS API                PyQGIS API (same)
 ```
 
-**Two transports, one tool surface.** The MCP server exposes the same 13 tools regardless of transport. A thin executor abstraction (`src/qgis_mcp_north/executors/{plugin,headless}.py`) hides the difference. Tools are written against the executor interface; they never directly speak socket or PyQGIS.
+**Two transports, one tool surface.** The MCP server exposes the same 13 tools regardless of transport. A thin executor abstraction (`src/qgis_mcp_workflows/executors/{plugin,headless}.py`) hides the difference. Tools are written against the executor interface; they never directly speak socket or PyQGIS.
 
-**Transport selection.** CLI flag `--transport={plugin,headless,auto}`. `auto` (default) checks for a running plugin on port 9877 and falls back to headless. Config file in `~/.config/qgis-mcp-north/config.toml` can override per-machine.
+**Transport selection.** CLI flag `--transport={plugin,headless,auto}`. `auto` (default) checks for a running plugin on port 9877 and falls back to headless. Config file in `~/.config/qgis-mcp-workflows/config.toml` can override per-machine.
 
 **Headless runtime.** Standalone PyQGIS via `qgis_process` (CLI) for simple ops, with a long-lived Python subprocess holding `QgsApplication` for complex ops. Headless mode forces `QT_QPA_PLATFORM=offscreen` and disables any GUI calls. Render only — no project save, no plugin install, no UI mutation.
 
 **Co-existence with upstream.** To run side-by-side with `nkarasiak/qgis-mcp`:
-- Plugin folder: `qgis_mcp_north_plugin/` (vs upstream `qgis_mcp_plugin/`)
+- Plugin folder: `qgis_mcp_workflows_plugin/` (vs upstream `qgis_mcp_plugin/`)
 - Default socket port: **9877** (upstream uses 9876)
-- Python package: `qgis_mcp_north` (vs upstream `qgis_mcp`)
-- pyproject `name`: `qgis-mcp-north`
-- Server entry: `qgis-mcp-north-server` console script
+- Python package: `qgis_mcp_workflows` (vs upstream `qgis_mcp`)
+- pyproject `name`: `qgis-mcp-workflows`
+- Server entry: `qgis-mcp-workflows-server` console script
 
 Upstream's plugin and server stay untouched. If the user installs both, Claude Desktop sees two MCP servers and the LLM picks per request based on tool descriptions.
 
@@ -303,7 +303,7 @@ The mcp-builder skill emphasizes "actionable error messages." Every error messag
 
 **Output discipline.** Every tool that writes a file returns the absolute path in `output_path`. No tool returns base64-encoded image bytes. Inline preview is the host's job, not the MCP's.
 
-**Logging.** Server logs to `~/.local/share/qgis-mcp-north/logs/server-{date}.log`. Plugin logs go to QGIS Message Log under tab `qgis-mcp-north`.
+**Logging.** Server logs to `~/.local/share/qgis-mcp-workflows/logs/server-{date}.log`. Plugin logs go to QGIS Message Log under tab `qgis-mcp-workflows`.
 
 ---
 
@@ -337,6 +337,8 @@ If a v1 user needs any of these, the answer is: install upstream alongside, or w
 **v0.6 — vault ingest.** `/kb-ingest qgis-mcp-north`. Add `wiki/shared/qgis-mcp-north/` pages, applications notes in `wiki/pflow/` and `wiki/gufm/`. Wire a `/kb-report weekly` rendering pipeline through it.
 
 **v1.0 — first real W17-style deck rendered end-to-end** from a single LLM prompt, using only `qgis-mcp-north` tools.
+
+**v1.1 — rename release.** ✅ Shipped 2026-05-22. Package/plugin/console-script renamed to `qgis-mcp-workflows` (positioning over personal name). Env vars `QGIS_MCP_NORTH_*` → `QGIS_MCP_WORKFLOWS_*`. Co-existence with upstream unchanged: port 9877 stays, plugin folder is now `qgis_mcp_workflows_plugin`. No behavior changes; 99-test suite green before and after. CLAUDE.md, DESIGN.md, README, CHANGELOG updated; historical completion-report docs left untouched as point-in-time snapshots.
 
 ---
 
@@ -384,7 +386,7 @@ Resolved during v0.4 (2026-05-01):
 
 14. ~~**Headless executor architecture**~~ → Decided to re-use the plugin's `QgisMCPServer.execute_command` from inside a long-lived QGIS Python subprocess, rather than ship a parallel command-handler implementation. The runner instantiates `QgisMCPServer(host="", port=0, iface=_StubIface())` where `_StubIface` no-ops the rare canvas/layer-tree calls and raises loudly when a Desktop-only operation is reached. Trade-off: plugin and headless share one codebase (good — every v0.5 handler will work in both transports for free), at the cost of any handler that *truly* needs `iface` failing only at runtime. Acceptable: those handlers (e.g., `get_canvas_extent`) shouldn't be reachable from v0.3+v0.5 workflow tools anyway.
 
-15. ~~**Headless launcher discovery**~~ → On Windows, auto-detect `python-qgis-ltr.bat` / `python-qgis.bat` from `M:\QGIS LTR\bin\`, common OSGeo4W roots, and `C:\Program Files\QGIS *\bin\`. Override via `QGIS_MCP_NORTH_QGIS_LAUNCHER`. On Linux/macOS we currently fall back to `sys.executable` and assume PyQGIS is on the active Python's path — needs revisiting if a Linux user reports it.
+15. ~~**Headless launcher discovery**~~ → On Windows, auto-detect `python-qgis-ltr.bat` / `python-qgis.bat` from `M:\QGIS LTR\bin\`, common OSGeo4W roots, and `C:\Program Files\QGIS *\bin\`. Override via `QGIS_MCP_WORKFLOWS_QGIS_LAUNCHER`. On Linux/macOS we currently fall back to `sys.executable` and assume PyQGIS is on the active Python's path — needs revisiting if a Linux user reports it.
 
 16. ~~**Subprocess lifecycle**~~ → Lazy-spawn on first dispatch, hold open across the MCP server's lifetime, drain via a `{"type": "shutdown"}` message in `__del__`. `initQgis` costs ~1-2s per spawn, so keeping the process alive is essential. A single `threading.Lock` serializes dispatches — fine for MCP's per-tool-call model.
 
