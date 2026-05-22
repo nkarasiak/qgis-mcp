@@ -18,7 +18,7 @@ class PluginUnavailableError(QgisMcpWorkflowsError):
     def __init__(self, host: str, port: int) -> None:
         super().__init__(
             f"Cannot reach QGIS plugin at {host}:{port}. "
-            f"Open QGIS, enable the 'QGIS MCP North' plugin, click Start. "
+            f"Open QGIS, enable the 'QGIS MCP Workflows' plugin, click Start. "
             f"Next: retry the same tool call."
         )
         self.host = host

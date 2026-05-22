@@ -1467,7 +1467,7 @@ def main() -> None:
 
     executor, chosen = _build_executor(args.transport)
     set_executor(executor)
-    logger.info("qgis-mcp-workflows server starting (v1.0.0, transport=%s)", chosen)
+    logger.info("qgis-mcp-workflows server starting (v1.1.0, transport=%s)", chosen)
     mcp.run()
 
 
