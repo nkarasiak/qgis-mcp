@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-from qgis_mcp_north.server import qgis_load_layer
+from qgis_mcp_workflows.server import qgis_load_layer
 
 
 def _vector_responses(layer_id: str = "L_x"):
@@ -91,7 +91,7 @@ def test_crs_override_dispatches_set_layer_crs(fake_executor):
 
 def test_crs_override_failure_cleans_up_partial_layer(fake_executor):
     """v0.4: if set_layer_crs fails, the orphaned layer is removed and CrsMismatchError raised."""
-    from qgis_mcp_north.errors import CrsMismatchError, ExecutorError
+    from qgis_mcp_workflows.errors import CrsMismatchError, ExecutorError
 
     fake_executor.responses.update(_vector_responses("L_x"))
 

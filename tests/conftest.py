@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from qgis_mcp_north.helpers import DEFAULT_HOST, DEFAULT_PORT
+from qgis_mcp_workflows.helpers import DEFAULT_HOST, DEFAULT_PORT
 
 
 def _plugin_reachable(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> bool:
@@ -22,7 +22,7 @@ def _plugin_reachable(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> boo
 
 def _headless_available() -> bool:
     """Headless transport requires an explicit launcher path env var, OR PyQGIS on PATH."""
-    if os.environ.get("QGIS_MCP_NORTH_QGIS_LAUNCHER"):
+    if os.environ.get("QGIS_MCP_WORKFLOWS_QGIS_LAUNCHER"):
         return True
     # Best-effort: check if `qgis` or `qgis-bin` is on PATH (Linux/macOS unverified).
     import shutil
@@ -42,7 +42,7 @@ requires_plugin = pytest.mark.skipif(
 )
 requires_headless = pytest.mark.skipif(
     not HEADLESS_AVAILABLE,
-    reason="Set QGIS_MCP_NORTH_QGIS_LAUNCHER to a python-qgis(-ltr).bat (Windows) to run headless tests",
+    reason="Set QGIS_MCP_WORKFLOWS_QGIS_LAUNCHER to a python-qgis(-ltr).bat (Windows) to run headless tests",
 )
 
 
@@ -76,7 +76,7 @@ class FakeExecutor:
 @pytest.fixture
 def fake_executor() -> FakeExecutor:
     """Install a FakeExecutor as the active executor; reset on teardown."""
-    from qgis_mcp_north import executors
+    from qgis_mcp_workflows import executors
 
     fake = FakeExecutor()
     executors.set_executor(fake)

@@ -6,7 +6,7 @@ The plugin handler does the actual exec() in QGIS; here we mock its responses.
 
 from __future__ import annotations
 
-from qgis_mcp_north.server import qgis_eval
+from qgis_mcp_workflows.server import qgis_eval
 
 
 def test_simple_return_vars_captured(fake_executor):

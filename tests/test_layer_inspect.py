@@ -6,8 +6,8 @@ import os
 
 import pytest
 
-from qgis_mcp_north.errors import ExecutorError, LayerNotFoundError
-from qgis_mcp_north.server import qgis_layer_inspect
+from qgis_mcp_workflows.errors import ExecutorError, LayerNotFoundError
+from qgis_mcp_workflows.server import qgis_layer_inspect
 
 
 def test_vector_shapefile_returns_layer_info(fake_executor):

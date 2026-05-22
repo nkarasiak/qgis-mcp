@@ -94,7 +94,7 @@ from .compat import (
 
 
 _DEFAULT_HOST = "localhost"
-_DEFAULT_PORT = 9877  # qgis-mcp-north uses 9877 (vs upstream nkarasiak on 9876)
+_DEFAULT_PORT = 9877  # qgis-mcp-workflows uses 9877 (vs upstream nkarasiak on 9876)
 _RECV_CHUNK_SIZE = 65536
 _MAX_MESSAGE_SIZE = 10 * 1024 * 1024  # 10 MB
 _HEADER_STRUCT = struct.Struct(">I")
@@ -1023,7 +1023,7 @@ class QgisMCPServer(QObject):
     ):
         """Render specified layers to a PNG file. Returns metadata only (no base64).
 
-        v0.3 addition for qgis-mcp-north qgis_render_map. Differs from
+        v0.3 addition for qgis-mcp-workflows qgis_render_map. Differs from
         render_map_base64: explicit layer list, configurable DPI/background,
         path-only output, extent inferred from union of layer extents (5%
         padding) when not provided. No base64 in the response — DESIGN.md §5.

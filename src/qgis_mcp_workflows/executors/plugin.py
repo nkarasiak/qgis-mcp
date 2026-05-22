@@ -1,7 +1,7 @@
 """Plugin transport executor — TCP socket to the QGIS plugin on port 9877.
 
 Wraps ``QgisMCPClient`` with:
-- env-var driven host/port (``QGIS_MCP_NORTH_HOST``, ``QGIS_MCP_NORTH_PORT``)
+- env-var driven host/port (``QGIS_MCP_WORKFLOWS_HOST``, ``QGIS_MCP_WORKFLOWS_PORT``)
 - per-call connect/disconnect (simple, fits MCP's per-tool-call lifecycle)
 - response-envelope unwrapping (return ``result`` on success, raise on error)
 - error-message → typed-exception mapping
@@ -11,21 +11,21 @@ from __future__ import annotations
 
 import os
 
-from qgis_mcp_north.client import QgisMCPClient
-from qgis_mcp_north.errors import (
+from qgis_mcp_workflows.client import QgisMCPClient
+from qgis_mcp_workflows.errors import (
     ExecutorError,
     LayerNotFoundError,
     PluginUnavailableError,
 )
-from qgis_mcp_north.helpers import DEFAULT_HOST, DEFAULT_PORT, TIMEOUT_DEFAULT
+from qgis_mcp_workflows.helpers import DEFAULT_HOST, DEFAULT_PORT, TIMEOUT_DEFAULT
 
 
 class PluginExecutor:
     """Dispatch commands to the QGIS plugin over TCP."""
 
     def __init__(self, host: str | None = None, port: int | None = None) -> None:
-        self.host = host or os.environ.get("QGIS_MCP_NORTH_HOST", DEFAULT_HOST)
-        self.port = port or int(os.environ.get("QGIS_MCP_NORTH_PORT", str(DEFAULT_PORT)))
+        self.host = host or os.environ.get("QGIS_MCP_WORKFLOWS_HOST", DEFAULT_HOST)
+        self.port = port or int(os.environ.get("QGIS_MCP_WORKFLOWS_PORT", str(DEFAULT_PORT)))
 
     def dispatch(self, command: str, params: dict | None = None, timeout: int | None = None) -> dict:
         client = QgisMCPClient(host=self.host, port=self.port)

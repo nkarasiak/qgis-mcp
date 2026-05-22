@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from qgis_mcp_north.server import qgis_render_map
+from qgis_mcp_workflows.server import qgis_render_map
 
 
 def _render_response(out: str = "/tmp/x.png") -> dict:

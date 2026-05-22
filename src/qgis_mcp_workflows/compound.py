@@ -1,6 +1,6 @@
 """Compound-mode tools — 4 grouped wrappers that collapse 12 fine-grained tools.
 
-Activated by ``QGIS_MCP_NORTH_TOOL_MODE=compound``. In compound mode FastMCP exposes
+Activated by ``QGIS_MCP_WORKFLOWS_TOOL_MODE=compound``. In compound mode FastMCP exposes
 4 grouped tools (qgis_inspect, qgis_style, qgis_render, qgis_export) instead of the
 12 standalone tools. ``qgis_eval`` registers in both modes (universal escape hatch).
 
@@ -19,7 +19,7 @@ from typing import Annotated, Literal
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from qgis_mcp_north.server import (
+from qgis_mcp_workflows.server import (
     BatchRenderResult,
     ChoroplethResult,
     ExportResult,

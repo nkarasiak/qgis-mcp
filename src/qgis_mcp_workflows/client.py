@@ -10,7 +10,7 @@ import json
 import logging
 import socket
 
-from qgis_mcp_north.helpers import (
+from qgis_mcp_workflows.helpers import (
     DEFAULT_HOST,
     DEFAULT_PORT,
     HEADER_STRUCT,
@@ -19,7 +19,7 @@ from qgis_mcp_north.helpers import (
     TIMEOUT_LONG,
 )
 
-logger = logging.getLogger("QgisMcpNorthClient")
+logger = logging.getLogger("QgisMcpWorkflowsClient")
 
 
 class QgisMCPClient:

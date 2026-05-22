@@ -18,8 +18,8 @@ from unittest.mock import patch
 
 import pytest
 
-from qgis_mcp_north.errors import EmptyAfterFilterError, FieldNotFoundError
-from qgis_mcp_north.server import qgis_render_trajectory
+from qgis_mcp_workflows.errors import EmptyAfterFilterError, FieldNotFoundError
+from qgis_mcp_workflows.server import qgis_render_trajectory
 
 
 def _ok_response(**overrides) -> dict:
@@ -165,7 +165,7 @@ def test_extent_clip_keeps_in_range_points(fake_executor):
 def test_movingpandas_skipped_when_unavailable(fake_executor):
     """When movingpandas is not importable, used_movingpandas=False, no speed field."""
     fake_executor.responses["render_trajectory"] = _ok_response()
-    with patch("qgis_mcp_north.server._HAS_MP", False):
+    with patch("qgis_mcp_workflows.server._HAS_MP", False):
         qgis_render_trajectory(
             input_path=str(TINY_TRAJ), output_png="/tmp/x.png", render_mode="lines"
         )
@@ -198,7 +198,7 @@ def test_movingpandas_attaches_speed_when_available(fake_executor):
     fake_mp.TrajectoryCollection = _FakeTrajCollection
     with (
         patch.dict(sys.modules, {"movingpandas": fake_mp}),
-        patch("qgis_mcp_north.server._HAS_MP", True),
+        patch("qgis_mcp_workflows.server._HAS_MP", True),
     ):
         qgis_render_trajectory(
             input_path=str(TINY_TRAJ),

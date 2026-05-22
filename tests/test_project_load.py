@@ -10,8 +10,8 @@ import os
 
 import pytest
 
-from qgis_mcp_north.errors import ExecutorError, ProjectLoadError
-from qgis_mcp_north.server import qgis_project_load
+from qgis_mcp_workflows.errors import ExecutorError, ProjectLoadError
+from qgis_mcp_workflows.server import qgis_project_load
 
 
 def _ok_response(**overrides) -> dict:

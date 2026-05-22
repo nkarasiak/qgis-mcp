@@ -16,7 +16,7 @@ from tests.benchmarks.conftest import requires_headless
 
 def _render_trajectory(path: Path, output: Path) -> dict:
     """Helper: call qgis_render_trajectory in lines mode with default sampling."""
-    from qgis_mcp_north.server import qgis_render_trajectory
+    from qgis_mcp_workflows.server import qgis_render_trajectory
 
     return qgis_render_trajectory(
         input_path=str(path), output_png=str(output), render_mode="lines"

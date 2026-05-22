@@ -1,4 +1,4 @@
-"""Typed exceptions for qgis-mcp-north tools.
+"""Typed exceptions for qgis-mcp-workflows tools.
 
 Every exception message ends with one suggested next tool call, per
 ``docs/DESIGN.md`` §5 ("actionable error messages"). Tools raise these;
@@ -8,11 +8,11 @@ FastMCP turns them into MCP error responses.
 from __future__ import annotations
 
 
-class QgisMcpNorthError(Exception):
-    """Base class for all qgis-mcp-north tool errors."""
+class QgisMcpWorkflowsError(Exception):
+    """Base class for all qgis-mcp-workflows tool errors."""
 
 
-class PluginUnavailableError(QgisMcpNorthError):
+class PluginUnavailableError(QgisMcpWorkflowsError):
     """The QGIS plugin socket isn't reachable."""
 
     def __init__(self, host: str, port: int) -> None:
@@ -25,7 +25,7 @@ class PluginUnavailableError(QgisMcpNorthError):
         self.port = port
 
 
-class ExecutorError(QgisMcpNorthError):
+class ExecutorError(QgisMcpWorkflowsError):
     """Generic plugin-side error (unmapped)."""
 
     def __init__(self, command: str, message: str) -> None:
@@ -37,7 +37,7 @@ class ExecutorError(QgisMcpNorthError):
         self.message = message
 
 
-class LayerNotFoundError(QgisMcpNorthError):
+class LayerNotFoundError(QgisMcpWorkflowsError):
     """A layer file or layer_id couldn't be resolved."""
 
     def __init__(self, path_or_id: str) -> None:
@@ -48,7 +48,7 @@ class LayerNotFoundError(QgisMcpNorthError):
         self.path_or_id = path_or_id
 
 
-class FieldNotFoundError(QgisMcpNorthError):
+class FieldNotFoundError(QgisMcpWorkflowsError):
     """A field name isn't present on the layer / CSV."""
 
     def __init__(self, field: str, available: list[str]) -> None:
@@ -61,7 +61,7 @@ class FieldNotFoundError(QgisMcpNorthError):
         self.available = available
 
 
-class JoinError(QgisMcpNorthError):
+class JoinError(QgisMcpWorkflowsError):
     """A CSV → polygon join produced zero matches (clearly wrong join key).
 
     Constructor takes a free-form description; the plugin already embeds the
@@ -77,20 +77,20 @@ class JoinError(QgisMcpNorthError):
         self.description = description
 
 
-class HeadlessUnavailableError(QgisMcpNorthError):
+class HeadlessUnavailableError(QgisMcpWorkflowsError):
     """The headless transport's QGIS Python launcher could not be found or started."""
 
     def __init__(self, detail: str) -> None:
         super().__init__(
             f"Headless transport unavailable: {detail}. "
             f"Install OSGeo4W (Windows) or QGIS standalone Python with PyQGIS, then set "
-            f"QGIS_MCP_NORTH_QGIS_LAUNCHER to its python-qgis(-ltr).bat / qgis_python wrapper. "
+            f"QGIS_MCP_WORKFLOWS_QGIS_LAUNCHER to its python-qgis(-ltr).bat / qgis_python wrapper. "
             f"Next: re-run with --transport=plugin if QGIS Desktop is open instead."
         )
         self.detail = detail
 
 
-class CrsMismatchError(QgisMcpNorthError):
+class CrsMismatchError(QgisMcpWorkflowsError):
     """A requested CRS override could not be applied to the loaded layer."""
 
     def __init__(self, requested_crs: str, detail: str) -> None:
@@ -103,7 +103,7 @@ class CrsMismatchError(QgisMcpNorthError):
         self.detail = detail
 
 
-class EmptyAfterFilterError(QgisMcpNorthError):
+class EmptyAfterFilterError(QgisMcpWorkflowsError):
     """An extent / sampling / filter step left zero features to render."""
 
     def __init__(self, detail: str) -> None:
@@ -114,7 +114,7 @@ class EmptyAfterFilterError(QgisMcpNorthError):
         self.detail = detail
 
 
-class ProjectLoadError(QgisMcpNorthError):
+class ProjectLoadError(QgisMcpWorkflowsError):
     """A QGIS project (.qgz / .qgs) failed to load."""
 
     def __init__(self, path: str, reason: str) -> None:
@@ -126,7 +126,7 @@ class ProjectLoadError(QgisMcpNorthError):
         self.reason = reason
 
 
-class LayoutNotFoundError(QgisMcpNorthError):
+class LayoutNotFoundError(QgisMcpWorkflowsError):
     """A print-composer layout name is missing from the loaded project."""
 
     def __init__(self, name: str, available: list[str]) -> None:

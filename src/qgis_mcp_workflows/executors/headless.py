@@ -11,7 +11,7 @@ TCP framing (``HEADER_STRUCT``: 4-byte big-endian uint32). The runner emits
 per ``dispatch`` call.
 
 Launcher detection (in priority order):
-    1. ``QGIS_MCP_NORTH_QGIS_LAUNCHER`` env var (full path).
+    1. ``QGIS_MCP_WORKFLOWS_QGIS_LAUNCHER`` env var (full path).
     2. Common Windows locations: ``M:\\QGIS LTR\\bin\\python-qgis-ltr.bat``,
        ``C:\\OSGeo4W\\bin\\python-qgis-ltr.bat``, ``C:\\Program Files\\QGIS *\\bin\\python-qgis*.bat``.
     3. Linux/macOS: assume ``python3`` already has PyQGIS on its path.
@@ -32,18 +32,18 @@ import sys
 import threading
 from typing import ClassVar
 
-from qgis_mcp_north.errors import (
+from qgis_mcp_workflows.errors import (
     ExecutorError,
     HeadlessUnavailableError,
     LayerNotFoundError,
 )
-from qgis_mcp_north.helpers import HEADER_STRUCT, TIMEOUT_DEFAULT
+from qgis_mcp_workflows.helpers import HEADER_STRUCT, TIMEOUT_DEFAULT
 
 
 class HeadlessExecutor:
     """Subprocess-backed executor satisfying the ``Executor`` Protocol."""
 
-    _LAUNCHER_ENV_VAR: ClassVar[str] = "QGIS_MCP_NORTH_QGIS_LAUNCHER"
+    _LAUNCHER_ENV_VAR: ClassVar[str] = "QGIS_MCP_WORKFLOWS_QGIS_LAUNCHER"
     _DEFAULT_WINDOWS_LAUNCHERS: ClassVar[tuple[str, ...]] = (
         r"M:\QGIS LTR\bin\python-qgis-ltr.bat",
         r"C:\OSGeo4W\bin\python-qgis-ltr.bat",
@@ -101,11 +101,11 @@ class HeadlessExecutor:
             return self._proc
 
         # Run the script by absolute path rather than via ``-m``: the QGIS
-        # Python doesn't have ``qgis_mcp_north`` installed in its site-packages,
+        # Python doesn't have ``qgis_mcp_workflows`` installed in its site-packages,
         # so the import-system resolution would fail before the runner could
         # bootstrap sys.path. Direct script invocation sidesteps that — the
         # runner then adds the repo root to sys.path so it can import
-        # ``qgis_mcp_north_plugin``.
+        # ``qgis_mcp_workflows_plugin``.
         runner_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "headless_runner.py"
         )
@@ -113,7 +113,7 @@ class HeadlessExecutor:
 
         # Pass the repo root explicitly so the runner can put it on sys.path.
         env = os.environ.copy()
-        env["QGIS_MCP_NORTH_REPO_ROOT"] = self._repo_root()
+        env["QGIS_MCP_WORKFLOWS_REPO_ROOT"] = self._repo_root()
         env.setdefault("QT_QPA_PLATFORM", "offscreen")
 
         try:
@@ -143,7 +143,7 @@ class HeadlessExecutor:
         return proc
 
     def _repo_root(self) -> str:
-        # src/qgis_mcp_north/executors/headless.py → repo root is 4 levels up
+        # src/qgis_mcp_workflows/executors/headless.py → repo root is 4 levels up
         here = os.path.abspath(__file__)
         return os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(here))))
 
