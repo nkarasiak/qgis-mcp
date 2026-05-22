@@ -136,7 +136,7 @@ def _local_entry() -> dict:
     if shutil.which("uv"):
         return {
             "command": "uv",
-            "args": ["run", "--no-sync", "src/qgis_mcp_workflows/server.py"],
+            "args": ["run", "--no-sync", "qgis-mcp-workflows-server"],
             "cwd": str(REPO_DIR),
         }
     # Fallback: run directly from the venv Python
@@ -158,7 +158,7 @@ def _zed_local_entry() -> dict:
         return {
             "command": {
                 "path": "uv",
-                "args": ["run", "--no-sync", "src/qgis_mcp_workflows/server.py"],
+                "args": ["run", "--no-sync", "qgis-mcp-workflows-server"],
                 "env": {"QGIS_MCP_TRANSPORT": "stdio"},
             },
             "settings": {},
