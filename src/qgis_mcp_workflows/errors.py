@@ -137,3 +137,16 @@ class LayoutNotFoundError(QgisMcpWorkflowsError):
         )
         self.name = name
         self.available = available
+
+
+class DRMNetworkNotFoundError(QgisMcpWorkflowsError):
+    """The DRM network GeoPackage is missing — qgis_render_link_density needs it."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(
+            f"DRM network GeoPackage not found at {path!r}. "
+            f"Build it once with: "
+            f"`uv run --no-sync --extra drm scripts/build_drm_network.py --output {path}`. "
+            f"Next: run the prep script, then retry qgis_render_link_density with the same path."
+        )
+        self.path = path
