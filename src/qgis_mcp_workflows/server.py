@@ -257,6 +257,20 @@ class ODFlowResult(RenderResult):
     n_unmatched_destinations: int
 
 
+class LinkDensityResult(RenderResult):
+    n_trajectory_rows_total: int
+    n_points_total: int
+    n_links_with_traffic: int
+    n_links_rendered: int
+    n_unmatched_link_ids: int
+    density_field: str
+    breaks: list[float]
+    mode: str
+    min_density: float
+    max_density: float
+    aggregation: str
+
+
 class ExportResult(BaseModel):
     output_path: str
     format: str
@@ -1036,6 +1050,63 @@ def _compute_movingpandas_speeds(mp, features: list[dict]) -> list[float] | None
     except Exception:
         logger.warning("movingpandas speed computation failed", exc_info=True)
         return None
+
+
+def _aggregate_link_density(
+    csv_paths: list,
+    link_id_col: str,
+    aggregation: str,
+    value_col: str | None,
+) -> tuple[dict[str, float], int]:
+    """Stream-aggregate trajectory CSVs into a {link_id → density} dict.
+
+    Returns (density_dict, n_rows_read). Streaming: never holds more than one
+    row in memory beyond the accumulator. Non-numeric values in value_col are
+    skipped silently (logged at WARNING) so a few bad rows don't kill the run.
+
+    Raises:
+        FieldNotFoundError: if link_id_col or value_col is missing from any CSV.
+        ValueError: if aggregation='sum' but value_col is None.
+    """
+    import csv as _csv
+
+    from qgis_mcp_workflows.errors import FieldNotFoundError
+
+    if aggregation == "sum" and value_col is None:
+        raise ValueError("aggregation='sum' requires value_col to be set.")
+    if aggregation not in ("count", "sum"):
+        raise ValueError(f"Unknown aggregation: {aggregation!r}. Use 'count' or 'sum'.")
+
+    density: dict[str, float] = {}
+    n_rows = 0
+
+    for path in csv_paths:
+        with open(path, encoding="utf-8", newline="") as f:
+            reader = _csv.DictReader(f)
+            columns = reader.fieldnames or []
+            if link_id_col not in columns:
+                raise FieldNotFoundError(link_id_col, columns)
+            if value_col is not None and value_col not in columns:
+                raise FieldNotFoundError(value_col, columns)
+
+            for row in reader:
+                n_rows += 1
+                link_id = row[link_id_col]
+                if not link_id:
+                    continue
+                if aggregation == "count":
+                    density[link_id] = density.get(link_id, 0.0) + 1.0
+                else:  # sum
+                    raw = row[value_col]  # type: ignore[index]
+                    try:
+                        val = float(raw)
+                    except (TypeError, ValueError):
+                        continue
+                    if val != val:  # NaN check
+                        continue
+                    density[link_id] = density.get(link_id, 0.0) + val
+
+    return density, n_rows
 
 
 @_maybe_tool(
