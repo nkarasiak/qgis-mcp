@@ -1,9 +1,11 @@
-# qgis-mcp-north
+# qgis-mcp-workflows
 
 A focused fork of [`nkarasiak/qgis-mcp`](https://github.com/nkarasiak/qgis-mcp) for
 **transportation-research figure pipelines** — PFLOW, GUFM, weekly decks (the "W17"
 pattern). 13 workflow tools (collapsible to 5 in compound mode), two transports,
 CI-friendly.
+
+> Renamed from `qgis-mcp-north` in v1.1.0. The fork's positioning (workflow tools, not 51 PyQGIS primitives) is now in the name. Existing users: see the [migration note](#v110-rename-migration) below.
 
 ![W17 demo screenshot](assets/screenshots/w17_demo.png)
 
@@ -25,7 +27,7 @@ the LLM picks per request.
 ```
                    ┌───────────────────────────────────────┐
                    │          MCP Server (FastMCP)         │
-                   │   src/qgis_mcp_north/server.py        │
+                   │   src/qgis_mcp_workflows/server.py        │
                    └───────────────┬───────────────────────┘
                                    │
                       ┌────────────┴────────────┐
@@ -66,7 +68,7 @@ Full input/output schemas, response shapes, and error taxonomy: [`docs/DESIGN.md
 
 ### Compound mode
 
-Set `QGIS_MCP_NORTH_TOOL_MODE=compound` to collapse the surface to 5 grouped tools
+Set `QGIS_MCP_WORKFLOWS_TOOL_MODE=compound` to collapse the surface to 5 grouped tools
 for token-constrained LLMs (Haiku, small open-weights). Same plumbing, smaller
 schema:
 
@@ -88,13 +90,13 @@ schema:
 ### 2. Clone + install
 
 ```bash
-git clone https://github.com/wattwong103/qgis-mcp-north.git
-cd qgis-mcp-north
+git clone https://github.com/wattwong103/qgis-mcp-workflows.git
+cd qgis-mcp-workflows
 python install.py
 ```
 
 The installer:
-- Symlinks `qgis_mcp_north_plugin/` into your active QGIS profile.
+- Symlinks `qgis_mcp_workflows_plugin/` into your active QGIS profile.
 - Sets up the Python venv (`uv sync`).
 - Optionally configures MCP clients (Claude Desktop, Cursor, VS Code, Windsurf, Zed, Claude Code).
 
@@ -113,7 +115,7 @@ python install.py --remote --clients claude-desktop
 ### 3. Enable the plugin in QGIS
 
 1. Restart QGIS.
-2. Plugins menu → Manage and Install Plugins → enable "QGIS MCP North".
+2. Plugins menu → Manage and Install Plugins → enable "QGIS MCP Workflows".
 3. Click "Start Server" in the MCP dock widget (listens on `localhost:9877`).
 
 ### 4. Use it
@@ -131,22 +133,22 @@ Concrete PFLOW recipes: [`docs/pflow-usage.md`](docs/pflow-usage.md).
 
 | Variable | Default | Description |
 |---|---|---|
-| `QGIS_MCP_NORTH_TRANSPORT` | `auto` | `plugin` / `headless` / `auto` (probe :9877, fall back to headless) |
-| `QGIS_MCP_NORTH_TOOL_MODE` | `full` | `full` (13 tools) / `compound` (5 grouped tools) |
-| `QGIS_MCP_NORTH_HOST` | `localhost` | Plugin socket host |
-| `QGIS_MCP_NORTH_PORT` | `9877` | Plugin socket port (upstream uses 9876) |
-| `QGIS_MCP_NORTH_QGIS_LAUNCHER` | (auto-detected on Windows) | Headless: full path to `python-qgis(-ltr).bat` |
-| `QGIS_MCP_NORTH_LOG_FILE` | `~/.local/share/qgis-mcp-north/server.log` | Rotating log (5MB × 3); empty disables |
-| `QGIS_MCP_NORTH_LOG_LEVEL` | `INFO` | File log level (console always WARNING+) |
+| `QGIS_MCP_WORKFLOWS_TRANSPORT` | `auto` | `plugin` / `headless` / `auto` (probe :9877, fall back to headless) |
+| `QGIS_MCP_WORKFLOWS_TOOL_MODE` | `full` | `full` (13 tools) / `compound` (5 grouped tools) |
+| `QGIS_MCP_WORKFLOWS_HOST` | `localhost` | Plugin socket host |
+| `QGIS_MCP_WORKFLOWS_PORT` | `9877` | Plugin socket port (upstream uses 9876) |
+| `QGIS_MCP_WORKFLOWS_QGIS_LAUNCHER` | (auto-detected on Windows) | Headless: full path to `python-qgis(-ltr).bat` |
+| `QGIS_MCP_WORKFLOWS_LOG_FILE` | `~/.local/share/qgis-mcp-workflows/server.log` | Rotating log (5MB × 3); empty disables |
+| `QGIS_MCP_WORKFLOWS_LOG_LEVEL` | `INFO` | File log level (console always WARNING+) |
 
 CLI flag `--transport=plugin|headless|auto` overrides the env var.
 
 ## Headless mode (cron / unattended renders)
 
 ```powershell
-$env:QGIS_MCP_NORTH_TRANSPORT='headless'
-$env:QGIS_MCP_NORTH_QGIS_LAUNCHER='M:\QGIS LTR\bin\python-qgis-ltr.bat'
-uv run --no-sync qgis-mcp-north-server
+$env:QGIS_MCP_WORKFLOWS_TRANSPORT='headless'
+$env:QGIS_MCP_WORKFLOWS_QGIS_LAUNCHER='M:\QGIS LTR\bin\python-qgis-ltr.bat'
+uv run --no-sync qgis-mcp-workflows-server
 ```
 
 `HeadlessExecutor` lazy-spawns a PyQGIS subprocess on first dispatch and keeps it
@@ -156,7 +158,7 @@ restart per call.
 ## Platform support
 
 - **Windows** is the supported target for v1.0. Tested with OSGeo4W LTR.
-- **Linux/macOS** may work via PyQGIS-on-PATH (set `QGIS_MCP_NORTH_QGIS_LAUNCHER`
+- **Linux/macOS** may work via PyQGIS-on-PATH (set `QGIS_MCP_WORKFLOWS_QGIS_LAUNCHER`
   to a `python-qgis` wrapper or compatible Python). Unverified — refinement deferred
   until a non-Windows user reports.
 
@@ -179,13 +181,13 @@ uv run --no-sync scripts/demo_w17.py
 
 ## Coexistence with upstream
 
-Both `qgis-mcp-north` (this fork) and `nkarasiak/qgis-mcp` can run side-by-side:
+Both `qgis-mcp-workflows` (this fork) and `nkarasiak/qgis-mcp` can run side-by-side:
 
 | | This fork | Upstream |
 |---|---|---|
-| Plugin folder | `qgis_mcp_north_plugin/` | `qgis_mcp_plugin/` |
+| Plugin folder | `qgis_mcp_workflows_plugin/` | `qgis_mcp_plugin/` |
 | Default port | 9877 | 9876 |
-| Package name | `qgis_mcp_north` | `qgis_mcp` |
+| Package name | `qgis_mcp_workflows` | `qgis_mcp` |
 | Tool count | 13 (or 5 compound) | 51 |
 | Headless | yes | no |
 
@@ -198,6 +200,16 @@ workflows above.
 
 - **v1.0.0** (2026-05-14): Tool surface complete. 99 unit tests pass.
 - See [`CHANGELOG.md`](CHANGELOG.md) for the full history.
+
+## v1.1.0 rename migration
+
+If you previously installed `qgis-mcp-north`:
+
+1. Re-run the installer: `python install.py` — it will install the new plugin folder (`qgis_mcp_workflows_plugin/`) and add a new MCP client config key (`qgis-workflows`).
+2. Remove the old plugin folder: `~/.local/share/QGIS/QGIS3/profiles/default/python/plugins/qgis_mcp_north_plugin` (Windows: `%APPDATA%\QGIS\QGIS3\…`).
+3. Remove the old MCP client entry: `python install.py --uninstall --clients claude-desktop` against the `v1.0.0` version of this repo, or hand-edit `claude_desktop_config.json` to remove the `"qgis-north"` key.
+4. Restart QGIS, enable the "QGIS MCP Workflows" plugin in the Plugins dialog, click Start Server.
+5. Env vars: rename any `QGIS_MCP_NORTH_*` in your shell profile / launch scripts → `QGIS_MCP_WORKFLOWS_*`. Port `9877` is unchanged.
 
 ## License
 

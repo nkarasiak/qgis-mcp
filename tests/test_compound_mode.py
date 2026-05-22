@@ -1,4 +1,4 @@
-"""Tests for compound mode — QGIS_MCP_NORTH_TOOL_MODE=compound.
+"""Tests for compound mode — QGIS_MCP_WORKFLOWS_TOOL_MODE=compound.
 
 Verifies the 5-tool surface (4 compound + qgis_eval) dispatches to the same
 underlying functions as the 13-tool full-mode surface.
@@ -15,20 +15,20 @@ import pytest
 @pytest.fixture
 def compound_module(monkeypatch):
     """Reimport server + compound modules with TOOL_MODE='compound'."""
-    monkeypatch.setenv("QGIS_MCP_NORTH_TOOL_MODE", "compound")
+    monkeypatch.setenv("QGIS_MCP_WORKFLOWS_TOOL_MODE", "compound")
     # Reset cached server module so the env var is reread.
     for name in list(sys.modules):
-        if name.startswith("qgis_mcp_north.server") or name == "qgis_mcp_north.compound":
+        if name.startswith("qgis_mcp_workflows.server") or name == "qgis_mcp_workflows.compound":
             del sys.modules[name]
-    server_module = importlib.import_module("qgis_mcp_north.server")
-    compound = importlib.import_module("qgis_mcp_north.compound")
+    server_module = importlib.import_module("qgis_mcp_workflows.server")
+    compound = importlib.import_module("qgis_mcp_workflows.compound")
     yield server_module, compound
     # Clean up
     for name in list(sys.modules):
-        if name.startswith("qgis_mcp_north.server") or name == "qgis_mcp_north.compound":
+        if name.startswith("qgis_mcp_workflows.server") or name == "qgis_mcp_workflows.compound":
             del sys.modules[name]
-    monkeypatch.delenv("QGIS_MCP_NORTH_TOOL_MODE", raising=False)
-    importlib.import_module("qgis_mcp_north.server")  # restore full mode for siblings
+    monkeypatch.delenv("QGIS_MCP_WORKFLOWS_TOOL_MODE", raising=False)
+    importlib.import_module("qgis_mcp_workflows.server")  # restore full mode for siblings
 
 
 def test_compound_inspect_layer_dispatches_layer_inspect(compound_module, fake_executor):
@@ -121,15 +121,15 @@ def test_compound_render_map_requires_layer_ids(compound_module, fake_executor):
 
 def test_full_mode_does_not_register_compound_tools(monkeypatch):
     """In TOOL_MODE=full (default), the compound module's tools are NOT registered with FastMCP."""
-    monkeypatch.delenv("QGIS_MCP_NORTH_TOOL_MODE", raising=False)
+    monkeypatch.delenv("QGIS_MCP_WORKFLOWS_TOOL_MODE", raising=False)
     for name in list(sys.modules):
-        if name.startswith("qgis_mcp_north.server") or name == "qgis_mcp_north.compound":
+        if name.startswith("qgis_mcp_workflows.server") or name == "qgis_mcp_workflows.compound":
             del sys.modules[name]
-    server = importlib.import_module("qgis_mcp_north.server")
+    server = importlib.import_module("qgis_mcp_workflows.server")
     assert server.TOOL_MODE == "full"
     # Importing compound in full mode is a no-op for FastMCP registration (decorators no-op).
     # The functions still exist as Python callables, but mcp.tool() wasn't called on them.
-    importlib.import_module("qgis_mcp_north.compound")  # safe to import; doesn't register
+    importlib.import_module("qgis_mcp_workflows.compound")  # safe to import; doesn't register
 
 
 def test_compound_mode_sets_tool_mode_constant(compound_module):

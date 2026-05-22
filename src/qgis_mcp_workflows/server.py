@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""qgis-mcp-north — focused QGIS MCP server for transportation research figures.
+"""qgis-mcp-workflows — focused QGIS MCP server for transportation research figures.
 
 Forked from nkarasiak/qgis-mcp v0.2.1. Cut hard to 12 workflow tools + 1 escape
 hatch (`qgis_eval`). See ``docs/DESIGN.md`` for tool-surface design, response
@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 
 def _setup_logging() -> logging.Logger:
     """stderr (WARNING+) plus optional rotating file handler."""
-    log = logging.getLogger("QgisMcpNorthServer")
+    log = logging.getLogger("QgisMcpWorkflowsServer")
     log.handlers.clear()
 
     fmt = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -42,9 +42,9 @@ def _setup_logging() -> logging.Logger:
     stderr_handler.setFormatter(fmt)
     log.addHandler(stderr_handler)
 
-    default_log_file = os.path.join("~", ".local", "share", "qgis-mcp-north", "server.log")
-    log_file_raw = os.environ.get("QGIS_MCP_NORTH_LOG_FILE", default_log_file)
-    log_level_name = os.environ.get("QGIS_MCP_NORTH_LOG_LEVEL", "INFO").upper()
+    default_log_file = os.path.join("~", ".local", "share", "qgis-mcp-workflows", "server.log")
+    log_file_raw = os.environ.get("QGIS_MCP_WORKFLOWS_LOG_FILE", default_log_file)
+    log_level_name = os.environ.get("QGIS_MCP_WORKFLOWS_LOG_LEVEL", "INFO").upper()
     file_level = getattr(logging, log_level_name, logging.INFO)
 
     if log_file_raw:
@@ -82,7 +82,7 @@ except Exception:  # ImportError or any movingpandas init failure
 # ---------------------------------------------------------------------------
 
 SERVER_INSTRUCTIONS = """\
-qgis-mcp-north — opinionated QGIS MCP for transportation research figure
+qgis-mcp-workflows — opinionated QGIS MCP for transportation research figure
 pipelines (PFLOW, GUFM). Reach for these tools when you need to:
 - Inspect or load a vector/raster layer.
 - Render a choropleth from a zone polygon + value CSV.
@@ -96,7 +96,7 @@ algorithms, layer-tree management, plugin tooling), use the upstream
 nkarasiak/qgis-mcp server side-by-side. Both run together; pick per task.
 """
 
-mcp = FastMCP("qgis-mcp-north", instructions=SERVER_INSTRUCTIONS)
+mcp = FastMCP("qgis-mcp-workflows", instructions=SERVER_INSTRUCTIONS)
 
 
 # ---------------------------------------------------------------------------
@@ -107,9 +107,9 @@ mcp = FastMCP("qgis-mcp-north", instructions=SERVER_INSTRUCTIONS)
 # qgis_export / qgis_eval for token-constrained LLMs (Haiku, small open-weights).
 # ---------------------------------------------------------------------------
 
-TOOL_MODE = os.environ.get("QGIS_MCP_NORTH_TOOL_MODE", "full").lower()
+TOOL_MODE = os.environ.get("QGIS_MCP_WORKFLOWS_TOOL_MODE", "full").lower()
 if TOOL_MODE not in ("full", "compound"):
-    logger.warning("Unknown QGIS_MCP_NORTH_TOOL_MODE=%r; defaulting to 'full'", TOOL_MODE)
+    logger.warning("Unknown QGIS_MCP_WORKFLOWS_TOOL_MODE=%r; defaulting to 'full'", TOOL_MODE)
     TOOL_MODE = "full"
 
 
@@ -140,7 +140,7 @@ def _register_compound_tools_if_enabled() -> None:
     cold-starts. Tests patch TOOL_MODE and reimport for both surfaces.
     """
     if TOOL_MODE == "compound":
-        from qgis_mcp_north import compound  # noqa: F401  — import for side effects
+        from qgis_mcp_workflows import compound  # noqa: F401  — import for side effects
 
 
 # ---------------------------------------------------------------------------
@@ -400,7 +400,7 @@ def qgis_layer_inspect(
     ``qgis_render_choropleth`` (pass ``zones_path=path``),
     ``qgis_render_trajectory`` (pass ``input_path=path``).
     """
-    from qgis_mcp_north.executors import get_executor
+    from qgis_mcp_workflows.executors import get_executor
 
     abs_path = os.path.abspath(path)
     executor = get_executor()
@@ -437,8 +437,8 @@ def qgis_load_layer(
     Chains into: ``qgis_style_categorized``, ``qgis_style_graduated``,
     ``qgis_render_map``.
     """
-    from qgis_mcp_north.errors import CrsMismatchError, ExecutorError
-    from qgis_mcp_north.executors import get_executor
+    from qgis_mcp_workflows.errors import CrsMismatchError, ExecutorError
+    from qgis_mcp_workflows.executors import get_executor
 
     abs_path = os.path.abspath(path)
     executor = get_executor()
@@ -480,8 +480,8 @@ def qgis_project_load(
     Chains into: ``qgis_export_layout``, ``qgis_batch_render``,
     ``qgis_render_map``.
     """
-    from qgis_mcp_north.errors import ExecutorError, ProjectLoadError
-    from qgis_mcp_north.executors import get_executor
+    from qgis_mcp_workflows.errors import ExecutorError, ProjectLoadError
+    from qgis_mcp_workflows.executors import get_executor
 
     abs_qgz = os.path.abspath(qgz_path)
     try:
@@ -531,8 +531,8 @@ def qgis_style_categorized(
     Returns: ``StyleResult`` with the resolved class list and per-class
     feature counts.
     """
-    from qgis_mcp_north.errors import ExecutorError, FieldNotFoundError, LayerNotFoundError
-    from qgis_mcp_north.executors import get_executor
+    from qgis_mcp_workflows.errors import ExecutorError, FieldNotFoundError, LayerNotFoundError
+    from qgis_mcp_workflows.executors import get_executor
 
     params = {
         "layer_id": layer_id,
@@ -582,8 +582,8 @@ def qgis_style_graduated(
     Returns: ``GraduatedStyleResult`` — class list + per-class feature counts +
     the resolved ``breaks`` array + the ``mode`` used.
     """
-    from qgis_mcp_north.errors import ExecutorError, FieldNotFoundError, LayerNotFoundError
-    from qgis_mcp_north.executors import get_executor
+    from qgis_mcp_workflows.errors import ExecutorError, FieldNotFoundError, LayerNotFoundError
+    from qgis_mcp_workflows.executors import get_executor
 
     params = {
         "layer_id": layer_id,
@@ -646,7 +646,7 @@ def qgis_render_map(
 
     Chains into: ``qgis_figures_to_pptx``, ``qgis_batch_render``.
     """
-    from qgis_mcp_north.executors import get_executor
+    from qgis_mcp_workflows.executors import get_executor
 
     abs_output = os.path.abspath(output_png)
     params: dict = {
@@ -716,8 +716,8 @@ def qgis_render_choropleth(
     """
     import csv as _csv
 
-    from qgis_mcp_north.errors import ExecutorError, FieldNotFoundError, JoinError
-    from qgis_mcp_north.executors import get_executor
+    from qgis_mcp_workflows.errors import ExecutorError, FieldNotFoundError, JoinError
+    from qgis_mcp_workflows.executors import get_executor
 
     abs_zones = os.path.abspath(zones_path)
     abs_output = os.path.abspath(output_png)
@@ -835,8 +835,8 @@ def qgis_render_trajectory(
     """
     import csv as _csv
 
-    from qgis_mcp_north.errors import EmptyAfterFilterError, FieldNotFoundError
-    from qgis_mcp_north.executors import get_executor
+    from qgis_mcp_workflows.errors import EmptyAfterFilterError, FieldNotFoundError
+    from qgis_mcp_workflows.executors import get_executor
 
     abs_input = os.path.abspath(input_path)
     abs_output = os.path.abspath(output_png)
@@ -1076,8 +1076,8 @@ def qgis_render_od_flows(
     """
     import csv as _csv
 
-    from qgis_mcp_north.errors import FieldNotFoundError
-    from qgis_mcp_north.executors import get_executor
+    from qgis_mcp_workflows.errors import FieldNotFoundError
+    from qgis_mcp_workflows.executors import get_executor
 
     abs_od = os.path.abspath(od_csv)
     abs_zones = os.path.abspath(zones_layer_path)
@@ -1162,8 +1162,8 @@ def qgis_export_layout(
 
     Chains into: ``qgis_figures_to_pptx``, ``qgis_batch_render``.
     """
-    from qgis_mcp_north.errors import ExecutorError, LayoutNotFoundError
-    from qgis_mcp_north.executors import get_executor
+    from qgis_mcp_workflows.errors import ExecutorError, LayoutNotFoundError
+    from qgis_mcp_workflows.executors import get_executor
 
     abs_qgz = os.path.abspath(qgz_path)
     abs_output = os.path.abspath(output_path)
@@ -1224,8 +1224,8 @@ def qgis_batch_render(
 
     Chains into: ``qgis_figures_to_pptx``.
     """
-    from qgis_mcp_north.errors import ExecutorError, FieldNotFoundError
-    from qgis_mcp_north.executors import get_executor
+    from qgis_mcp_workflows.errors import ExecutorError, FieldNotFoundError
+    from qgis_mcp_workflows.executors import get_executor
 
     abs_template = os.path.abspath(template_qgz)
     abs_output_dir = os.path.abspath(output_dir)
@@ -1374,7 +1374,7 @@ def qgis_eval(
     Returns: ``EvalResult`` with stdout, stderr, captured ``return_values``
     (if ``return_vars`` was given), and exception traceback (if any).
     """
-    from qgis_mcp_north.executors import get_executor
+    from qgis_mcp_workflows.executors import get_executor
 
     params: dict = {"code": code}
     if return_vars is not None:
@@ -1422,22 +1422,22 @@ def _build_executor(transport: str):
     is not reachable. Errors from headless construction propagate so the user
     sees a single clear ``HeadlessUnavailableError`` rather than a silent fall.
     """
-    from qgis_mcp_north.executors.plugin import PluginExecutor
-    from qgis_mcp_north.helpers import DEFAULT_HOST, DEFAULT_PORT
+    from qgis_mcp_workflows.executors.plugin import PluginExecutor
+    from qgis_mcp_workflows.helpers import DEFAULT_HOST, DEFAULT_PORT
 
-    host = os.environ.get("QGIS_MCP_NORTH_HOST", DEFAULT_HOST)
-    port = int(os.environ.get("QGIS_MCP_NORTH_PORT", str(DEFAULT_PORT)))
+    host = os.environ.get("QGIS_MCP_WORKFLOWS_HOST", DEFAULT_HOST)
+    port = int(os.environ.get("QGIS_MCP_WORKFLOWS_PORT", str(DEFAULT_PORT)))
 
     if transport == "plugin":
         return PluginExecutor(host=host, port=port), "plugin"
     if transport == "headless":
-        from qgis_mcp_north.executors.headless import HeadlessExecutor
+        from qgis_mcp_workflows.executors.headless import HeadlessExecutor
 
         return HeadlessExecutor(), "headless"
     if transport == "auto":
         if _plugin_reachable(host, port):
             return PluginExecutor(host=host, port=port), "plugin"
-        from qgis_mcp_north.executors.headless import HeadlessExecutor
+        from qgis_mcp_workflows.executors.headless import HeadlessExecutor
 
         return HeadlessExecutor(), "headless"
     raise ValueError(f"Unknown transport: {transport!r}. Use plugin / headless / auto.")
@@ -1452,22 +1452,22 @@ def main() -> None:
     """Run the MCP server. CLI flag ``--transport`` overrides the env default."""
     import argparse
 
-    parser = argparse.ArgumentParser(prog="qgis-mcp-north-server")
+    parser = argparse.ArgumentParser(prog="qgis-mcp-workflows-server")
     parser.add_argument(
         "--transport",
         choices=("plugin", "headless", "auto"),
-        default=os.environ.get("QGIS_MCP_NORTH_TRANSPORT", "auto"),
+        default=os.environ.get("QGIS_MCP_WORKFLOWS_TRANSPORT", "auto"),
         help="QGIS backend: plugin (TCP socket to running QGIS Desktop), "
         "headless (PyQGIS subprocess), auto (probe plugin port, fall back to "
-        "headless). Default: auto. Env: QGIS_MCP_NORTH_TRANSPORT.",
+        "headless). Default: auto. Env: QGIS_MCP_WORKFLOWS_TRANSPORT.",
     )
     args = parser.parse_args()
 
-    from qgis_mcp_north.executors import set_executor
+    from qgis_mcp_workflows.executors import set_executor
 
     executor, chosen = _build_executor(args.transport)
     set_executor(executor)
-    logger.info("qgis-mcp-north server starting (v1.0.0, transport=%s)", chosen)
+    logger.info("qgis-mcp-workflows server starting (v1.1.0, transport=%s)", chosen)
     mcp.run()
 
 

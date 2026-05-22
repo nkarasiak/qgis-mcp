@@ -1,4 +1,4 @@
-"""End-to-end W17 deck demo — qgis-mcp-north v1.0 acceptance gate.
+"""End-to-end W17 deck demo — qgis-mcp-workflows v1.0 acceptance gate.
 
 Demonstrates the full figure pipeline using ONLY synthetic fixtures from
 tests/fixtures/, end-to-end through whichever transport is active. Output is
@@ -10,12 +10,12 @@ Run:
     uv run --no-sync scripts/demo_w17.py
 
     # Headless transport
-    $env:QGIS_MCP_NORTH_TRANSPORT='headless'
-    $env:QGIS_MCP_NORTH_QGIS_LAUNCHER='M:\\QGIS LTR\\bin\\python-qgis-ltr.bat'
+    $env:QGIS_MCP_WORKFLOWS_TRANSPORT='headless'
+    $env:QGIS_MCP_WORKFLOWS_QGIS_LAUNCHER='M:\\QGIS LTR\\bin\\python-qgis-ltr.bat'
     uv run --no-sync scripts/demo_w17.py
 
     # Compound-mode test (same output, exercised through the 5-tool surface)
-    $env:QGIS_MCP_NORTH_TOOL_MODE='compound'
+    $env:QGIS_MCP_WORKFLOWS_TOOL_MODE='compound'
     uv run --no-sync scripts/demo_w17.py
 
 Exit code 0 on success; non-zero if any step fails or output is missing.
@@ -45,18 +45,18 @@ def _build_synthetic_value_csv(target: Path) -> Path:
 
 
 def _set_executor_from_env():
-    """Plumb in the right executor based on QGIS_MCP_NORTH_TRANSPORT env var."""
-    from qgis_mcp_north import executors
-    from qgis_mcp_north.helpers import DEFAULT_HOST, DEFAULT_PORT
+    """Plumb in the right executor based on QGIS_MCP_WORKFLOWS_TRANSPORT env var."""
+    from qgis_mcp_workflows import executors
+    from qgis_mcp_workflows.helpers import DEFAULT_HOST, DEFAULT_PORT
 
-    transport = os.environ.get("QGIS_MCP_NORTH_TRANSPORT", "auto").lower()
-    host = os.environ.get("QGIS_MCP_NORTH_HOST", DEFAULT_HOST)
-    port = int(os.environ.get("QGIS_MCP_NORTH_PORT", str(DEFAULT_PORT)))
+    transport = os.environ.get("QGIS_MCP_WORKFLOWS_TRANSPORT", "auto").lower()
+    host = os.environ.get("QGIS_MCP_WORKFLOWS_HOST", DEFAULT_HOST)
+    port = int(os.environ.get("QGIS_MCP_WORKFLOWS_PORT", str(DEFAULT_PORT)))
 
     if transport in ("plugin", "auto"):
         import socket
 
-        from qgis_mcp_north.executors.plugin import PluginExecutor
+        from qgis_mcp_workflows.executors.plugin import PluginExecutor
 
         try:
             with socket.create_connection((host, port), timeout=0.5):
@@ -66,7 +66,7 @@ def _set_executor_from_env():
             if transport == "plugin":
                 raise
 
-    from qgis_mcp_north.executors.headless import HeadlessExecutor
+    from qgis_mcp_workflows.executors.headless import HeadlessExecutor
     executors.set_executor(HeadlessExecutor())
     return "headless"
 
@@ -84,7 +84,7 @@ def run_demo(output_dir: Path) -> Path:
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    from qgis_mcp_north.server import (
+    from qgis_mcp_workflows.server import (
         qgis_figures_to_pptx,
         qgis_layer_inspect,
         qgis_render_choropleth,
@@ -156,7 +156,7 @@ def run_demo(output_dir: Path) -> Path:
 
 
 def main() -> int:
-    print("qgis-mcp-north v1.0 — W17 deck demo")
+    print("qgis-mcp-workflows v1.0 — W17 deck demo")
     print("=" * 60)
 
     try:
@@ -165,7 +165,7 @@ def main() -> int:
         print(f"FAIL: transport setup: {e}", file=sys.stderr)
         return 1
 
-    tool_mode = os.environ.get("QGIS_MCP_NORTH_TOOL_MODE", "full")
+    tool_mode = os.environ.get("QGIS_MCP_WORKFLOWS_TOOL_MODE", "full")
     print(f"Transport: {transport}  |  Tool mode: {tool_mode}")
     print()
 

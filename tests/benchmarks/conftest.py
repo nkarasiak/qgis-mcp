@@ -24,8 +24,8 @@ SCALED_ZONES_134 = FIXTURE_DIR / "scaled_zones_134.geojson"
 
 
 requires_headless = pytest.mark.skipif(
-    not os.environ.get("QGIS_MCP_NORTH_QGIS_LAUNCHER"),
-    reason="Set QGIS_MCP_NORTH_QGIS_LAUNCHER to a python-qgis(-ltr).bat to run headless benchmarks.",
+    not os.environ.get("QGIS_MCP_WORKFLOWS_QGIS_LAUNCHER"),
+    reason="Set QGIS_MCP_WORKFLOWS_QGIS_LAUNCHER to a python-qgis(-ltr).bat to run headless benchmarks.",
 )
 
 

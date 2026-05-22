@@ -19,7 +19,7 @@ from tests.conftest import requires_plugin
 @requires_headless
 def test_headless_cold_start(benchmark):
     """Spawn HeadlessExecutor, dispatch ping, shutdown — wall time of one full cycle."""
-    from qgis_mcp_north.executors.headless import HeadlessExecutor
+    from qgis_mcp_workflows.executors.headless import HeadlessExecutor
 
     def cycle():
         ex = HeadlessExecutor()
@@ -33,8 +33,8 @@ def test_headless_cold_start(benchmark):
 @requires_plugin
 def test_plugin_ping(benchmark):
     """Plugin transport: socket connect + ping. No spawn cost (QGIS already running)."""
-    from qgis_mcp_north.executors.plugin import PluginExecutor
-    from qgis_mcp_north.helpers import DEFAULT_HOST, DEFAULT_PORT
+    from qgis_mcp_workflows.executors.plugin import PluginExecutor
+    from qgis_mcp_workflows.helpers import DEFAULT_HOST, DEFAULT_PORT
 
     def cycle():
         ex = PluginExecutor(host=DEFAULT_HOST, port=DEFAULT_PORT)

@@ -18,7 +18,7 @@ def _make_png(path: Path, color=(180, 60, 60), size=(120, 90)) -> Path:
 
 # T1 — minimal create
 def test_creates_pptx_with_one_slide_per_image(tmp_path: Path):
-    from qgis_mcp_north.server import qgis_figures_to_pptx
+    from qgis_mcp_workflows.server import qgis_figures_to_pptx
 
     img = _make_png(tmp_path / "fig1.png")
     out = tmp_path / "out.pptx"
@@ -35,7 +35,7 @@ def test_creates_pptx_with_one_slide_per_image(tmp_path: Path):
 def test_title_and_image_uses_caption_as_title(tmp_path: Path):
     from pptx import Presentation
 
-    from qgis_mcp_north.server import qgis_figures_to_pptx
+    from qgis_mcp_workflows.server import qgis_figures_to_pptx
 
     img = _make_png(tmp_path / "fig.png")
     out = tmp_path / "out.pptx"
@@ -56,7 +56,7 @@ def test_title_and_image_uses_caption_as_title(tmp_path: Path):
 
 # T3 — captions length must match figure_paths length
 def test_captions_wrong_length_raises_value_error(tmp_path: Path):
-    from qgis_mcp_north.server import qgis_figures_to_pptx
+    from qgis_mcp_workflows.server import qgis_figures_to_pptx
 
     img1 = _make_png(tmp_path / "f1.png")
     img2 = _make_png(tmp_path / "f2.png")
@@ -74,7 +74,7 @@ def test_captions_wrong_length_raises_value_error(tmp_path: Path):
 def test_template_pptx_appends_slides(tmp_path: Path):
     from pptx import Presentation
 
-    from qgis_mcp_north.server import qgis_figures_to_pptx
+    from qgis_mcp_workflows.server import qgis_figures_to_pptx
 
     template = tmp_path / "tpl.pptx"
     seed = Presentation()
@@ -97,7 +97,7 @@ def test_template_pptx_appends_slides(tmp_path: Path):
 
 # T5 — missing figure_path raises actionable FileNotFoundError before pptx logic
 def test_missing_figure_path_raises_file_not_found(tmp_path: Path):
-    from qgis_mcp_north.server import qgis_figures_to_pptx
+    from qgis_mcp_workflows.server import qgis_figures_to_pptx
 
     out = tmp_path / "out.pptx"
     with pytest.raises(FileNotFoundError, match=r"does_not_exist\.png"):

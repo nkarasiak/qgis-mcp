@@ -77,7 +77,7 @@ def test_install_plugin_replaces_stale_symlink(install_mod, tmp_path):
     """If a non-matching link/dir exists at the target, it gets replaced."""
     target_dir = install_mod.qgis_plugins_dir("default")
     target_dir.mkdir(parents=True, exist_ok=True)
-    stale_target = target_dir / "qgis_mcp_north_plugin"
+    stale_target = target_dir / "qgis_mcp_workflows_plugin"
     other_src = tmp_path / "stale_source"
     other_src.mkdir()
     # Create a non-matching symlink (or plain dir if symlink fails on Windows)
@@ -88,7 +88,7 @@ def test_install_plugin_replaces_stale_symlink(install_mod, tmp_path):
 
     install_mod.install_plugin("default")
     # After install, the target should exist and point at the real PLUGIN_SRC.
-    final = target_dir / "qgis_mcp_north_plugin"
+    final = target_dir / "qgis_mcp_workflows_plugin"
     assert final.exists()
     if final.is_symlink():
         assert final.resolve() == install_mod.PLUGIN_SRC.resolve()
@@ -96,7 +96,7 @@ def test_install_plugin_replaces_stale_symlink(install_mod, tmp_path):
 
 def test_uninstall_plugin_removes_symlink(install_mod):
     install_mod.install_plugin("default")
-    target = install_mod.qgis_plugins_dir("default") / "qgis_mcp_north_plugin"
+    target = install_mod.qgis_plugins_dir("default") / "qgis_mcp_workflows_plugin"
     assert target.exists()
     install_mod.uninstall_plugin("default")
     assert not target.exists()
@@ -116,7 +116,7 @@ def test_configure_client_writes_mcpservers_block(install_mod):
     cfg_path = install_mod._client_registry()["claude-desktop"]["path"]
     data = json.loads(Path(cfg_path).read_text(encoding="utf-8"))
     assert "mcpServers" in data
-    assert "qgis-north" in data["mcpServers"]
+    assert "qgis-workflows" in data["mcpServers"]
 
 
 def test_configure_client_preserves_existing_keys(install_mod):
@@ -130,7 +130,7 @@ def test_configure_client_preserves_existing_keys(install_mod):
     install_mod.configure_client("claude-desktop", remote=False)
     data = json.loads(cfg_path.read_text(encoding="utf-8"))
     assert "existing-server" in data["mcpServers"]
-    assert "qgis-north" in data["mcpServers"]
+    assert "qgis-workflows" in data["mcpServers"]
     assert data["other_key"] == 42
 
 
@@ -148,7 +148,7 @@ def test_configure_client_remote_uses_uvx(install_mod):
     install_mod.configure_client("claude-desktop", remote=True)
     cfg_path = install_mod._client_registry()["claude-desktop"]["path"]
     data = json.loads(Path(cfg_path).read_text(encoding="utf-8"))
-    entry = data["mcpServers"]["qgis-north"]
+    entry = data["mcpServers"]["qgis-workflows"]
     assert entry["command"] == "uvx"
 
 

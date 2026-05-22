@@ -14,7 +14,7 @@ from mcp.types import Annotations, ImageContent, ResourceLink, TextContent
 # ---------------------------------------------------------------------------
 
 DEFAULT_HOST = "localhost"
-DEFAULT_PORT = 9877  # qgis-mcp-north uses 9877 (vs upstream nkarasiak on 9876)
+DEFAULT_PORT = 9877  # qgis-mcp-workflows uses 9877 (vs upstream nkarasiak on 9876)
 TIMEOUT_DEFAULT = 30  # seconds — most tool commands
 TIMEOUT_LONG = 60  # seconds — execute_processing, render_map, execute_code, batch
 RECV_CHUNK_SIZE = 65536  # bytes per recv/recv_into call
@@ -35,7 +35,7 @@ BATCH_BLOCKED_COMMANDS = frozenset(
 def enrich_diagnose(result: dict) -> dict:
     """Append server/plugin version-match check to a diagnose result."""
     try:
-        server_version = importlib.metadata.version("qgis-mcp")
+        server_version = importlib.metadata.version("qgis-mcp-workflows")
     except importlib.metadata.PackageNotFoundError:
         server_version = "unknown (editable install?)"
 

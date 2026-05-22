@@ -1,7 +1,7 @@
 """Live integration tests for HeadlessExecutor.
 
 Skipped unless a working QGIS Python launcher is reachable. Set
-``QGIS_MCP_NORTH_QGIS_LAUNCHER=...`` to override the auto-detection (default
+``QGIS_MCP_WORKFLOWS_QGIS_LAUNCHER=...`` to override the auto-detection (default
 on Windows is ``M:\\QGIS LTR\\bin\\python-qgis-ltr.bat``).
 
 These tests spawn a real PyQGIS subprocess each, so they're slow (~5-10s of
@@ -16,8 +16,8 @@ import tempfile
 
 import pytest
 
-from qgis_mcp_north.errors import HeadlessUnavailableError
-from qgis_mcp_north.executors.headless import HeadlessExecutor
+from qgis_mcp_workflows.errors import HeadlessUnavailableError
+from qgis_mcp_workflows.executors.headless import HeadlessExecutor
 
 
 def _launcher_resolvable() -> bool:
@@ -31,7 +31,7 @@ def _launcher_resolvable() -> bool:
 requires_qgis_python = pytest.mark.skipif(
     not _launcher_resolvable(),
     reason=(
-        "QGIS Python launcher not found — set QGIS_MCP_NORTH_QGIS_LAUNCHER, install OSGeo4W, "
+        "QGIS Python launcher not found — set QGIS_MCP_WORKFLOWS_QGIS_LAUNCHER, install OSGeo4W, "
         "or skip these tests."
     ),
 )

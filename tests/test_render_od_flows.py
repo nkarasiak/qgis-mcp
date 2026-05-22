@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from qgis_mcp_north.errors import FieldNotFoundError
-from qgis_mcp_north.server import qgis_render_od_flows
+from qgis_mcp_workflows.errors import FieldNotFoundError
+from qgis_mcp_workflows.server import qgis_render_od_flows
 
 
 def _ok_response(**overrides) -> dict:

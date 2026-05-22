@@ -38,13 +38,13 @@ _HEADER = struct.Struct(">I")
 
 
 def _put_repo_root_on_path() -> None:
-    """Make ``qgis_mcp_north_plugin`` importable from this subprocess.
+    """Make ``qgis_mcp_workflows_plugin`` importable from this subprocess.
 
-    The runner lives at ``src/qgis_mcp_north/executors/headless_runner.py``;
-    the repo root (which contains ``qgis_mcp_north_plugin/``) is four levels
-    above. Override via ``QGIS_MCP_NORTH_REPO_ROOT`` for non-default installs.
+    The runner lives at ``src/qgis_mcp_workflows/executors/headless_runner.py``;
+    the repo root (which contains ``qgis_mcp_workflows_plugin/``) is four levels
+    above. Override via ``QGIS_MCP_WORKFLOWS_REPO_ROOT`` for non-default installs.
     """
-    override = os.environ.get("QGIS_MCP_NORTH_REPO_ROOT")
+    override = os.environ.get("QGIS_MCP_WORKFLOWS_REPO_ROOT")
     if override:
         sys.path.insert(0, override)
         return
@@ -146,7 +146,7 @@ def main() -> int:
     qgs.initQgis()
 
     try:
-        from qgis_mcp_north_plugin.plugin import QgisMCPServer
+        from qgis_mcp_workflows_plugin.plugin import QgisMCPServer
     except Exception as exc:
         # The launcher set us up, but the plugin can't import. Tell the parent
         # so it surfaces a useful error.

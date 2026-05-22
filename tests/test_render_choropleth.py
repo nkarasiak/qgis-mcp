@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from qgis_mcp_north.errors import ExecutorError, FieldNotFoundError, JoinError
-from qgis_mcp_north.server import qgis_render_choropleth
+from qgis_mcp_workflows.errors import ExecutorError, FieldNotFoundError, JoinError
+from qgis_mcp_workflows.server import qgis_render_choropleth
 
 
 def _ok_response() -> dict:

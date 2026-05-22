@@ -3,6 +3,33 @@
 All notable changes to qgis-mcp-north are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## v1.1.0 — 2026-05-22 — Rename to qgis-mcp-workflows
+
+Pure rename release. The package, plugin, console script, env vars, and MCP-client config key all change to make the fork's positioning ("workflow tools, not 51 PyQGIS primitives") the literal name. No behavior changes; 99-test suite green before and after.
+
+Renames:
+- Package: `qgis-mcp-north` → `qgis-mcp-workflows`
+- Plugin folder: `qgis_mcp_north_plugin/` → `qgis_mcp_workflows_plugin/`
+- Console script: `qgis-mcp-north-server` → `qgis-mcp-workflows-server`
+- Python package: `qgis_mcp_north` → `qgis_mcp_workflows`
+- Env vars: `QGIS_MCP_NORTH_*` → `QGIS_MCP_WORKFLOWS_*` (HOST, PORT, TRANSPORT, TOOL_MODE, QGIS_LAUNCHER, REPO_ROOT, LOG_FILE, LOG_LEVEL)
+- MCP-client config key in installer: `qgis-north` → `qgis-workflows`
+- Error base class: `QgisMcpNorthError` → `QgisMcpWorkflowsError`
+- Logger: `QgisMcpNorthServer` → `QgisMcpWorkflowsServer`
+- Plugin LOG_TAG: `MCP-NORTH` → `MCP-WORKFLOWS`
+
+Unchanged:
+- Socket port `9877` (still distinct from upstream's 9876)
+- Co-existence guarantee with upstream `nkarasiak/qgis-mcp`
+- Plugin class name `QgisMCPServer` (internal; inherited from upstream)
+- Tool names (`qgis_layer_inspect`, `qgis_render_choropleth`, etc.)
+- Tool response shapes, error message format, escape-hatch behavior
+- Historical completion-report docs (`docs/v0.3-*`, `docs/v0.4-*`, `docs/v0.5-*`, `docs/v1.0-*`) — frozen snapshots
+
+Migration: see [README §v1.1.0 rename migration](README.md#v110-rename-migration).
+
+Latent-bug fix folded in: `src/qgis_mcp_workflows/helpers.py:38`'s `importlib.metadata.version("qgis-mcp")` (looked up upstream's package name) is now `version("qgis-mcp-workflows")` — pre-existing diagnose mismatch.
+
 ## [1.0.0] — 2026-05-14
 
 ### Added

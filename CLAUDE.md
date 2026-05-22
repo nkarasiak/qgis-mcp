@@ -4,19 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`qgis-mcp-north` (v1.0.0) is a focused fork of `nkarasiak/qgis-mcp` for transportation-research figure pipelines (PFLOW, GUFM). It exposes QGIS to Claude over MCP via **two transports**: a TCP-socket plugin running in QGIS Desktop, and a long-lived PyQGIS subprocess (headless mode) for cron / CI / unattended renders. The fork rationale, full tool surface, response shapes, error model, and roadmap live in [`docs/DESIGN.md`](docs/DESIGN.md) — that document is the spec; if code disagrees with it, update the doc first.
+`qgis-mcp-workflows` (v1.1.0) is a focused fork of `nkarasiak/qgis-mcp` for transportation-research figure pipelines (PFLOW, GUFM). Renamed from `qgis-mcp-north` in v1.1.0 to put the fork's positioning (workflow tools, not 51 PyQGIS primitives) in the name. It exposes QGIS to Claude over MCP via **two transports**: a TCP-socket plugin running in QGIS Desktop, and a long-lived PyQGIS subprocess (headless mode) for cron / CI / unattended renders. The fork rationale, full tool surface, response shapes, error model, and roadmap live in [`docs/DESIGN.md`](docs/DESIGN.md) — that document is the spec; if code disagrees with it, update the doc first.
 
 Key differences from upstream:
 - 12 workflow tools + 1 escape hatch (`qgis_eval`), not 51 PyQGIS-mirroring tools.
 - Two transports: `plugin` (TCP socket → running QGIS) and `headless` (PyQGIS subprocess), selected via `--transport=auto|plugin|headless`.
-- Plugin folder: `qgis_mcp_north_plugin/`. Python package: `qgis_mcp_north`. Default socket port: **9877** (vs upstream 9876). Both servers can run side-by-side.
+- Plugin folder: `qgis_mcp_workflows_plugin/`. Python package: `qgis-mcp-workflows` (importable as `qgis_mcp_workflows`). Default socket port: **9877** (vs upstream 9876). Both servers can run side-by-side.
 
 ## Architecture
 
 ```
 ┌───────────────────────────────────────┐
 │        MCP Server (FastMCP)           │
-│   src/qgis_mcp_north/server.py        │
+│   src/qgis_mcp_workflows/server.py        │
 └───────────────┬───────────────────────┘
                 │
    transport=plugin           transport=headless
@@ -35,27 +35,27 @@ Key differences from upstream:
                     PyQGIS API
 ```
 
-Both transports execute the **same** `QgisMCPServer.execute_command` from `qgis_mcp_north_plugin/plugin.py`. The headless runner instantiates the class with a stub `iface` (`_StubIface`) that no-ops UI calls and raises loudly for genuine Desktop-only operations. This keeps plugin and headless on one codebase — every command handler that doesn't touch `self.iface` works in both transports for free.
+Both transports execute the **same** `QgisMCPServer.execute_command` from `qgis_mcp_workflows_plugin/plugin.py`. The headless runner instantiates the class with a stub `iface` (`_StubIface`) that no-ops UI calls and raises loudly for genuine Desktop-only operations. This keeps plugin and headless on one codebase — every command handler that doesn't touch `self.iface` works in both transports for free.
 
-**Tools never speak transport directly.** They call `executors.get_executor().dispatch(command, params)`. The `Executor` Protocol is in `src/qgis_mcp_north/executors/__init__.py`; concrete implementations are `executors/plugin.py` and `executors/headless.py`. Tests inject a `FakeExecutor` via `executors.set_executor()`.
+**Tools never speak transport directly.** They call `executors.get_executor().dispatch(command, params)`. The `Executor` Protocol is in `src/qgis_mcp_workflows/executors/__init__.py`; concrete implementations are `executors/plugin.py` and `executors/headless.py`. Tests inject a `FakeExecutor` via `executors.set_executor()`.
 
-**Wire protocol.** Length-prefixed JSON. 4-byte big-endian uint32 length header + JSON payload. Both TCP (plugin) and stdin/stdout (headless) use the same framing — `qgis_mcp_north.helpers.HEADER_STRUCT`.
+**Wire protocol.** Length-prefixed JSON. 4-byte big-endian uint32 length header + JSON payload. Both TCP (plugin) and stdin/stdout (headless) use the same framing — `qgis_mcp_workflows.helpers.HEADER_STRUCT`.
 
 ## Commands
 
 ```bash
 # Run the MCP server with auto-detected transport (probes :9877, falls back to headless)
-uv run --no-sync qgis-mcp-north-server
+uv run --no-sync qgis-mcp-workflows-server
 
 # Force a specific transport
-uv run --no-sync qgis-mcp-north-server --transport=plugin
-uv run --no-sync qgis-mcp-north-server --transport=headless
+uv run --no-sync qgis-mcp-workflows-server --transport=plugin
+uv run --no-sync qgis-mcp-workflows-server --transport=headless
 
 # Or via env (CLI takes precedence)
-QGIS_MCP_NORTH_TRANSPORT=headless uv run --no-sync qgis-mcp-north-server
+QGIS_MCP_WORKFLOWS_TRANSPORT=headless uv run --no-sync qgis-mcp-workflows-server
 
 # Override the QGIS Python launcher (default: auto-detect from common Windows / OSGeo4W locations)
-QGIS_MCP_NORTH_QGIS_LAUNCHER='M:\QGIS LTR\bin\python-qgis-ltr.bat' uv run --no-sync qgis-mcp-north-server --transport=headless
+QGIS_MCP_WORKFLOWS_QGIS_LAUNCHER='M:\QGIS LTR\bin\python-qgis-ltr.bat' uv run --no-sync qgis-mcp-workflows-server --transport=headless
 
 # Run the multi-client installer (plugin symlink + MCP client config)
 python install.py
@@ -71,13 +71,13 @@ uv tool run ruff check src/ tests/
 
 | Variable | Default | Description |
 |---|---|---|
-| `QGIS_MCP_NORTH_HOST` | `localhost` | Plugin transport: host of the QGIS plugin socket |
-| `QGIS_MCP_NORTH_PORT` | `9877` | Plugin transport: port of the QGIS plugin socket |
-| `QGIS_MCP_NORTH_TRANSPORT` | `auto` | `auto` / `plugin` / `headless`. CLI `--transport` overrides |
-| `QGIS_MCP_NORTH_QGIS_LAUNCHER` | (auto-detected) | Headless transport: full path to `python-qgis(-ltr).bat` (Windows) or PyQGIS Python (Linux/macOS) |
-| `QGIS_MCP_NORTH_REPO_ROOT` | (auto-derived) | Headless transport: repo root the runner adds to `sys.path` so it can import `qgis_mcp_north_plugin` |
-| `QGIS_MCP_NORTH_LOG_FILE` | `~/.local/share/qgis-mcp-north/server.log` | Rotating log file (5MB × 3) — empty disables file logging |
-| `QGIS_MCP_NORTH_LOG_LEVEL` | `INFO` | File log level. Console (stderr) is always WARNING+ |
+| `QGIS_MCP_WORKFLOWS_HOST` | `localhost` | Plugin transport: host of the QGIS plugin socket |
+| `QGIS_MCP_WORKFLOWS_PORT` | `9877` | Plugin transport: port of the QGIS plugin socket |
+| `QGIS_MCP_WORKFLOWS_TRANSPORT` | `auto` | `auto` / `plugin` / `headless`. CLI `--transport` overrides |
+| `QGIS_MCP_WORKFLOWS_QGIS_LAUNCHER` | (auto-detected) | Headless transport: full path to `python-qgis(-ltr).bat` (Windows) or PyQGIS Python (Linux/macOS) |
+| `QGIS_MCP_WORKFLOWS_REPO_ROOT` | (auto-derived) | Headless transport: repo root the runner adds to `sys.path` so it can import `qgis_mcp_workflows_plugin` |
+| `QGIS_MCP_WORKFLOWS_LOG_FILE` | `~/.local/share/qgis-mcp-workflows/server.log` | Rotating log file (5MB × 3) — empty disables file logging |
+| `QGIS_MCP_WORKFLOWS_LOG_LEVEL` | `INFO` | File log level. Console (stderr) is always WARNING+ |
 
 ## MCP Tools (13 total, all shipped as of v1.0; 5 grouped tools in compound mode. See `docs/DESIGN.md` §4 for full signatures.)
 
@@ -103,7 +103,7 @@ uv tool run ruff check src/ tests/
 - **Main deps**: `mcp[cli]>=1.20.0`, `pydantic>=2.7`. Optional: `python-pptx` (`pptx` extra), `movingpandas` (`trajectory` extra).
 - **Tools are sync `def`** (not async — the v0.4 dispatch path is synchronous; FastMCP supports both).
 - **All response paths return `output_path` (absolute)**. No tool returns base64. No tool returns relative paths.
-- **Errors must be actionable.** Every typed exception in `src/qgis_mcp_north/errors.py` ends with `Next: <suggested tool call>`. Add new error classes when a recovery hint changes.
+- **Errors must be actionable.** Every typed exception in `src/qgis_mcp_workflows/errors.py` ends with `Next: <suggested tool call>`. Add new error classes when a recovery hint changes.
 - **Headless caveats**: handlers that genuinely need `iface` (canvas extent/refresh, layer-tree-view manipulation, message bar) raise loudly from the stub; switch to plugin transport for those. The v0.3 + v0.5 workflow tools shouldn't hit any of them.
 - **Subprocess lifecycle**: `HeadlessExecutor` lazy-spawns on first dispatch, holds the process open across the MCP session, sends `{"type": "shutdown"}` on `__del__`. `initQgis` costs ~1-2s per spawn — never restart it per call.
 
@@ -111,13 +111,13 @@ uv tool run ruff check src/ tests/
 
 Two version files must stay in sync:
 - `pyproject.toml` → `version = "X.Y.Z"` (MCP server / package)
-- `qgis_mcp_north_plugin/metadata.txt` → `version=X.Y.Z` (QGIS plugin repository)
+- `qgis_mcp_workflows_plugin/metadata.txt` → `version=X.Y.Z` (QGIS plugin repository)
 
 The QGIS plugin repository rejects re-uploads at the same version, so always bump both together.
 
 ## Plugin Installation
 
-`python install.py` symlinks `qgis_mcp_north_plugin/` into the active QGIS profile and configures MCP clients. After QGIS restart, enable via the Plugins menu.
+`python install.py` symlinks `qgis_mcp_workflows_plugin/` into the active QGIS profile and configures MCP clients. After QGIS restart, enable via the Plugins menu.
 
 ## Co-existence with upstream `nkarasiak/qgis-mcp`
 

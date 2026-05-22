@@ -6,8 +6,8 @@ import os
 
 import pytest
 
-from qgis_mcp_north.errors import ExecutorError, FieldNotFoundError
-from qgis_mcp_north.server import qgis_batch_render
+from qgis_mcp_workflows.errors import ExecutorError, FieldNotFoundError
+from qgis_mcp_workflows.server import qgis_batch_render
 
 
 def _ok_response(**overrides) -> dict:

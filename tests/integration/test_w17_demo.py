@@ -5,7 +5,7 @@ Three execution modes:
   tool-chain wiring without QGIS. Always runs.
 - **plugin**: requires a running QGIS Desktop with the plugin enabled. Skipped
   in CI / when port 9877 is closed.
-- **headless**: requires QGIS_MCP_NORTH_QGIS_LAUNCHER (or PyQGIS on PATH). Skipped
+- **headless**: requires QGIS_MCP_WORKFLOWS_QGIS_LAUNCHER (or PyQGIS on PATH). Skipped
   when launcher isn't available.
 
 The v1.0 release ships only when at least one of the plugin/headless modes
@@ -86,7 +86,7 @@ def _scripted_responses() -> dict:
 
 def test_w17_demo_fake_mode(tmp_path, monkeypatch):
     """Smoke test: dispatch chain works with all responses scripted; verifies tool wiring."""
-    from qgis_mcp_north import executors
+    from qgis_mcp_workflows import executors
     from tests.conftest import FakeExecutor
 
     fake = FakeExecutor()
@@ -150,9 +150,9 @@ def test_w17_demo_fake_mode(tmp_path, monkeypatch):
 @requires_plugin
 def test_w17_demo_plugin_mode(tmp_path):
     """Live demo via QGIS plugin transport. Skipped unless port 9877 is open."""
-    from qgis_mcp_north import executors
-    from qgis_mcp_north.executors.plugin import PluginExecutor
-    from qgis_mcp_north.helpers import DEFAULT_HOST, DEFAULT_PORT
+    from qgis_mcp_workflows import executors
+    from qgis_mcp_workflows.executors.plugin import PluginExecutor
+    from qgis_mcp_workflows.helpers import DEFAULT_HOST, DEFAULT_PORT
 
     executors.set_executor(PluginExecutor(host=DEFAULT_HOST, port=DEFAULT_PORT))
     try:
@@ -169,8 +169,8 @@ def test_w17_demo_plugin_mode(tmp_path):
 @pytest.mark.slow
 def test_w17_demo_headless_mode(tmp_path):
     """Live demo via PyQGIS subprocess. Skipped unless launcher env var set."""
-    from qgis_mcp_north import executors
-    from qgis_mcp_north.executors.headless import HeadlessExecutor
+    from qgis_mcp_workflows import executors
+    from qgis_mcp_workflows.executors.headless import HeadlessExecutor
 
     executors.set_executor(HeadlessExecutor())
     try:

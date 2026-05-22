@@ -18,11 +18,11 @@ TINY_TRAJ = Path(__file__).resolve().parents[1] / "fixtures" / "tiny_trajectory.
 
 
 def _render_via_executor(executor, out_path: Path) -> None:
-    from qgis_mcp_north import executors as _ex
+    from qgis_mcp_workflows import executors as _ex
 
     _ex.set_executor(executor)
     try:
-        from qgis_mcp_north.server import qgis_render_trajectory
+        from qgis_mcp_workflows.server import qgis_render_trajectory
 
         qgis_render_trajectory(
             input_path=str(TINY_TRAJ), output_png=str(out_path), render_mode="lines"
@@ -34,8 +34,8 @@ def _render_via_executor(executor, out_path: Path) -> None:
 @pytest.mark.bench
 @requires_plugin
 def test_plugin_render_trajectory(benchmark, tmp_path):
-    from qgis_mcp_north.executors.plugin import PluginExecutor
-    from qgis_mcp_north.helpers import DEFAULT_HOST, DEFAULT_PORT
+    from qgis_mcp_workflows.executors.plugin import PluginExecutor
+    from qgis_mcp_workflows.helpers import DEFAULT_HOST, DEFAULT_PORT
 
     executor = PluginExecutor(host=DEFAULT_HOST, port=DEFAULT_PORT)
     benchmark(_render_via_executor, executor, tmp_path / "plugin.png")
@@ -44,7 +44,7 @@ def test_plugin_render_trajectory(benchmark, tmp_path):
 @pytest.mark.bench
 @requires_headless
 def test_headless_render_trajectory(benchmark, tmp_path):
-    from qgis_mcp_north.executors.headless import HeadlessExecutor
+    from qgis_mcp_workflows.executors.headless import HeadlessExecutor
 
     executor = HeadlessExecutor()
     benchmark(_render_via_executor, executor, tmp_path / "headless.png")

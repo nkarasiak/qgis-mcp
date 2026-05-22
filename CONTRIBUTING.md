@@ -10,8 +10,8 @@ This project connects [QGIS](https://qgis.org/) to [Claude AI](https://claude.ai
 1. **Fork the Repository**  
    Clone your fork locally:
    ```bash
-   git clone git@github.com:YOUR-USERNAME/qgis_mcp.git
-   cd qgis_mcp
+   git clone git@github.com:YOUR-USERNAME/qgis-mcp-workflows.git
+   cd qgis-mcp-workflows
    ```
 
 2. **Install Prerequisites**  
@@ -31,34 +31,35 @@ This project connects [QGIS](https://qgis.org/) to [Claude AI](https://claude.ai
    ```
 
 3. **Set Up the QGIS Plugin**  
-   Create a symlink from this repo’s `qgis_mcp_plugin` folder to your QGIS profile plugin directory.
+   Create a symlink from this repo’s `qgis_mcp_workflows_plugin` folder to your QGIS profile plugin directory.
 
    On Mac:
    ```bash
-   ln -s $(pwd)/qgis_mcp_plugin ~/Library/Application\ Support/QGIS/QGIS3/profiles/default/python/plugins/qgis_mcp
+   ln -s $(pwd)/qgis_mcp_workflows_plugin ~/Library/Application\ Support/QGIS/QGIS3/profiles/default/python/plugins/qgis_mcp_workflows_plugin
    ```
 
    On Windows Powershell:
    ```powershell
-   $src = "$(pwd)\qgis_mcp_plugin"
-   $dst = "$env:APPDATA\QGIS\QGIS3\profiles\default\python\plugins\qgis_mcp"
+   $src = "$(pwd)\qgis_mcp_workflows_plugin"
+   $dst = "$env:APPDATA\QGIS\QGIS3\profiles\default\python\plugins\qgis_mcp_workflows_plugin"
    New-Item -ItemType SymbolicLink -Path $dst -Target $src
    ```
 
-   Restart QGIS, go to `Plugins` > `Manage and Install Plugins`, search for **QGIS MCP**, and enable it.
+   Restart QGIS, go to `Plugins` > `Manage and Install Plugins`, search for **QGIS MCP Workflows**, and enable it.
 
 4. **Configure Claude Desktop**  
    Add the server configuration to `claude_desktop_config.json`:
    ```json
    {
      "mcpServers": {
-       "qgis": {
+       "qgis-workflows": {
          "command": "uv",
          "args": [
            "--directory",
-           "/ABSOLUTE/PATH/TO/qgis_mcp/src/qgis_mcp",
+           "/ABSOLUTE/PATH/TO/qgis-mcp-workflows",
            "run",
-           "server.py"
+           "--no-sync",
+           "qgis-mcp-workflows-server"
          ]
        }
      }
@@ -67,7 +68,7 @@ This project connects [QGIS](https://qgis.org/) to [Claude AI](https://claude.ai
 
 ## Development Workflow
 
-- Start the QGIS plugin (`Plugins` > `QGIS MCP` > `Start Server`).
+- Start the QGIS plugin (`Plugins` > `QGIS MCP Workflows` > `Start Server`).
 - Run the MCP server via Claude Desktop integration.
 - Make your changes and test locally.
 
@@ -80,5 +81,5 @@ This project connects [QGIS](https://qgis.org/) to [Claude AI](https://claude.ai
 
 ## Reporting Issues
 
-- Use [GitHub Issues](https://github.com/jjsantos01/qgis_mcp/issues).
+- Use [GitHub Issues](https://github.com/wattwong103/qgis-mcp-workflows/issues).
 - Include OS, QGIS version, and error logs where relevant.

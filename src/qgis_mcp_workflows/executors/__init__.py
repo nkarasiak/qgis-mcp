@@ -16,7 +16,7 @@ class Executor(Protocol):
     """Single seam between tools and transport.
 
     Implementations return the plugin's ``result`` payload on success and
-    raise a ``QgisMcpNorthError`` subclass on failure. The ``{status, result}``
+    raise a ``QgisMcpWorkflowsError`` subclass on failure. The ``{status, result}``
     envelope never leaks past this boundary.
     """
 
@@ -31,7 +31,7 @@ def get_executor() -> Executor:
     """Return the active executor; lazily creates a ``PluginExecutor`` default."""
     global _current
     if _current is None:
-        from qgis_mcp_north.executors.plugin import PluginExecutor
+        from qgis_mcp_workflows.executors.plugin import PluginExecutor
 
         _current = PluginExecutor()
     return _current

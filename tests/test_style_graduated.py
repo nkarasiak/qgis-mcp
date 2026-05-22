@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from qgis_mcp_north.errors import ExecutorError, FieldNotFoundError
-from qgis_mcp_north.server import qgis_style_graduated
+from qgis_mcp_workflows.errors import ExecutorError, FieldNotFoundError
+from qgis_mcp_workflows.server import qgis_style_graduated
 
 
 def _ok_response(**overrides) -> dict:
