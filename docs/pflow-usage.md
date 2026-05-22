@@ -1,4 +1,4 @@
-# Using qgis-mcp-north for PFLOW figures
+# Using qgis-mcp-workflows for PFLOW figures
 
 Concrete recipes for the canonical PFLOW (and GUFM) figure types. All paths in this
 guide reference files that exist only on the user's local machine — the synthetic
@@ -14,9 +14,9 @@ publication-ready figures.
 # 3. From any MCP client (Claude Desktop, Cursor, etc.), call the tools.
 
 # Headless mode (cron / unattended renders)
-$env:QGIS_MCP_NORTH_TRANSPORT='headless'
-$env:QGIS_MCP_NORTH_QGIS_LAUNCHER='M:\QGIS LTR\bin\python-qgis-ltr.bat'
-uv run --no-sync qgis-mcp-north-server
+$env:QGIS_MCP_WORKFLOWS_TRANSPORT='headless'
+$env:QGIS_MCP_WORKFLOWS_QGIS_LAUNCHER='M:\QGIS LTR\bin\python-qgis-ltr.bat'
+uv run --no-sync qgis-mcp-workflows-server
 ```
 
 ## 1. Prefecture-level choropleth from PFLOW `zone_trips.csv`
@@ -128,8 +128,8 @@ qgis_figures_to_pptx(
 When running on a smaller model (e.g., Haiku), set:
 
 ```powershell
-$env:QGIS_MCP_NORTH_TOOL_MODE='compound'
-uv run --no-sync qgis-mcp-north-server
+$env:QGIS_MCP_WORKFLOWS_TOOL_MODE='compound'
+uv run --no-sync qgis-mcp-workflows-server
 ```
 
 The MCP exposes 5 grouped tools instead of 13. The same workflow becomes:
