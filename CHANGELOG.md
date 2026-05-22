@@ -1,7 +1,29 @@
 # Changelog
 
-All notable changes to qgis-mcp-north are documented here.
+All notable changes to qgis-mcp-workflows are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## v1.3.0 — 2026-05-22 — Vault integration (v0.6 milestone)
+
+Closes the v0.6 milestone from DESIGN.md §7. This codebase now feeds the obsidian-vault knowledge system end-to-end.
+
+Added:
+- `scripts/weekly_figures.py` — renders the weekly figure set (`choropleth`, `trajectory`, optional `link_density`) into `H:/Dropbox/obsidian-vault/wiki/qgis/figures/weekly/<date>/` + writes a `manifest.json`.
+- `docs/vault-integration.md` — terse README pointing at the `/kb-*` workflow.
+- `tests/test_weekly_figures.py` (3 tests).
+
+Vault-side changes (separate commits in `obsidian-vault`):
+- `wiki/qgis/index.md` updated for the rename, refreshed concept-page links.
+- `wiki/qgis/{tool-surface,transports,big-data-discipline,error-taxonomy,zone-id-systems,compound-mode,drm-network}.md` produced by `/kb-compile qgis` from `raw/qgis/dev/`.
+- `wiki/qgis/src-{overview,architecture,recent-changes}.md` source summaries.
+- `wiki/pflow/applications-qgis.md`, `wiki/gufm/applications-qgis.md` — Tobler-bridge cross-links.
+- First `reports/qgis/v1.3-ship-readout.md` produced.
+
+Vault skill registry updated: `kb-ingest`, `kb-compile`, and `kb-report` now accept `qgis` as a valid project slug (previously rejected — the vault was pre-seeded for `qgis` but the skills hadn't been opened up to it yet).
+
+Scheduling: weekly run at `0 9 * * 1` (Monday 09:00 local) — configurable via `/schedule`. Documented in `docs/vault-integration.md`; first scheduled run is manual until the user opts in.
+
+Unchanged: tool surface (14 tools), response shapes, error taxonomy. No runtime dependency changes; the weekly script uses only the existing MCP tools.
 
 ## v1.2.0 — 2026-05-22 — qgis_render_link_density
 

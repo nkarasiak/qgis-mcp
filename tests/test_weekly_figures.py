@@ -6,10 +6,7 @@ Uses FakeExecutor + tmpdir output. No real PFLOW data accessed; the script's
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
-
-import pytest
 
 
 def test_demo_mode_renders_three_figures(fake_executor, tmp_path: Path, monkeypatch):
@@ -114,6 +111,7 @@ def test_demo_mode_includes_link_density_when_flag_set(fake_executor, tmp_path: 
 def test_manifest_written_as_json_alongside_figures(fake_executor, tmp_path: Path):
     """run_weekly writes a manifest.json so /kb-report can discover the figures."""
     import json
+
     from scripts.weekly_figures import run_weekly
 
     fake_executor.responses["add_vector_layer"] = {"id": "L1", "name": "zones"}

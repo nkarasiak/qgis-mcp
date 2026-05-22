@@ -361,7 +361,7 @@ If a v1 user needs any of these, the answer is: install upstream alongside, or w
 
 **v1.0 — tool surface complete + compound mode + W17 demo gate.** ✅ Shipped 2026-05-14: final 3 stubs (`qgis_style_categorized`, `qgis_style_graduated`, `qgis_eval` with `return_vars` capture). `QGIS_MCP_NORTH_TOOL_MODE=compound` toggle exposes 5 grouped tools (`qgis_inspect`, `qgis_style`, `qgis_render`, `qgis_export`, `qgis_eval`) instead of 13 standalone — for token-constrained LLMs. Benchmarks scaffolding (`tests/benchmarks/`, `pytest-benchmark` extra). End-to-end W17 deck demo: `scripts/demo_w17.py` + `tests/integration/test_w17_demo.py` exercising synthetic fixtures across fake/plugin/headless transports. Installer testing (11 tests). README rewritten (no longer describes upstream). Windows-only support claimed; Linux/macOS marked as unverified.
 
-**v0.6 — vault ingest.** `/kb-ingest qgis-mcp-north`. Add `wiki/shared/qgis-mcp-north/` pages, applications notes in `wiki/pflow/` and `wiki/gufm/`. Wire a `/kb-report weekly` rendering pipeline through it.
+**v0.6 — vault ingest.** ✅ Shipped 2026-05-22 (as v1.3.0). `/kb-ingest qgis H:/Dropbox/qgis-mcp-north` seeded `raw/qgis/dev/`; `/kb-compile qgis` produced 7 concept pages under `wiki/qgis/`. Cross-link stubs added at `wiki/pflow/applications-qgis.md` and `wiki/gufm/applications-qgis.md`. `scripts/weekly_figures.py` renders the figure set into `wiki/qgis/figures/weekly/<date>/`; `/kb-report` produces summaries in `reports/qgis/`. Weekly cadence documented (Monday 09:00 via /schedule, manual fallback supported). See `docs/vault-integration.md` for the workflow.
 
 **v1.0 — first real W17-style deck rendered end-to-end** from a single LLM prompt, using only `qgis-mcp-north` tools.
 
