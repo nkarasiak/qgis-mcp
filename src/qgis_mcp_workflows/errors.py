@@ -144,8 +144,8 @@ class DRMNetworkNotFoundError(QgisMcpWorkflowsError):
 
     def __init__(self, path: str) -> None:
         super().__init__(
-            f"DRM network GeoPackage not found at {path!r}. "
-            f"Build it once with: "
+            f"drm_network_path={path!r} not found. "
+            f"Build the DRM network GeoPackage once with: "
             f"`uv run --no-sync --extra drm scripts/build_drm_network.py --output {path}`. "
             f"Next: run the prep script, then retry qgis_render_link_density with the same path."
         )
