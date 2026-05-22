@@ -35,7 +35,7 @@ BATCH_BLOCKED_COMMANDS = frozenset(
 def enrich_diagnose(result: dict) -> dict:
     """Append server/plugin version-match check to a diagnose result."""
     try:
-        server_version = importlib.metadata.version("qgis-mcp")
+        server_version = importlib.metadata.version("qgis-mcp-workflows")
     except importlib.metadata.PackageNotFoundError:
         server_version = "unknown (editable install?)"
 
