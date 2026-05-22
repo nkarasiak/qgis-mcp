@@ -3,6 +3,26 @@
 All notable changes to qgis-mcp-north are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## v1.2.0 — 2026-05-22 — qgis_render_link_density
+
+New tool for DRM-link traffic-density choropleths from PFLOW trajectories.
+
+Added:
+- `qgis_render_link_density(trajectory_csvs, drm_network_path, output_png, ...)` — streams trajectory CSVs row-by-row, aggregates per-link counts/sums, renders graduated line layer. Big-data ready (works on multi-GB inputs without loading them fully).
+- `scripts/build_drm_network.py` — one-time prep script. Reads `drm_*.tsv` (47 prefecture shards), writes `assets/drm_network.gpkg` indexed by `link_id`. Requires `[drm]` extra (`pyogrio` + `geopandas`).
+- `LinkDensityResult` pydantic model. `DRMNetworkNotFoundError` exception.
+- `[drm]` optional extra (`pyogrio>=0.7`, `geopandas>=0.14`) — used only by the prep script; tool runtime has no new deps.
+- Plugin handler `render_link_density` (graduated line symbology over the DRM GeoPackage). Uses existing `QgsGraduatedSymbolRenderer(field)` + `_CLASSIFICATION_METHODS` pattern for consistency with `render_choropleth`.
+- W17 demo `--with-link-density` flag (`scripts/demo_w17.py`).
+- Unit tests: `tests/test_render_link_density.py` (7), `tests/test_link_density_aggregate.py` (6), `tests/test_build_drm_network.py` (5), `tests/test_errors_drm.py` (1). Slow integration: `tests/test_build_drm_network_gpkg.py` (2).
+- `pythonpath = ["."]` added to `[tool.pytest.ini_options]` so `from scripts.build_drm_network import ...` works in test discovery.
+
+Unchanged:
+- Existing 13 tools, response shapes, error taxonomy, transports.
+- No new runtime deps for `qgis-mcp-workflows` itself — pyogrio + geopandas are only the prep-script's deps.
+
+Resolves DESIGN.md §8 open question #8.
+
 ## v1.1.0 — 2026-05-22 — Rename to qgis-mcp-workflows
 
 Pure rename release. The package, plugin, console script, env vars, and MCP-client config key all change to make the fork's positioning ("workflow tools, not 51 PyQGIS primitives") the literal name. No behavior changes; 99-test suite green before and after.

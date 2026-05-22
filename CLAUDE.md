@@ -79,7 +79,7 @@ uv tool run ruff check src/ tests/
 | `QGIS_MCP_WORKFLOWS_LOG_FILE` | `~/.local/share/qgis-mcp-workflows/server.log` | Rotating log file (5MB × 3) — empty disables file logging |
 | `QGIS_MCP_WORKFLOWS_LOG_LEVEL` | `INFO` | File log level. Console (stderr) is always WARNING+ |
 
-## MCP Tools (13 total, all shipped as of v1.0; 5 grouped tools in compound mode. See `docs/DESIGN.md` §4 for full signatures.)
+## MCP Tools (14 total as of v1.2; 5 grouped tools in compound mode. See `docs/DESIGN.md` §4 for full signatures.)
 
 | Tool | Status | Notes |
 |---|---|---|
@@ -92,6 +92,7 @@ uv tool run ruff check src/ tests/
 | `qgis_render_choropleth` | ✅ v0.3 | Plugin handler: `render_choropleth` (atomic load+style+render+cleanup) |
 | `qgis_render_trajectory` | ✅ v0.5 | Lines/points/heatmap from PFLOW CSV or GPX; stride sampling + `max_points` ceiling; optional `movingpandas` speed-binned line rendering when `[trajectory]` extra installed |
 | `qgis_render_od_flows` | ✅ v0.5 | Centroid arcs over a zones layer; data-defined stroke width; unmatched origin/destination counts surface in response |
+| `qgis_render_link_density` | ✅ v1.2 | DRM-link traffic density from PFLOW trajectories. Streaming MCP-side aggregation + plugin-side graduated line render. Requires one-time `scripts/build_drm_network.py` to produce `assets/drm_network.gpkg`. |
 | `qgis_export_layout` | ✅ v0.5 | PNG/PDF/SVG via `QgsLayoutExporter`; loads `qgz_path` internally if not already loaded; `LayoutNotFoundError` when layout missing |
 | `qgis_batch_render` | ✅ v0.5 | Fan-out per attribute value; active-layer convention (saved-active → first vector fallback); manifest + per-value errors; `subset_string` reset in `finally` |
 | `qgis_figures_to_pptx` | ✅ v0.3 | Pure python-pptx; `two_column` + `title_image_caption` degrade to `title_only` |

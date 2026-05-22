@@ -147,6 +147,110 @@ def test_w17_demo_fake_mode(tmp_path, monkeypatch):
         executors.set_executor(None)
 
 
+def test_demo_with_link_density_smoke(tmp_path, monkeypatch):
+    """Smoke test: --with-link-density branch wires up correctly via FakeExecutor.
+
+    When QGIS_MCP_WORKFLOWS_DRM_GPKG env var is set to a valid GeoPackage path
+    the DRM file presence check passes. Otherwise the test is skipped.
+
+    This test verifies the dispatch chain only (FakeExecutor, no real QGIS).
+    It reuses the same pattern as test_w17_demo_fake_mode, extending it with
+    a scripted render_link_density response.
+    """
+    import os
+
+    drm = os.environ.get("QGIS_MCP_WORKFLOWS_DRM_GPKG")
+    if not drm or not os.path.exists(drm):
+        pytest.skip("Set QGIS_MCP_WORKFLOWS_DRM_GPKG to a valid GeoPackage to enable this test")
+
+    from qgis_mcp_workflows import executors
+    from tests.conftest import FakeExecutor
+
+    fake = FakeExecutor()
+    responses = _scripted_responses()
+
+    # Adjust output paths to match what demo_w17 writes (choropleth, trajectory, od_flows).
+    def render_choropleth_response(params):
+        r = _scripted_responses()["render_choropleth"]
+        r["output_path"] = params["output_png"]
+        return r
+
+    def render_trajectory_response(params):
+        r = _scripted_responses()["render_trajectory"]
+        r["output_path"] = params["output_png"]
+        return r
+
+    def render_od_flows_response(params):
+        r = _scripted_responses()["render_od_flows"]
+        r["output_path"] = params["output_png"]
+        return r
+
+    def render_link_density_response(params):
+        return {
+            "output_path": params["output_png"],
+            "width": 1600, "height": 1200, "dpi": 150,
+            "extent": [139.68, 35.69, 139.74, 35.73],
+            "crs": "EPSG:4326", "n_layers": 2,
+            "n_links_with_traffic": 3,
+            "n_links_rendered": 3,
+            "n_unmatched_link_ids": 0,
+            "density_field": "n_points",
+            "breaks": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "mode": "quantile",
+            "min_density": 1.0,
+            "max_density": 4.0,
+        }
+
+    responses["render_choropleth"] = render_choropleth_response
+    responses["render_trajectory"] = render_trajectory_response
+    responses["render_od_flows"] = render_od_flows_response
+    responses["render_link_density"] = render_link_density_response
+    fake.responses = responses
+
+    executors.set_executor(fake)
+    try:
+        demo = _import_demo()
+
+        from pathlib import Path
+
+        from PIL import Image
+
+        out_dir = tmp_path / "demo_w17_link_density"
+        out_dir.mkdir(parents=True)
+        for name in ("01_choropleth.png", "02_trajectory.png", "03_od_flows.png", "04_link_density.png"):
+            img = Image.new("RGB", (200, 150), color=(200, 220, 240))
+            img.save(out_dir / name, "PNG")
+            # Pad to ~10KB so the >5KB assertion passes.
+            with (out_dir / name).open("ab") as f:
+                f.write(b"\0" * (10_000 - (out_dir / name).stat().st_size))
+
+        monkeypatch.setattr(demo, "_set_executor_from_env", lambda: "fake")
+
+        pptx_path = demo.run_demo(
+            out_dir,
+            with_link_density=True,
+            drm_network_path=Path(drm),
+        )
+        assert pptx_path.exists()
+        assert pptx_path.stat().st_size > 10 * 1024
+
+        # Verify render_link_density was dispatched.
+        commands = [c[0] for c in fake.calls]
+        assert "render_link_density" in commands, (
+            f"Expected render_link_density in dispatched commands; got {commands}"
+        )
+
+        # Verify the PPTX has 4 slides (choropleth + trajectory + od + density).
+        import zipfile
+
+        with zipfile.ZipFile(pptx_path) as z:
+            slide_count = sum(1 for n in z.namelist() if n.startswith("ppt/slides/slide") and n.endswith(".xml"))
+        assert slide_count == 4, f"Expected 4 slides, got {slide_count}"
+
+    finally:
+        executors.set_executor(None)
+
+
 @requires_plugin
 def test_w17_demo_plugin_mode(tmp_path):
     """Live demo via QGIS plugin transport. Skipped unless port 9877 is open."""

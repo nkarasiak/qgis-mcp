@@ -143,7 +143,7 @@ Numeric symbology — value-based color ramp. `mode ∈ {"quantile", "equal_inte
 GraduatedStyleResult = StyleResult | {"breaks": [float, ...], "mode": str}
 ```
 
-### Rendering (4)
+### Rendering (5)
 
 #### `qgis_render_map(layer_ids: list[str], output_png: str, width: int = 1600, height: int = 1200, dpi: int = 150, extent: list[float] | None = None, background: str = "white") → RenderResult`
 
@@ -225,6 +225,33 @@ ODFlowResult = RenderResult | {
     "n_unmatched_destinations": int,
 }
 ```
+
+#### `qgis_render_link_density(trajectory_csvs: list[str], drm_network_path: str, output_png: str, link_id_col: str = "link_id", aggregation: str = "count", value_col: str | None = None, n_classes: int = 7, mode: str = "quantile", palette: str = "YlOrRd", min_density: float = 1.0, top_n: int | None = None, extent: list[float] | None = None, basemap_paths: list[str] | None = None, width: int = 1600, height: int = 1200, dpi: int = 150) → LinkDensityResult`
+
+**Workflow tool.** Render DRM-link traffic density from PFLOW trajectories. Aggregates one or more trajectory CSVs by `link_id`, joins to a pre-built DRM line layer, applies graduated symbology, renders.
+
+Prerequisite: `assets/drm_network.gpkg` built once via `scripts/build_drm_network.py` (see §10 DRM road network). The tool raises `DRMNetworkNotFoundError` with the exact build command if missing.
+
+Big-data discipline. PFLOW trajectory CSVs are 3M+ rows; aggregation streams row-by-row MCP-side, sending only the per-link totals (typically <100k entries) to the plugin. `min_density` denoises rare-traffic links; `top_n` clips to the N densest links.
+
+`aggregation ∈ {"count", "sum"}`. `count` totals trajectory points per link (default). `sum` totals a numeric column (set `value_col`).
+
+```python
+LinkDensityResult = RenderResult | {
+    "n_trajectory_rows_total": int,
+    "n_points_total": int,
+    "n_links_with_traffic": int,
+    "n_links_rendered": int,
+    "n_unmatched_link_ids": int,
+    "density_field": str,        # "n_points" or "sum_<value_col>"
+    "breaks": [float, ...],
+    "mode": str,
+    "min_density": float, "max_density": float,
+    "aggregation": str,
+}
+```
+
+Chains into: `qgis_figures_to_pptx`.
 
 ### Export & Batch & Delivery (3)
 
@@ -340,6 +367,8 @@ If a v1 user needs any of these, the answer is: install upstream alongside, or w
 
 **v1.1 — rename release.** ✅ Shipped 2026-05-22. Package/plugin/console-script renamed to `qgis-mcp-workflows` (positioning over personal name). Env vars `QGIS_MCP_NORTH_*` → `QGIS_MCP_WORKFLOWS_*`. Co-existence with upstream unchanged: port 9877 stays, plugin folder is now `qgis_mcp_workflows_plugin`. No behavior changes; 99-test suite green before and after. CLAUDE.md, DESIGN.md, README, CHANGELOG updated; historical completion-report docs left untouched as point-in-time snapshots.
 
+**v1.2 — link-density tool.** ✅ Shipped 2026-05-22. New tool `qgis_render_link_density` for DRM-link traffic density choropleths from PFLOW trajectories. Companion one-time prep script `scripts/build_drm_network.py` builds `assets/drm_network.gpkg` from 47 prefecture-sharded DRM TSVs (~14 GB → ~1-2 GB GeoPackage). New optional `[drm]` extra (pyogrio + geopandas) used only by the prep script. New error: `DRMNetworkNotFoundError` with build-script hint. Big-data discipline: streaming aggregation MCP-side, only the aggregated `{link_id → density}` dict crosses the wire. Plugin handler adapted to use existing `QgsGraduatedSymbolRenderer(field)` + `_CLASSIFICATION_METHODS` pattern (not the planned `createRenderer` static method). Resolves §8 open question #8.
+
 ---
 
 ## 8. Resolved & open questions
@@ -366,7 +395,7 @@ Still open:
 
 7. **DuckDB integration.** `viz/pflow.duckdb` (8.8 GB) holds pre-built spatial data. Worth a v2 tool `qgis_render_from_duckdb(query, ...)` that runs a query and renders the result, bypassing CSV intermediates. **Not in v1 scope** but worth flagging.
 
-8. **DRM-link aggregation (v2 candidate).** PFLOW trajectory CSVs include `link_id` referencing the DRM (Digital Road Map) network at `H:\Dropbox\PFLOW\data\network\drm_NN.tsv` (prefecture-sharded, ~14 GB total, EPSG:4326, WKT LINESTRING in column 14). Aggregating trajectories to link-level density and rendering as a graduated link layer would be a major visualization upgrade over raw GPS scatter — but the DRM ingest is itself a multi-step pipeline. Park as `qgis_render_link_density(traj_csvs[], drm_paths[], ...)` for v2.
+8. ~~**DRM-link aggregation (v2 candidate).**~~ → Resolved in v1.2 (2026-05-22). Shipped `qgis_render_link_density` + `scripts/build_drm_network.py` (one-time prep, builds `assets/drm_network.gpkg` from 47 prefecture-sharded DRM TSVs). MCP-side streaming aggregation (no full-load), plugin-side graduated line rendering. New `[drm]` extra (pyogrio + geopandas) for the prep script only; tool runtime adds no deps. New error: `DRMNetworkNotFoundError`. See §4 for the tool signature.
 
 9. **JAXA LULC raster as basemap.** `2024JPN_v25.04_100m.tif` (uint8, 15 categorical classes, EPSG:4326) loads through `qgis_load_layer` → `qgis_render_map` already, no new tool needed. Worth documenting as an optional `basemap_paths` entry for choropleth/trajectory renders that want land-cover context. Default styling: per-class palette matching JAXA's published legend (assets/jaxa_lulc_legend.png available).
 

@@ -257,6 +257,20 @@ class ODFlowResult(RenderResult):
     n_unmatched_destinations: int
 
 
+class LinkDensityResult(RenderResult):
+    n_trajectory_rows_total: int
+    n_points_total: int
+    n_links_with_traffic: int
+    n_links_rendered: int
+    n_unmatched_link_ids: int
+    density_field: str
+    breaks: list[float]
+    mode: str
+    min_density: float
+    max_density: float
+    aggregation: str
+
+
 class ExportResult(BaseModel):
     output_path: str
     format: str
@@ -1038,6 +1052,63 @@ def _compute_movingpandas_speeds(mp, features: list[dict]) -> list[float] | None
         return None
 
 
+def _aggregate_link_density(
+    csv_paths: list,
+    link_id_col: str,
+    aggregation: str,
+    value_col: str | None,
+) -> tuple[dict[str, float], int]:
+    """Stream-aggregate trajectory CSVs into a {link_id → density} dict.
+
+    Returns (density_dict, n_rows_read). Streaming: never holds more than one
+    row in memory beyond the accumulator. Non-numeric values in value_col are
+    skipped silently (logged at WARNING) so a few bad rows don't kill the run.
+
+    Raises:
+        FieldNotFoundError: if link_id_col or value_col is missing from any CSV.
+        ValueError: if aggregation='sum' but value_col is None.
+    """
+    import csv as _csv
+
+    from qgis_mcp_workflows.errors import FieldNotFoundError
+
+    if aggregation == "sum" and value_col is None:
+        raise ValueError("aggregation='sum' requires value_col to be set.")
+    if aggregation not in ("count", "sum"):
+        raise ValueError(f"Unknown aggregation: {aggregation!r}. Use 'count' or 'sum'.")
+
+    density: dict[str, float] = {}
+    n_rows = 0
+
+    for path in csv_paths:
+        with open(path, encoding="utf-8", newline="") as f:
+            reader = _csv.DictReader(f)
+            columns = reader.fieldnames or []
+            if link_id_col not in columns:
+                raise FieldNotFoundError(link_id_col, columns)
+            if value_col is not None and value_col not in columns:
+                raise FieldNotFoundError(value_col, columns)
+
+            for row in reader:
+                n_rows += 1
+                link_id = row[link_id_col]
+                if not link_id:
+                    continue
+                if aggregation == "count":
+                    density[link_id] = density.get(link_id, 0.0) + 1.0
+                else:  # sum
+                    raw = row[value_col]  # type: ignore[index]
+                    try:
+                        val = float(raw)
+                    except (TypeError, ValueError):
+                        continue
+                    if val != val:  # NaN check
+                        continue
+                    density[link_id] = density.get(link_id, 0.0) + val
+
+    return density, n_rows
+
+
 @_maybe_tool(
     annotations=ToolAnnotations(
         readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=True
@@ -1132,6 +1203,121 @@ def qgis_render_od_flows(
         min_flow_rendered=result["min_flow_rendered"],
         n_unmatched_origins=result["n_unmatched_origins"],
         n_unmatched_destinations=result["n_unmatched_destinations"],
+    )
+
+
+@_maybe_tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=True
+    )
+)
+def qgis_render_link_density(
+    trajectory_csvs: Annotated[list[str], Field(description="One or more PFLOW trajectory CSV paths. Each must contain link_id_col. Streamed (not loaded fully); safe for multi-GB inputs.")],
+    drm_network_path: Annotated[str, Field(description="Absolute path to the pre-built DRM network GeoPackage. Build once via scripts/build_drm_network.py.")],
+    output_png: Annotated[str, Field(description="Absolute path for the output PNG.")],
+    link_id_col: Annotated[str, Field(description="Trajectory CSV column joining to DRM link_id.")] = "link_id",
+    aggregation: Annotated[Literal["count", "sum"], Field(description="Per-link aggregation. 'count' = number of trajectory points; 'sum' requires value_col.")] = "count",
+    value_col: Annotated[str | None, Field(description="Numeric column to sum (only used when aggregation='sum'). Non-numeric / NaN values are skipped.")] = None,
+    n_classes: Annotated[int, Field(description="Number of graduated bins for symbology.", ge=2, le=15)] = 7,
+    mode: Annotated[Literal["quantile", "equal_interval", "natural_breaks", "pretty"], Field(description="Binning strategy for graduated styling.")] = "quantile",
+    palette: Annotated[str, Field(description='Sequential colorbrewer palette, e.g. "YlOrRd", "Blues", "Viridis".')] = "YlOrRd",
+    min_density: Annotated[float, Field(description="Drop links with density below this. Use to denoise rare-traffic links.", ge=0.0)] = 1.0,
+    top_n: Annotated[int | None, Field(description="Render only the top-N densest links. None = all matched links.")] = None,
+    extent: Annotated[list[float] | None, Field(description="Render extent [xmin, ymin, xmax, ymax] in EPSG:4326. If omitted, uses DRM layer extent.")] = None,
+    basemap_paths: Annotated[list[str] | None, Field(description="Optional basemap layers drawn under links.")] = None,
+    width: Annotated[int, Field(description="Image width in pixels.", ge=200, le=8000)] = 1600,
+    height: Annotated[int, Field(description="Image height in pixels.", ge=200, le=8000)] = 1200,
+    dpi: Annotated[int, Field(description="Image DPI.", ge=72, le=600)] = 150,
+) -> LinkDensityResult:
+    """Render a DRM-link traffic-density choropleth from PFLOW trajectories. v2 workflow tool.
+
+    When to use: visualizing where in the road network traffic concentrates,
+    aggregated over potentially many GB of trajectory CSVs. Major upgrade
+    over `qgis_render_trajectory`'s raw GPS scatter when you care about
+    network-level density rather than individual paths.
+
+    Prerequisite: `assets/drm_network.gpkg` must exist (one-time build via
+    `scripts/build_drm_network.py`). The tool raises ``DRMNetworkNotFoundError``
+    with the exact build command if missing.
+
+    Big-data discipline: trajectory CSVs are streamed row-by-row, never
+    loaded fully. Aggregation happens MCP-side; only the per-link totals
+    (typically <100k entries) are sent to the plugin.
+
+    Returns: ``LinkDensityResult`` — totals, matched/unmatched counts,
+    resolved breaks, min/max density.
+
+    Chains into: ``qgis_figures_to_pptx``.
+    """
+    from qgis_mcp_workflows.errors import (
+        DRMNetworkNotFoundError,
+        EmptyAfterFilterError,
+    )
+    from qgis_mcp_workflows.executors import get_executor
+
+    abs_drm = os.path.abspath(drm_network_path)
+    abs_output = os.path.abspath(output_png)
+    abs_basemaps = [os.path.abspath(p) for p in (basemap_paths or [])]
+    abs_csvs = [os.path.abspath(p) for p in trajectory_csvs]
+
+    if not os.path.exists(abs_drm):
+        raise DRMNetworkNotFoundError(abs_drm)
+
+    density, n_rows_total = _aggregate_link_density(
+        csv_paths=abs_csvs,
+        link_id_col=link_id_col,
+        aggregation=aggregation,
+        value_col=value_col,
+    )
+
+    n_points_total = int(sum(density.values())) if aggregation == "count" else n_rows_total
+
+    if min_density > 0.0:
+        density = {k: v for k, v in density.items() if v >= min_density}
+
+    if top_n is not None and top_n > 0:
+        sorted_items = sorted(density.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+        density = dict(sorted_items)
+
+    if not density:
+        raise EmptyAfterFilterError(
+            f"0 links left after min_density={min_density}, top_n={top_n}. "
+            f"Aggregated {len(density)} links from {n_rows_total} rows."
+        )
+
+    params: dict = {
+        "density": density,
+        "drm_network_path": abs_drm,
+        "output_png": abs_output,
+        "link_id_col": link_id_col,
+        "aggregation": aggregation,
+        "value_col": value_col,
+        "n_classes": n_classes,
+        "mode": mode,
+        "palette": palette,
+        "extent": list(extent) if extent is not None else None,
+        "basemap_paths": abs_basemaps,
+        "width": width,
+        "height": height,
+        "dpi": dpi,
+    }
+    result = get_executor().dispatch("render_link_density", params, timeout=120)
+
+    return LinkDensityResult(
+        output_path=result["output_path"],
+        width=result["width"], height=result["height"], dpi=result["dpi"],
+        extent=result["extent"], crs=result["crs"], n_layers=result["n_layers"],
+        n_trajectory_rows_total=n_rows_total,
+        n_points_total=n_points_total,
+        n_links_with_traffic=result["n_links_with_traffic"],
+        n_links_rendered=result["n_links_rendered"],
+        n_unmatched_link_ids=result["n_unmatched_link_ids"],
+        density_field=result["density_field"],
+        breaks=result["breaks"],
+        mode=result["mode"],
+        min_density=result["min_density"],
+        max_density=result["max_density"],
+        aggregation=aggregation,
     )
 
 
@@ -1467,7 +1653,7 @@ def main() -> None:
 
     executor, chosen = _build_executor(args.transport)
     set_executor(executor)
-    logger.info("qgis-mcp-workflows server starting (v1.1.0, transport=%s)", chosen)
+    logger.info("qgis-mcp-workflows server starting (v1.2.0, transport=%s)", chosen)
     mcp.run()
 
 

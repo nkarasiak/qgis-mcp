@@ -18,10 +18,10 @@ about=Companion QGIS plugin for the qgis-mcp-workflows MCP server. Exposes a TCP
 
     Default socket port: 9877 (vs upstream nkarasiak/qgis-mcp on 9876).
 
-version=1.1.0
+version=1.2.0
 author=North
 email=
-tags=mcp,ai,claude,llm,workflows,transportation,research,pflow,gufm
+tags=mcp,ai,claude,llm,workflows,transportation,research,pflow,gufm,drm
 homepage=https://github.com/wattwong103/qgis-mcp-workflows
 tracker=https://github.com/wattwong103/qgis-mcp-workflows/issues
 repository=https://github.com/wattwong103/qgis-mcp-workflows
@@ -30,7 +30,14 @@ category=Plugins
 icon=icons/icon.png
 experimental=True
 deprecated=False
-changelog=1.1.0 : Rename release. The package, plugin, and console script move from
+changelog=1.2.0 : New tool qgis_render_link_density for DRM-link traffic density choropleths
+    from PFLOW trajectories. Streams trajectory CSVs row-by-row MCP-side; only the per-link
+    aggregated dict crosses the wire. Companion one-time prep script scripts/build_drm_network.py
+    builds assets/drm_network.gpkg from 47 prefecture-sharded DRM TSVs (requires new [drm] extra:
+    pyogrio + geopandas). New error: DRMNetworkNotFoundError. Plugin handler reuses existing
+    QgsGraduatedSymbolRenderer + _CLASSIFICATION_METHODS pattern from render_choropleth. W17 demo
+    --with-link-density flag. 21 new tests. Resolves DESIGN.md §8 question #8.
+ 1.1.0 : Rename release. The package, plugin, and console script move from
     qgis-mcp-north → qgis-mcp-workflows to put the fork's positioning (workflow tools
     not 51 PyQGIS primitives) in the name. No behavior changes. Co-existence with
     upstream nkarasiak/qgis-mcp unchanged: different plugin folder, port 9877 stays.

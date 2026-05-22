@@ -27,6 +27,7 @@ from qgis.core import (
     QgsExpressionContextUtils,
     QgsFeature,
     QgsFeatureRequest,
+    QgsField,
     QgsGeometry,
     QgsGraduatedSymbolRenderer,
     QgsHeatmapRenderer,
@@ -276,6 +277,7 @@ class QgisMCPServer(QObject):
                 "render_choropleth": self.render_choropleth,
                 "render_trajectory": self.render_trajectory,
                 "render_od_flows": self.render_od_flows,
+                "render_link_density": self.render_link_density,
                 "project_load": self.project_load,
                 "batch_render": self.batch_render,
                 "create_new_project": self.create_new_project,
@@ -1714,6 +1716,191 @@ class QgisMCPServer(QObject):
                 "n_unmatched_destinations": unmatched_d,
             }
         finally:
+            for tid in transient_ids:
+                try:
+                    project.removeMapLayer(tid)
+                except Exception:
+                    pass
+
+    def render_link_density(
+        self,
+        density,
+        drm_network_path,
+        output_png,
+        link_id_col="link_id",
+        aggregation="count",
+        value_col=None,
+        n_classes=5,
+        mode="quantile",
+        palette="YlOrRd",
+        extent=None,
+        basemap_paths=None,
+        width=1600,
+        height=1200,
+        dpi=150,
+        **kwargs,
+    ):
+        """Render a graduated link-density choropleth from a {link_id → density} dict.
+
+        Loads the DRM GeoPackage line layer, joins the density dict as a transient
+        attribute, applies a graduated renderer, renders with optional basemap layers,
+        and saves a PNG. The layer is cleaned up (transient_ids) after rendering;
+        the caller's project sees no surviving state changes.
+
+        Algorithm:
+            1. Load the DRM line layer from drm_network_path.
+            2. Add a numeric attribute ``density_field``, populate from the dict via
+               link_id_col join.
+            3. Filter to features with a non-NULL density value.
+            4. Apply graduated renderer using the chosen classification mode.
+            5. Render with basemap layers below, DRM links above.
+            6. Save PNG and clean up the transient attribute + layer.
+        """
+        method_cls = self._CLASSIFICATION_METHODS.get(mode)
+        if method_cls is None:
+            raise Exception(
+                f"Unknown mode {mode!r}. Use one of: {list(self._CLASSIFICATION_METHODS)}."
+            )
+
+        density_field = "n_points" if aggregation == "count" else f"sum_{value_col}"
+        project = QgsProject.instance()
+        transient_ids = []
+
+        try:
+            # 1. Load the DRM line layer
+            drm_layer = QgsVectorLayer(drm_network_path, "_drm_network", "ogr")
+            if not drm_layer.isValid():
+                raise Exception(f"DRM_LOAD_FAILED: {drm_network_path}")
+            project.addMapLayer(drm_layer)
+            transient_ids.append(drm_layer.id())
+
+            # 2. Add density attribute and populate via link_id_col join
+            drm_layer.startEditing()
+            drm_layer.dataProvider().addAttributes([QgsField(density_field, QVariant.Double)])
+            drm_layer.updateFields()
+            field_idx = drm_layer.fields().indexFromName(density_field)
+
+            n_matched = 0
+            fid_to_density = []
+            for feat in drm_layer.getFeatures():
+                link_id = str(feat[link_id_col])
+                if link_id in density:
+                    fid_to_density.append((feat.id(), density[link_id]))
+                    n_matched += 1
+
+            attr_map = {fid: {field_idx: val} for fid, val in fid_to_density}
+            drm_layer.dataProvider().changeAttributeValues(attr_map)
+            drm_layer.commitChanges()
+
+            n_unmatched_link_ids = len(density) - n_matched
+
+            # 3. Filter to features with density set (non-NULL)
+            drm_layer.setSubsetString(f'"{density_field}" IS NOT NULL')
+            n_links_rendered = drm_layer.featureCount()
+
+            if n_links_rendered == 0:
+                raise Exception(
+                    f"render_link_density: 0 links matched after join on {link_id_col!r}. "
+                    f"density dict has {len(density)} keys; layer had no matching {link_id_col!r} values."
+                )
+
+            # 4. Graduated renderer
+            ramp = QgsStyle.defaultStyle().colorRamp(palette)
+            if not ramp:
+                ramp = QgsStyle.defaultStyle().colorRamp("YlOrRd")
+            symbol = QgsLineSymbol.createSimple({"line_width": "0.6"})
+            renderer = QgsGraduatedSymbolRenderer(density_field)
+            renderer.setSourceSymbol(symbol.clone())
+            renderer.setSourceColorRamp(ramp)
+            renderer.setClassificationMethod(method_cls())
+            renderer.updateClasses(drm_layer, int(n_classes))
+            drm_layer.setRenderer(renderer)
+
+            ranges = list(renderer.ranges())
+            breaks: list[float] = []
+            if ranges:
+                breaks.append(float(ranges[0].lowerValue()))
+                for r in ranges:
+                    breaks.append(float(r.upperValue()))
+
+            values_with_density = [v for v in density.values() if v is not None]
+            min_density = min(values_with_density) if values_with_density else 0.0
+            max_density = max(values_with_density) if values_with_density else 0.0
+
+            # 5. Build basemap layers
+            basemap_layers = []
+            for bm_path in basemap_paths or []:
+                bm = QgsVectorLayer(bm_path, os.path.basename(bm_path), "ogr")
+                if bm.isValid():
+                    project.addMapLayer(bm)
+                    transient_ids.append(bm.id())
+                    basemap_layers.append(bm)
+                else:
+                    QgsMessageLog.logMessage(
+                        f"Basemap skipped (invalid): {bm_path}", self.LOG_TAG, MSG_WARNING
+                    )
+
+            # basemaps below, DRM links on top
+            ordered_layers = [drm_layer, *basemap_layers]
+
+            # Compute extent: explicit bbox or DRM layer extent with 5% padding
+            if extent is not None:
+                extent_rect = QgsRectangle(extent[0], extent[1], extent[2], extent[3])
+            else:
+                extent_rect = QgsRectangle(drm_layer.extent())
+                dx = extent_rect.width() * 0.05
+                dy = extent_rect.height() * 0.05
+                extent_rect = QgsRectangle(
+                    extent_rect.xMinimum() - dx, extent_rect.yMinimum() - dy,
+                    extent_rect.xMaximum() + dx, extent_rect.yMaximum() + dy,
+                )
+
+            ms = QgsMapSettings()
+            ms.setLayers(ordered_layers)
+            ms.setExtent(extent_rect)
+            ms.setOutputSize(QSize(int(width), int(height)))
+            ms.setOutputDpi(int(dpi))
+            ms.setDestinationCrs(drm_layer.crs())
+            ms.setBackgroundColor(QColor("white"))
+
+            job = QgsMapRendererParallelJob(ms)
+            job.start()
+            job.waitForFinished()
+            img = job.renderedImage()
+            if not img.save(output_png):
+                raise Exception(f"Failed to save render to {output_png}")
+
+            return {
+                "output_path": output_png,
+                "width": int(width),
+                "height": int(height),
+                "dpi": int(dpi),
+                "extent": [
+                    extent_rect.xMinimum(), extent_rect.yMinimum(),
+                    extent_rect.xMaximum(), extent_rect.yMaximum(),
+                ],
+                "crs": drm_layer.crs().authid() or "EPSG:4326",
+                "n_layers": len(ordered_layers),
+                "n_links_with_traffic": len(density),
+                "n_links_rendered": n_links_rendered,
+                "n_unmatched_link_ids": n_unmatched_link_ids,
+                "density_field": density_field,
+                "breaks": breaks,
+                "mode": mode,
+                "min_density": float(min_density),
+                "max_density": float(max_density),
+            }
+        finally:
+            # Revert subset filter and remove temp attribute before unloading
+            try:
+                drm_layer.setSubsetString("")
+                if drm_layer.isEditable():
+                    drm_layer.rollBack()
+                drm_layer.startEditing()
+                drm_layer.dataProvider().deleteAttributes([field_idx])
+                drm_layer.commitChanges()
+            except Exception:
+                pass
             for tid in transient_ids:
                 try:
                     project.removeMapLayer(tid)
