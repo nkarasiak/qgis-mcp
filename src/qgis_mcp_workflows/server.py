@@ -360,6 +360,12 @@ class DiagramMapResult(RenderResult):
     n_features: int
 
 
+class CatchmentResult(RenderResult):
+    method: str
+    n_points: int
+    n_catchments: int
+
+
 class BatchManifestEntry(BaseModel):
     value: str
     output_path: str
@@ -1493,6 +1499,59 @@ def qgis_render_diagram_map(
         diagram_type=result["diagram_type"],
         value_fields=result["value_fields"],
         n_features=result["n_features"],
+        basemap_attribution=result.get("basemap_attribution"),
+        basemap_source=result.get("basemap_source"),
+    )
+
+
+@_maybe_tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=True
+    )
+)
+def qgis_render_catchment(
+    points_path: Annotated[str, Field(description="Absolute path to a point layer (e.g. stations).")],
+    output_png: Annotated[str, Field(description="Absolute path for the output PNG.")],
+    method: Annotated[Literal["voronoi"], Field(description="Catchment method. 'voronoi' = Thiessen service areas (one cell per point, nearest-point tessellation). Buffer rings / network isochrones are future methods.")] = "voronoi",
+    extent: Annotated[list[float] | None, Field(description="Render extent [xmin, ymin, xmax, ymax] in the layer's CRS. Omit for full extent + 5%.")] = None,
+    basemap: Annotated[BasemapName, Field(description='Tile basemap under the catchments. "none" = white background.')] = "none",
+    basemap_opacity: Annotated[float, Field(description="Tile basemap opacity 0.0-1.0.", ge=0.0, le=1.0)] = 1.0,
+    width: Annotated[int, Field(description="Image width in pixels.", ge=200, le=8000)] = 1600,
+    height: Annotated[int, Field(description="Image height in pixels.", ge=200, le=8000)] = 1200,
+    dpi: Annotated[int, Field(description="Image DPI.", ge=72, le=600)] = 150,
+) -> CatchmentResult:
+    """Render Voronoi service-area catchments around points. v2 workflow tool.
+
+    When to use: approximate each station/facility's service area as its Thiessen
+    cell (nearest-point tessellation) — the catchment method from the TransInfor
+    fig05. Uses a pure QgsGeometry Voronoi op (no Processing framework).
+
+    Returns: ``CatchmentResult`` with the method, point count, and catchment count.
+
+    Chains into: ``qgis_compose_layout``, ``qgis_figures_to_pptx``.
+    """
+    from qgis_mcp_workflows.executors import get_executor
+
+    abs_points = os.path.abspath(points_path)
+    abs_output = os.path.abspath(output_png)
+    params = {
+        "points_path": abs_points,
+        "output_png": abs_output,
+        "method": method,
+        "extent": list(extent) if extent is not None else None,
+        "basemap_spec": _resolve_basemap(basemap, basemap_opacity),
+        "width": width,
+        "height": height,
+        "dpi": dpi,
+    }
+    result = get_executor().dispatch("render_catchment", params, timeout=180)
+    return CatchmentResult(
+        output_path=result["output_path"],
+        width=result["width"], height=result["height"], dpi=result["dpi"],
+        extent=result["extent"], crs=result["crs"], n_layers=result["n_layers"],
+        method=result["method"],
+        n_points=result["n_points"],
+        n_catchments=result["n_catchments"],
         basemap_attribution=result.get("basemap_attribution"),
         basemap_source=result.get("basemap_source"),
     )

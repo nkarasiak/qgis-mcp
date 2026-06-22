@@ -293,6 +293,7 @@ class QgisMCPServer(QObject):
                 "render_layers_to_path": self.render_layers_to_path,
                 "render_choropleth": self.render_choropleth,
                 "render_diagram_map": self.render_diagram_map,
+                "render_catchment": self.render_catchment,
                 "render_trajectory": self.render_trajectory,
                 "render_od_flows": self.render_od_flows,
                 "render_link_density": self.render_link_density,
@@ -1961,6 +1962,130 @@ class QgisMCPServer(QObject):
                 "min_flow_rendered": float(min_flow) if rendered_flows else 0.0,
                 "n_unmatched_origins": unmatched_o,
                 "n_unmatched_destinations": unmatched_d,
+            }
+        finally:
+            for tid in transient_ids:
+                try:
+                    project.removeMapLayer(tid)
+                except Exception:
+                    pass
+
+    def render_catchment(
+        self,
+        points_path,
+        output_png,
+        method="voronoi",
+        extent=None,
+        basemap_spec=None,
+        width=1600,
+        height=1200,
+        dpi=150,
+        background="white",
+        **kwargs,
+    ):
+        """Render Voronoi service-area catchments around point features. v2 tool.
+
+        Runs native:voronoipolygons on the points, fills each cell semi-
+        transparently with outlines, draws the points on top. Buffer rings /
+        network isochrones are future methods. Requires QGIS Processing.
+        """
+        project = QgsProject.instance()
+        transient_ids = []
+        try:
+            pts = QgsVectorLayer(points_path, "_catch_pts", "ogr")
+            if not pts.isValid():
+                raise Exception(f"Points layer not readable: {points_path}")
+            project.addMapLayer(pts)
+            transient_ids.append(pts.id())
+
+            # Voronoi via geometry op — no Processing framework dependency.
+            pts_xy = [
+                feat.geometry().asPoint()
+                for feat in pts.getFeatures()
+                if feat.geometry() and not feat.geometry().isEmpty()
+            ]
+            if len(pts_xy) < 3:
+                raise Exception(f"render_catchment needs >= 3 points, got {len(pts_xy)}")
+            voro_geom = QgsGeometry.fromMultiPointXY(pts_xy).voronoiDiagram()
+            if voro_geom.isEmpty():
+                raise Exception("Voronoi diagram came out empty")
+            crs_authid = pts.crs().authid() or "EPSG:4326"
+            voro = QgsVectorLayer(f"Polygon?crs={crs_authid}", "_voronoi", "memory")
+            cells = []
+            for part in voro_geom.asGeometryCollection():
+                nf = QgsFeature()
+                nf.setGeometry(part)
+                cells.append(nf)
+            voro.dataProvider().addFeatures(cells)
+            voro.updateExtents()
+            project.addMapLayer(voro)
+            transient_ids.append(voro.id())
+
+            fill = QgsFillSymbol.createSimple({
+                "color": "200,220,240,90",
+                "outline_color": "70,90,120",
+                "outline_width": "0.3",
+            })
+            voro.setRenderer(QgsSingleSymbolRenderer(fill))
+            psym = QgsMarkerSymbol.createSimple({
+                "name": "circle", "color": "#b2182b", "size": "1.4", "outline_style": "no",
+            })
+            pts.setRenderer(QgsSingleSymbolRenderer(psym))
+
+            tile_bm, basemap_source = self._load_basemap_layer(
+                basemap_spec, project, transient_ids
+            )
+            ordered_layers = [pts, voro]
+            if tile_bm is not None:
+                ordered_layers.append(tile_bm)
+
+            if extent is not None:
+                extent_rect = QgsRectangle(extent[0], extent[1], extent[2], extent[3])
+            else:
+                extent_rect = QgsRectangle(voro.extent())
+                dx, dy = extent_rect.width() * 0.05, extent_rect.height() * 0.05
+                extent_rect = QgsRectangle(
+                    extent_rect.xMinimum() - dx, extent_rect.yMinimum() - dy,
+                    extent_rect.xMaximum() + dx, extent_rect.yMaximum() + dy,
+                )
+
+            ms = QgsMapSettings()
+            ms.setLayers(ordered_layers)
+            ms.setOutputSize(QSize(int(width), int(height)))
+            ms.setOutputDpi(int(dpi))
+            if tile_bm is not None:
+                out_crs = QgsCoordinateReferenceSystem("EPSG:3857")
+                extent_rect = self._reproject_extent_to_3857(extent_rect, pts.crs())
+                ms.setDestinationCrs(out_crs)
+            else:
+                out_crs = pts.crs()
+                ms.setDestinationCrs(out_crs)
+            ms.setExtent(extent_rect)
+            color = QColor(background)
+            if not color.isValid():
+                color = QColor(255, 255, 255)
+            ms.setBackgroundColor(color)
+
+            job = QgsMapRendererParallelJob(ms)
+            job.start()
+            job.waitForFinished()
+            if not job.renderedImage().save(output_png):
+                raise Exception(f"Failed to save render to {output_png}")
+
+            return {
+                "output_path": output_png,
+                "width": int(width), "height": int(height), "dpi": int(dpi),
+                "extent": [
+                    extent_rect.xMinimum(), extent_rect.yMinimum(),
+                    extent_rect.xMaximum(), extent_rect.yMaximum(),
+                ],
+                "crs": out_crs.authid() or "EPSG:4326",
+                "n_layers": len(ordered_layers),
+                "method": method,
+                "n_points": pts.featureCount(),
+                "n_catchments": voro.featureCount(),
+                "basemap_attribution": basemap_spec.get("attribution") if basemap_spec else None,
+                "basemap_source": basemap_source,
             }
         finally:
             for tid in transient_ids:
