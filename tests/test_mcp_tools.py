@@ -928,6 +928,28 @@ async def test_get_canvas_screenshot_tool(mock_connection):
 
 
 @pytest.mark.asyncio
+async def test_get_3d_screenshot_tool(mock_connection):
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {
+            "base64_data": "iVBOR==",
+            "mime_type": "image/png",
+            "width": 800,
+            "height": 600,
+            "view_index": 0,
+            "open_3d_views": 1,
+        },
+    }
+    from qgis_mcp.server import get_3d_screenshot
+
+    ctx = _make_ctx()
+    result = await get_3d_screenshot(ctx, view_index=0, dpi=96)
+    assert isinstance(result, list)
+    assert result[0].type == "image"
+    assert result[0].data == "iVBOR=="
+
+
+@pytest.mark.asyncio
 async def test_transform_coordinates_point(mock_connection):
     mock_connection.send_command.return_value = {
         "status": "success",

@@ -361,11 +361,13 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
         title="Canvas",
         description=(
             "Map canvas operations.\n"
-            "Actions: get_extent, set_extent, screenshot, get_scale, set_scale\n"
+            "Actions: get_extent, set_extent, screenshot, screenshot_3d, get_scale, set_scale\n"
             "- get_extent: no params\n"
             "- set_extent: xmin (float), ymin (float), xmax (float), ymax (float), "
             "crs (str, optional)\n"
             "- screenshot: no params — returns inline image\n"
+            "- screenshot_3d: view_index (int, optional), dpi (int, optional) — "
+            "capture an open 3D map view as an inline image\n"
             "- get_scale: no params\n"
             "- set_scale: scale (float, optional), rotation (float, optional)"
         ),
@@ -386,6 +388,21 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             return await _send("set_canvas_extent", params)
         elif action == "screenshot":
             result = await _send("get_canvas_screenshot")
+            return [
+                ImageContent(
+                    type="image",
+                    data=result["base64_data"],
+                    mimeType="image/png",
+                    annotations=Annotations(audience=["user", "assistant"], priority=1.0),
+                )
+            ]
+        elif action == "screenshot_3d":
+            params = {}
+            if "view_index" in kwargs:
+                params["view_index"] = kwargs["view_index"]
+            if "dpi" in kwargs:
+                params["dpi"] = kwargs["dpi"]
+            result = await _send("get_3d_screenshot", params)
             return [
                 ImageContent(
                     type="image",

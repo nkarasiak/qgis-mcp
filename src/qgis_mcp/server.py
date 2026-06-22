@@ -722,6 +722,27 @@ async def get_canvas_screenshot(ctx: Context) -> list:
     ]
 
 
+@mcp.tool(
+    title="Get 3D Screenshot",
+    annotations=ToolAnnotations(readOnlyHint=True),
+    description="Capture an OPEN 3D Map View as an inline image. Reuses the open view's "
+    "scene + camera, rendered via a print-layout 3D map item (the 2D get_canvas_screenshot "
+    "cannot capture the OpenGL 3D view). Requires a 3D map view to be open in QGIS "
+    "(View > 3D Map Views > New 3D Map View). view_index selects which view when several "
+    "are open; dpi controls output resolution.",
+)
+async def get_3d_screenshot(ctx: Context, view_index: int = 0, dpi: int = 96) -> list:
+    result = await _send("get_3d_screenshot", {"view_index": view_index, "dpi": dpi})
+    return [
+        ImageContent(
+            type="image",
+            data=result["base64_data"],
+            mimeType="image/png",
+            annotations=Annotations(audience=["user", "assistant"], priority=1.0),
+        )
+    ]
+
+
 # --- Raster ---
 
 
