@@ -354,6 +354,12 @@ class ComposeLayoutResult(BaseModel):
     page_size_mm: list[float]
 
 
+class DiagramMapResult(RenderResult):
+    diagram_type: str
+    value_fields: list[str]
+    n_features: int
+
+
 class BatchManifestEntry(BaseModel):
     value: str
     output_path: str
@@ -1427,6 +1433,66 @@ def qgis_render_link_density(
         min_density=result["min_density"],
         max_density=result["max_density"],
         aggregation=aggregation,
+        basemap_attribution=result.get("basemap_attribution"),
+        basemap_source=result.get("basemap_source"),
+    )
+
+
+@_maybe_tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=True
+    )
+)
+def qgis_render_diagram_map(
+    layer_path: Annotated[str, Field(description="Absolute path to a vector layer (polygons or points).")],
+    value_fields: Annotated[list[str], Field(description="Numeric fields to chart per feature (>=1). Each becomes a pie slice / bar.")],
+    output_png: Annotated[str, Field(description="Absolute path for the output PNG.")],
+    diagram_type: Annotated[Literal["pie", "bar"], Field(description="Chart drawn on each feature.")] = "pie",
+    size: Annotated[float, Field(description="Diagram size in mm.", gt=0.0, le=80.0)] = 10.0,
+    palette: Annotated[str, Field(description='Palette for the series colors (e.g. "Set2", "Dark2", "viridis").')] = "Set2",
+    extent: Annotated[list[float] | None, Field(description="Render extent [xmin, ymin, xmax, ymax] in the layer's CRS. Omit for full extent + 5%.")] = None,
+    basemap: Annotated[BasemapName, Field(description='Tile basemap under the diagrams. "none" = white background.')] = "none",
+    basemap_opacity: Annotated[float, Field(description="Tile basemap opacity 0.0-1.0.", ge=0.0, le=1.0)] = 1.0,
+    width: Annotated[int, Field(description="Image width in pixels.", ge=200, le=8000)] = 1600,
+    height: Annotated[int, Field(description="Image height in pixels.", ge=200, le=8000)] = 1200,
+    dpi: Annotated[int, Field(description="Image DPI.", ge=72, le=600)] = 150,
+) -> DiagramMapResult:
+    """Render pie/bar charts on each map feature — "chart in map". v2 workflow tool.
+
+    When to use: show a small multivariate breakdown (e.g., arrivals vs departures,
+    mode split) per zone/station directly on the map, instead of a single
+    choropleth color. Each value_field becomes a pie slice or bar.
+
+    Returns: ``DiagramMapResult`` with the diagram type, charted fields, and
+    feature count.
+
+    Chains into: ``qgis_compose_layout``, ``qgis_figures_to_pptx``.
+    """
+    from qgis_mcp_workflows.executors import get_executor
+
+    abs_layer = os.path.abspath(layer_path)
+    abs_output = os.path.abspath(output_png)
+    params = {
+        "layer_path": abs_layer,
+        "value_fields": list(value_fields),
+        "output_png": abs_output,
+        "diagram_type": diagram_type,
+        "size": size,
+        "palette": palette,
+        "extent": list(extent) if extent is not None else None,
+        "basemap_spec": _resolve_basemap(basemap, basemap_opacity),
+        "width": width,
+        "height": height,
+        "dpi": dpi,
+    }
+    result = get_executor().dispatch("render_diagram_map", params, timeout=120)
+    return DiagramMapResult(
+        output_path=result["output_path"],
+        width=result["width"], height=result["height"], dpi=result["dpi"],
+        extent=result["extent"], crs=result["crs"], n_layers=result["n_layers"],
+        diagram_type=result["diagram_type"],
+        value_fields=result["value_fields"],
+        n_features=result["n_features"],
         basemap_attribution=result.get("basemap_attribution"),
         basemap_source=result.get("basemap_source"),
     )

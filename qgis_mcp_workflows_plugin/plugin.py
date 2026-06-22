@@ -15,6 +15,11 @@ from typing import ClassVar
 from qgis.core import (
     Qgis,
     QgsApplication,
+    QgsDiagramLayerSettings,
+    QgsDiagramSettings,
+    QgsHistogramDiagram,
+    QgsPieDiagram,
+    QgsSingleCategoryDiagramRenderer,
     QgsCategorizedSymbolRenderer,
     QgsClassificationEqualInterval,
     QgsClassificationJenks,
@@ -65,7 +70,7 @@ from qgis.core import (
     QgsVectorLayer,
     QgsWkbTypes,
 )
-from qgis.PyQt.QtCore import QBuffer, QByteArray, QObject, QSize, QTimer, QUrl, QVariant
+from qgis.PyQt.QtCore import QBuffer, QByteArray, QObject, QSize, QSizeF, QTimer, QUrl, QVariant
 from qgis.PyQt.QtGui import QColor, QDesktopServices, QIcon
 from qgis.PyQt.QtWidgets import (
     QAction,
@@ -287,6 +292,7 @@ class QgisMCPServer(QObject):
                 "render_map_base64": self.render_map_base64,
                 "render_layers_to_path": self.render_layers_to_path,
                 "render_choropleth": self.render_choropleth,
+                "render_diagram_map": self.render_diagram_map,
                 "render_trajectory": self.render_trajectory,
                 "render_od_flows": self.render_od_flows,
                 "render_link_density": self.render_link_density,
@@ -1955,6 +1961,143 @@ class QgisMCPServer(QObject):
                 "min_flow_rendered": float(min_flow) if rendered_flows else 0.0,
                 "n_unmatched_origins": unmatched_o,
                 "n_unmatched_destinations": unmatched_d,
+            }
+        finally:
+            for tid in transient_ids:
+                try:
+                    project.removeMapLayer(tid)
+                except Exception:
+                    pass
+
+    def render_diagram_map(
+        self,
+        layer_path,
+        value_fields,
+        output_png,
+        diagram_type="pie",
+        size=10.0,
+        palette="Set2",
+        extent=None,
+        basemap_spec=None,
+        width=1600,
+        height=1200,
+        dpi=150,
+        background="white",
+        **kwargs,
+    ):
+        """Render pie/bar charts on each feature (chart-in-map). v2 workflow tool.
+
+        Loads the layer transiently, applies a QgsDiagramRenderer with one
+        pie slice / bar per value_field (colored from ``palette``), over a light
+        base fill, and renders to PNG. No surviving project state.
+        """
+        project = QgsProject.instance()
+        transient_ids = []
+        try:
+            layer = QgsVectorLayer(layer_path, "_diagram", "ogr")
+            if not layer.isValid():
+                raise Exception(f"Layer not readable: {layer_path}")
+            project.addMapLayer(layer)
+            transient_ids.append(layer.id())
+
+            field_names = [fld.name() for fld in layer.fields()]
+            for vf in value_fields:
+                if vf not in field_names:
+                    raise Exception(f"Field {vf!r} not found; available: {field_names}")
+
+            base = QgsSymbol.defaultSymbol(layer.geometryType())
+            try:
+                base.setColor(QColor(236, 236, 236))
+            except Exception:
+                pass
+            layer.setRenderer(QgsSingleSymbolRenderer(base))
+
+            ramp = self._resolve_color_ramp(palette)
+            n = len(value_fields)
+            colors = [ramp.color((i / (n - 1)) if n > 1 else 0.0) for i in range(n)]
+
+            diagram = QgsPieDiagram() if diagram_type == "pie" else QgsHistogramDiagram()
+            ds = QgsDiagramSettings()
+            ds.enabled = True
+            ds.categoryAttributes = list(value_fields)
+            ds.categoryColors = colors
+            ds.size = QSizeF(float(size), float(size))
+            try:
+                ds.sizeType = QgsUnitTypes.RenderMillimeters
+            except Exception:
+                pass
+            ds.penColor = QColor("white")
+            ds.penWidth = 0.2
+
+            dr = QgsSingleCategoryDiagramRenderer()
+            dr.setDiagram(diagram)
+            dr.setDiagramSettings(ds)
+            layer.setDiagramRenderer(dr)
+
+            dls = QgsDiagramLayerSettings()
+            try:
+                dls.setPlacement(QgsDiagramLayerSettings.OverPoint)
+            except Exception:
+                try:
+                    dls.placement = QgsDiagramLayerSettings.OverPoint
+                except Exception:
+                    pass
+            layer.setDiagramLayerSettings(dls)
+
+            tile_bm, basemap_source = self._load_basemap_layer(
+                basemap_spec, project, transient_ids
+            )
+            ordered_layers = [layer]
+            if tile_bm is not None:
+                ordered_layers.append(tile_bm)
+
+            if extent is not None:
+                extent_rect = QgsRectangle(extent[0], extent[1], extent[2], extent[3])
+            else:
+                extent_rect = QgsRectangle(layer.extent())
+                dx, dy = extent_rect.width() * 0.05, extent_rect.height() * 0.05
+                extent_rect = QgsRectangle(
+                    extent_rect.xMinimum() - dx, extent_rect.yMinimum() - dy,
+                    extent_rect.xMaximum() + dx, extent_rect.yMaximum() + dy,
+                )
+
+            ms = QgsMapSettings()
+            ms.setLayers(ordered_layers)
+            ms.setOutputSize(QSize(int(width), int(height)))
+            ms.setOutputDpi(int(dpi))
+            if tile_bm is not None:
+                out_crs = QgsCoordinateReferenceSystem("EPSG:3857")
+                extent_rect = self._reproject_extent_to_3857(extent_rect, layer.crs())
+                ms.setDestinationCrs(out_crs)
+            else:
+                out_crs = layer.crs()
+                ms.setDestinationCrs(out_crs)
+            ms.setExtent(extent_rect)
+            color = QColor(background)
+            if not color.isValid():
+                color = QColor(255, 255, 255)
+            ms.setBackgroundColor(color)
+
+            job = QgsMapRendererParallelJob(ms)
+            job.start()
+            job.waitForFinished()
+            if not job.renderedImage().save(output_png):
+                raise Exception(f"Failed to save render to {output_png}")
+
+            return {
+                "output_path": output_png,
+                "width": int(width), "height": int(height), "dpi": int(dpi),
+                "extent": [
+                    extent_rect.xMinimum(), extent_rect.yMinimum(),
+                    extent_rect.xMaximum(), extent_rect.yMaximum(),
+                ],
+                "crs": out_crs.authid() or "EPSG:4326",
+                "n_layers": len(ordered_layers),
+                "diagram_type": diagram_type,
+                "value_fields": list(value_fields),
+                "n_features": layer.featureCount(),
+                "basemap_attribution": basemap_spec.get("attribution") if basemap_spec else None,
+                "basemap_source": basemap_source,
             }
         finally:
             for tid in transient_ids:
