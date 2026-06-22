@@ -1089,6 +1089,49 @@ class QgisMCPServer(QObject):
         "pretty": QgsClassificationPrettyBreaks,
     }
 
+    def _load_basemap_layer(self, basemap_spec, project, transient_ids):
+        """Load an XYZ tile basemap from a basemap_spec, or return (None, ...).
+
+        Returns ``(layer_or_None, source_label_or_None)``. On success the raster
+        layer is added to ``project`` and its id appended to ``transient_ids`` so
+        the existing ``finally`` teardown removes it. The user's project keeps no
+        surviving state. source_label is for the response (e.g. "positron (live xyz)").
+        """
+        if not basemap_spec:
+            return None, None
+        name = basemap_spec.get("name", "basemap")
+        url = basemap_spec["url"]
+        zmin = basemap_spec.get("zmin", 0)
+        zmax = basemap_spec.get("zmax", 19)
+        uri = f"type=xyz&url={url}&zmax={zmax}&zmin={zmin}"
+        bm = QgsRasterLayer(uri, "_basemap_xyz", "wms")
+        if not bm.isValid():
+            QgsMessageLog.logMessage(
+                f"Basemap {name!r} failed to load: {uri}", self.LOG_TAG, MSG_WARNING
+            )
+            return None, f"{name} (failed)"
+        opacity = float(basemap_spec.get("opacity", 1.0))
+        if opacity < 1.0:
+            try:
+                bm.renderer().setOpacity(opacity)
+            except Exception:
+                pass
+        project.addMapLayer(bm)
+        transient_ids.append(bm.id())
+        return bm, f"{name} (live xyz)"
+
+    def _reproject_extent_to_3857(self, rect, src_crs):
+        """Reproject a QgsRectangle from src_crs to EPSG:3857 (Web Mercator).
+
+        XYZ tiles are served in 3857; the map canvas CRS and extent must match
+        the tiles or the data and basemap won't align.
+        """
+        dest = QgsCoordinateReferenceSystem("EPSG:3857")
+        if src_crs == dest:
+            return QgsRectangle(rect)
+        xform = QgsCoordinateTransform(src_crs, dest, QgsProject.instance())
+        return xform.transformBoundingBox(rect)
+
     def render_choropleth(
         self,
         zones_path,
@@ -1100,6 +1143,7 @@ class QgisMCPServer(QObject):
         mode="quantile",
         palette="YlOrRd",
         basemap_paths=None,
+        basemap_spec=None,
         width=1600,
         height=1200,
         dpi=150,
@@ -1234,7 +1278,13 @@ class QgisMCPServer(QObject):
                         f"Basemap skipped (invalid): {bm_path}", self.LOG_TAG, MSG_WARNING
                     )
 
-            ordered_layers = [mem, *basemap_layers]  # top→bottom for setLayers
+            tile_bm, basemap_source = self._load_basemap_layer(
+                basemap_spec, project, transient_ids
+            )
+            # top→bottom for setLayers: data, vector basemaps, then tile basemap at the very bottom
+            ordered_layers = [mem, *basemap_layers]
+            if tile_bm is not None:
+                ordered_layers.append(tile_bm)
 
             extent_rect = QgsRectangle(mem.extent())
             for bm in basemap_layers:
@@ -1248,10 +1298,19 @@ class QgisMCPServer(QObject):
 
             ms = QgsMapSettings()
             ms.setLayers(ordered_layers)
-            ms.setExtent(extent_rect)
             ms.setOutputSize(QSize(int(width), int(height)))
             ms.setOutputDpi(int(dpi))
-            ms.setDestinationCrs(mem.crs())
+            # A tile basemap forces Web Mercator so the XYZ tiles stay crisp and
+            # aligned; the vector data reprojects on the fly. Without a basemap,
+            # keep the legacy data-CRS behavior so existing figures are byte-stable.
+            if tile_bm is not None:
+                out_crs = QgsCoordinateReferenceSystem("EPSG:3857")
+                extent_rect = self._reproject_extent_to_3857(extent_rect, mem.crs())
+                ms.setDestinationCrs(out_crs)
+            else:
+                out_crs = mem.crs()
+                ms.setDestinationCrs(out_crs)
+            ms.setExtent(extent_rect)
             color = QColor(background)
             if not color.isValid():
                 color = QColor(255, 255, 255)
@@ -1273,7 +1332,7 @@ class QgisMCPServer(QObject):
                     extent_rect.xMinimum(), extent_rect.yMinimum(),
                     extent_rect.xMaximum(), extent_rect.yMaximum(),
                 ],
-                "crs": mem.crs().authid(),
+                "crs": out_crs.authid(),
                 "n_layers": len(ordered_layers),
                 "field": value_field,
                 "n_classes": len(ranges),
@@ -1284,6 +1343,8 @@ class QgisMCPServer(QObject):
                 "n_features": len(values_only),
                 "n_matched": n_matched,
                 "n_unmatched": n_unmatched,
+                "basemap_attribution": basemap_spec.get("attribution") if basemap_spec else None,
+                "basemap_source": basemap_source,
             }
         finally:
             for tid in transient_ids:

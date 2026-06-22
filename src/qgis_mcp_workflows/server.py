@@ -209,6 +209,66 @@ class GraduatedStyleResult(StyleResult):
     mode: str
 
 
+# ---------------------------------------------------------------------------
+# Basemap tile presets — no-API-key XYZ providers drawn UNDER the data.
+# Each entry: (url_template, attribution, zmax). Esri REST tiles use {z}/{y}/{x}
+# order; that ordering is encoded in the template and passed to the plugin verbatim.
+# URLs sourced from the xyzservices registry; copied (not imported) to keep the
+# live-XYZ path dependency-free.
+# ---------------------------------------------------------------------------
+
+BasemapName = Literal["none", "positron", "dark_matter", "voyager", "osm", "esri_imagery"]
+
+_BASEMAP_PRESETS: dict[str, tuple[str, str, int]] = {
+    "positron": (
+        "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+        "© OpenStreetMap contributors © CARTO",
+        20,
+    ),
+    "dark_matter": (
+        "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+        "© OpenStreetMap contributors © CARTO",
+        20,
+    ),
+    "voyager": (
+        "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
+        "© OpenStreetMap contributors © CARTO",
+        20,
+    ),
+    "osm": (
+        "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "© OpenStreetMap contributors",
+        19,
+    ),
+    "esri_imagery": (
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        "Esri, Maxar, Earthstar Geographics",
+        19,
+    ),
+}
+
+
+def _resolve_basemap(basemap: str, opacity: float) -> dict | None:
+    """Resolve a basemap preset name into the ``basemap_spec`` sent to the plugin.
+
+    ``"none"`` returns ``None`` (legacy white-background behavior, unchanged).
+    A known preset returns a live-XYZ spec the plugin loads via
+    ``QgsRasterLayer(type=xyz, provider="wms")``.
+    """
+    if basemap == "none":
+        return None
+    url, attribution, zmax = _BASEMAP_PRESETS[basemap]
+    return {
+        "kind": "xyz",
+        "name": basemap,
+        "url": url,
+        "zmin": 0,
+        "zmax": zmax,
+        "attribution": attribution,
+        "opacity": float(opacity),
+    }
+
+
 class RenderResult(BaseModel):
     output_path: str
     width: int
@@ -217,6 +277,8 @@ class RenderResult(BaseModel):
     extent: list[float]
     crs: str
     n_layers: int
+    basemap_attribution: str | None = None
+    basemap_source: str | None = None
 
 
 class JoinResult(BaseModel):
@@ -702,7 +764,9 @@ def qgis_render_choropleth(
     palette: Annotated[str, Field(description='Sequential colorbrewer palette, e.g. "YlOrRd", "Blues", "Viridis".')] = "YlOrRd",
     title: Annotated[str | None, Field(description="Optional title rendered at the top of the figure.")] = None,
     legend: Annotated[bool, Field(description="Render a legend with class breaks.")] = True,
-    basemap_paths: Annotated[list[str] | None, Field(description="Optional basemap layers drawn under the choropleth (e.g., coastline, rivers, prefecture borders).")] = None,
+    basemap_paths: Annotated[list[str] | None, Field(description="Optional vector basemap layers drawn under the choropleth (e.g., coastline, rivers, prefecture borders).")] = None,
+    basemap: Annotated[BasemapName, Field(description='Tile basemap drawn under the data for real-world context. "positron"/"voyager" = neutral grey (best for choropleths), "dark_matter" = dark, "osm" = streets, "esri_imagery" = satellite. "none" keeps the legacy white background. No API key needed.')] = "none",
+    basemap_opacity: Annotated[float, Field(description="Opacity of the tile basemap, 0.0–1.0. Use 0.5–0.8 to mute it so the choropleth colors read on top.", ge=0.0, le=1.0)] = 1.0,
     width: Annotated[int, Field(description="Image width in pixels.", ge=200, le=8000)] = 1600,
     height: Annotated[int, Field(description="Image height in pixels.", ge=200, le=8000)] = 1200,
     dpi: Annotated[int, Field(description="Image DPI.", ge=72, le=600)] = 150,
@@ -769,6 +833,7 @@ def qgis_render_choropleth(
         "mode": mode,
         "palette": palette,
         "basemap_paths": abs_basemaps,
+        "basemap_spec": _resolve_basemap(basemap, basemap_opacity),
         "width": width,
         "height": height,
         "dpi": dpi,
@@ -805,6 +870,8 @@ def qgis_render_choropleth(
         max_value=result["max_value"],
         n_features=result["n_features"],
         join=join_block,
+        basemap_attribution=result.get("basemap_attribution"),
+        basemap_source=result.get("basemap_source"),
     )
 
 
