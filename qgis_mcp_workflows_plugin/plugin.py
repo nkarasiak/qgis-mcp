@@ -1215,6 +1215,31 @@ class QgisMCPServer(QObject):
         renderer = QgsGraduatedSymbolRenderer(field, ranges)
         return renderer, list(bc.breaks), bc.one_sided
 
+    def _apply_label_halo(self, layer, field, size=9.0, buffer_mm=1.0):
+        """Enable simple labeling on ``field`` with a white halo (text buffer)."""
+        from qgis.core import (
+            QgsPalLayerSettings,
+            QgsTextBufferSettings,
+            QgsTextFormat,
+            QgsVectorLayerSimpleLabeling,
+        )
+
+        settings = QgsPalLayerSettings()
+        settings.fieldName = field
+        fmt = QgsTextFormat()
+        try:
+            fmt.setSize(float(size))
+        except Exception:
+            pass
+        buf = QgsTextBufferSettings()
+        buf.setEnabled(True)
+        buf.setSize(float(buffer_mm))
+        buf.setColor(QColor("white"))
+        fmt.setBuffer(buf)
+        settings.setFormat(fmt)
+        layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
+        layer.setLabelsEnabled(True)
+
     def render_choropleth(
         self,
         zones_path,
@@ -1227,6 +1252,7 @@ class QgisMCPServer(QObject):
         palette="YlOrRd",
         diverging=False,
         center=0.0,
+        label_field=None,
         basemap_paths=None,
         basemap_spec=None,
         width=1600,
@@ -1274,7 +1300,11 @@ class QgisMCPServer(QObject):
                 )
 
             crs_authid = zones.crs().authid() or "EPSG:4326"
-            uri = f"Polygon?crs={crs_authid}&field={join_field}:string&field={value_field}:double"
+            label_clause = "&field=_label:string" if label_field else ""
+            uri = (
+                f"Polygon?crs={crs_authid}"
+                f"&field={join_field}:string&field={value_field}:double{label_clause}"
+            )
             mem = QgsVectorLayer(uri, "_choropleth", "memory")
             if not mem.isValid():
                 raise Exception(f"Failed to create memory layer: {uri}")
@@ -1284,6 +1314,7 @@ class QgisMCPServer(QObject):
             mem_provider = mem.dataProvider()
             join_idx_mem = mem.fields().indexOf(join_field)
             value_idx_mem = mem.fields().indexOf(value_field)
+            label_idx_mem = mem.fields().indexOf("_label") if label_field else -1
             n_matched = 0
             n_unmatched = 0
             sample_layer_keys: list[str] = []
@@ -1308,6 +1339,12 @@ class QgisMCPServer(QObject):
                 new_f.setGeometry(QgsGeometry(f.geometry()))
                 new_f.setAttribute(join_idx_mem, key_str)
                 new_f.setAttribute(value_idx_mem, val if val is not None else None)
+                if label_idx_mem >= 0:
+                    try:
+                        lab = f.attribute(label_field)
+                    except Exception:
+                        lab = None
+                    new_f.setAttribute(label_idx_mem, str(lab) if lab is not None else "")
                 new_features.append(new_f)
 
             ok, _ = mem_provider.addFeatures(new_features)
@@ -1327,6 +1364,8 @@ class QgisMCPServer(QObject):
                 palette=palette, diverging=diverging, center=center,
             )
             mem.setRenderer(renderer)
+            if label_field:
+                self._apply_label_halo(mem, "_label")
             ranges = list(renderer.ranges())
 
             values_only = []

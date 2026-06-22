@@ -193,3 +193,12 @@ def test_diverging_response_fields_echoed(fake_executor):
     assert result.diverging is True
     assert result.center == 0.0
     assert result.diverging_one_sided is False
+
+
+def test_label_field_threads_to_plugin(fake_executor):
+    fake_executor.responses["render_choropleth"] = _ok_response()
+    qgis_render_choropleth(
+        zones_path="/z.shp", value_field="am_net", output_png="/o.png",
+        label_field="city",
+    )
+    assert fake_executor.calls[0][1]["label_field"] == "city"
