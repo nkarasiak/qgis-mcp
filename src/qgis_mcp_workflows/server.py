@@ -346,6 +346,14 @@ class ExportResult(BaseModel):
     layout_name: str
 
 
+class ComposeLayoutResult(BaseModel):
+    output_path: str
+    format: str
+    n_layers: int
+    items: list[str]
+    page_size_mm: list[float]
+
+
 class BatchManifestEntry(BaseModel):
     value: str
     output_path: str
@@ -1483,6 +1491,59 @@ def qgis_export_layout(
         format=result["format"],
         n_pages=result["n_pages"],
         layout_name=result["layout_name"],
+    )
+
+
+@_maybe_tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=True
+    )
+)
+def qgis_compose_layout(
+    layer_paths: Annotated[list[str], Field(description="Absolute paths to layers in bottom->top draw order (vector or raster). Styling comes from each layer's own saved style; default symbology otherwise.")],
+    output_path: Annotated[str, Field(description="Absolute output path; format inferred from extension (.png / .pdf / .svg).")],
+    title: Annotated[str | None, Field(description="Optional title across the top of the page.")] = None,
+    extent: Annotated[list[float] | None, Field(description="Map extent [xmin, ymin, xmax, ymax] in the layers' CRS. If omitted, uses the union of layer extents + 5% padding.")] = None,
+    page: Annotated[Literal["a4_landscape", "a4_portrait", "a3_landscape", "square"], Field(description="Page size preset.")] = "a4_landscape",
+    legend: Annotated[bool, Field(description="Add a legend linked to the map.")] = True,
+    scale_bar: Annotated[bool, Field(description="Add a scale bar linked to the map.")] = True,
+    north_arrow: Annotated[bool, Field(description="Add a north arrow from QGIS's bundled SVGs.")] = True,
+    dpi: Annotated[int, Field(description="Export DPI.", ge=72, le=600)] = 300,
+) -> ComposeLayoutResult:
+    """Compose a deck-ready print layout from layers and export it. v2 workflow tool.
+
+    When to use: turn one or more data/rendered layers into a publication figure
+    with a titled map panel plus a linked legend, scale bar and north arrow — the
+    gap that ``qgis_export_layout`` (which only exports pre-authored .qgz layouts)
+    leaves open. Single panel for now; multi-panel / inset is a future extension.
+
+    Returns: ``ComposeLayoutResult`` with output path, format, layer count, the
+    furniture items added, and page size in mm.
+
+    Chains into: ``qgis_figures_to_pptx``.
+    """
+    from qgis_mcp_workflows.executors import get_executor
+
+    abs_layers = [os.path.abspath(p) for p in layer_paths]
+    abs_output = os.path.abspath(output_path)
+    params = {
+        "layer_paths": abs_layers,
+        "output_path": abs_output,
+        "title": title,
+        "extent": list(extent) if extent is not None else None,
+        "page": page,
+        "legend": legend,
+        "scale_bar": scale_bar,
+        "north_arrow": north_arrow,
+        "dpi": dpi,
+    }
+    result = get_executor().dispatch("compose_layout", params, timeout=120)
+    return ComposeLayoutResult(
+        output_path=result["output_path"],
+        format=result["format"],
+        n_layers=result["n_layers"],
+        items=result["items"],
+        page_size_mm=result["page_size_mm"],
     )
 
 

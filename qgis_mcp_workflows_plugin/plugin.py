@@ -34,6 +34,15 @@ from qgis.core import (
     QgsLayerTreeGroup,
     QgsLayerTreeLayer,
     QgsLayoutExporter,
+    QgsLayoutItemLabel,
+    QgsLayoutItemLegend,
+    QgsLayoutItemMap,
+    QgsLayoutItemPicture,
+    QgsLayoutItemScaleBar,
+    QgsLayoutPoint,
+    QgsLayoutSize,
+    QgsPrintLayout,
+    QgsUnitTypes,
     QgsArrowSymbolLayer,
     QgsFillSymbol,
     QgsLineSymbol,
@@ -306,6 +315,7 @@ class QgisMCPServer(QObject):
                 "find_layer": self.find_layer,
                 "list_layouts": self.list_layouts,
                 "export_layout": self.export_layout,
+                "compose_layout": self.compose_layout,
                 # Phase 3 — Plugin development & system management
                 "get_message_log": self.get_message_log,
                 "list_plugins": self.list_plugins,
@@ -2458,6 +2468,167 @@ class QgisMCPServer(QObject):
                 }
             )
         return {"layouts": layouts, "count": len(layouts)}
+
+    def compose_layout(
+        self,
+        layer_paths,
+        output_path,
+        title=None,
+        extent=None,
+        page="a4_landscape",
+        legend=True,
+        scale_bar=True,
+        north_arrow=True,
+        dpi=300,
+        **kwargs,
+    ):
+        """Build a print layout programmatically and export it. v2 workflow tool.
+
+        Loads layer_paths transiently (bottom->top), lays out a single map panel
+        with optional title, legend, scale bar and north arrow, exports to
+        PNG/PDF/SVG (by output_path extension). The user's project keeps no state.
+        """
+        project = QgsProject.instance()
+        transient_ids = []
+        try:
+            layers = []
+            for p in layer_paths or []:
+                lyr = QgsVectorLayer(p, os.path.basename(p), "ogr")
+                if not lyr.isValid():
+                    lyr = QgsRasterLayer(p, os.path.basename(p))
+                if not lyr.isValid():
+                    QgsMessageLog.logMessage(
+                        f"compose_layout: skipped invalid layer {p}", self.LOG_TAG, MSG_WARNING
+                    )
+                    continue
+                project.addMapLayer(lyr)
+                transient_ids.append(lyr.id())
+                layers.append(lyr)
+            if not layers:
+                raise Exception("compose_layout: no valid layers in layer_paths")
+
+            if extent is not None:
+                rect = QgsRectangle(extent[0], extent[1], extent[2], extent[3])
+            else:
+                rect = QgsRectangle(layers[0].extent())
+                for lyr in layers[1:]:
+                    rect.combineExtentWith(lyr.extent())
+                dx, dy = rect.width() * 0.05, rect.height() * 0.05
+                rect = QgsRectangle(
+                    rect.xMinimum() - dx, rect.yMinimum() - dy,
+                    rect.xMaximum() + dx, rect.yMaximum() + dy,
+                )
+
+            pages = {
+                "a4_landscape": (297, 210), "a4_portrait": (210, 297),
+                "a3_landscape": (420, 297), "square": (250, 250),
+            }
+            pw, ph = pages.get(page, (297, 210))
+            mm = QgsUnitTypes.LayoutMillimeters
+
+            layout = QgsPrintLayout(project)
+            layout.initializeDefaults()
+            layout.pageCollection().page(0).setPageSize(QgsLayoutSize(pw, ph, mm))
+
+            margin = 8.0
+            title_h = 12.0 if title else 0.0
+            map_w = pw - 2 * margin
+            map_h = ph - 2 * margin - title_h
+
+            m = QgsLayoutItemMap(layout)
+            layout.addLayoutItem(m)
+            m.attemptMove(QgsLayoutPoint(margin, margin + title_h, mm))
+            m.attemptResize(QgsLayoutSize(map_w, map_h, mm))
+            m.setLayers(list(reversed(layers)))  # paths are bottom->top; setLayers wants top first
+            m.setCrs(layers[0].crs())
+            m.setExtent(rect)
+            items = ["map"]
+
+            if title:
+                lbl = QgsLayoutItemLabel(layout)
+                lbl.setText(str(title))
+                try:
+                    from qgis.core import QgsTextFormat
+
+                    tf = QgsTextFormat()
+                    fnt = tf.font()
+                    fnt.setBold(True)
+                    tf.setFont(fnt)
+                    tf.setSize(18)
+                    lbl.setTextFormat(tf)
+                except Exception:
+                    font = lbl.font()
+                    font.setPointSize(18)
+                    font.setBold(True)
+                    lbl.setFont(font)
+                layout.addLayoutItem(lbl)
+                lbl.attemptMove(QgsLayoutPoint(margin, 3.0, mm))
+                lbl.attemptResize(QgsLayoutSize(map_w, title_h, mm))
+                items.append("title")
+
+            if legend:
+                leg = QgsLayoutItemLegend(layout)
+                leg.setLinkedMap(m)
+                layout.addLayoutItem(leg)
+                leg.attemptMove(QgsLayoutPoint(pw - margin - 46, margin + title_h + 4, mm))
+                items.append("legend")
+
+            if scale_bar:
+                sb = QgsLayoutItemScaleBar(layout)
+                sb.setLinkedMap(m)
+                try:
+                    sb.applyDefaultSize()
+                except Exception:
+                    pass
+                layout.addLayoutItem(sb)
+                sb.attemptMove(QgsLayoutPoint(margin + 2, ph - margin - 14, mm))
+                items.append("scalebar")
+
+            if north_arrow:
+                svg_path = None
+                for base in QgsApplication.svgPaths():
+                    cand = os.path.join(base, "arrows", "NorthArrow_02.svg")
+                    if os.path.exists(cand):
+                        svg_path = cand
+                        break
+                if svg_path:
+                    pic = QgsLayoutItemPicture(layout)
+                    pic.setPicturePath(svg_path)
+                    layout.addLayoutItem(pic)
+                    pic.attemptMove(QgsLayoutPoint(pw - margin - 16, margin + title_h + 4, mm))
+                    pic.attemptResize(QgsLayoutSize(12, 12, mm))
+                    items.append("north_arrow")
+
+            exporter = QgsLayoutExporter(layout)
+            fmt = output_path.rsplit(".", 1)[-1].lower() if "." in output_path else "png"
+            if fmt == "pdf":
+                settings = QgsLayoutExporter.PdfExportSettings()
+                settings.dpi = int(dpi)
+                res = exporter.exportToPdf(output_path, settings)
+            elif fmt == "svg":
+                settings = QgsLayoutExporter.SvgExportSettings()
+                settings.dpi = int(dpi)
+                res = exporter.exportToSvg(output_path, settings)
+            else:
+                settings = QgsLayoutExporter.ImageExportSettings()
+                settings.dpi = int(dpi)
+                res = exporter.exportToImage(output_path, settings)
+            if res != LAYOUT_SUCCESS:
+                raise Exception(f"compose_layout export failed with code {res}")
+
+            return {
+                "output_path": output_path,
+                "format": fmt,
+                "n_layers": len(layers),
+                "items": items,
+                "page_size_mm": [float(pw), float(ph)],
+            }
+        finally:
+            for tid in transient_ids:
+                try:
+                    project.removeMapLayer(tid)
+                except Exception:
+                    pass
 
     def export_layout(
         self,
