@@ -179,3 +179,20 @@ def test_default_sends_no_basemap_spec(fake_executor):
         od_csv=str(TINY_OD), zones_layer_path=str(TINY_ZONES), output_png="/tmp/od.png",
     )
     assert fake_executor.calls[0][1]["basemap_spec"] is None
+
+
+def test_arc_style_threads_to_plugin(fake_executor):
+    fake_executor.responses["render_od_flows"] = _ok_response()
+    qgis_render_od_flows(
+        od_csv=str(TINY_OD), zones_layer_path=str(TINY_ZONES),
+        output_png="/tmp/od.png", arc_style="curved",
+    )
+    assert fake_executor.calls[0][1]["arc_style"] == "curved"
+
+
+def test_default_arc_style_is_line(fake_executor):
+    fake_executor.responses["render_od_flows"] = _ok_response()
+    qgis_render_od_flows(
+        od_csv=str(TINY_OD), zones_layer_path=str(TINY_ZONES), output_png="/tmp/od.png",
+    )
+    assert fake_executor.calls[0][1]["arc_style"] == "line"

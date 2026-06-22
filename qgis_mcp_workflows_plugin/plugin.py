@@ -34,6 +34,8 @@ from qgis.core import (
     QgsLayerTreeGroup,
     QgsLayerTreeLayer,
     QgsLayoutExporter,
+    QgsArrowSymbolLayer,
+    QgsFillSymbol,
     QgsLineSymbol,
     QgsMapRendererParallelJob,
     QgsMapSettings,
@@ -1687,12 +1689,60 @@ class QgisMCPServer(QObject):
         renderer = QgsCategorizedSymbolRenderer(field, categories)
         layer.setRenderer(renderer)
 
+    def _build_od_arrow_symbol(self, denom, curved=False):
+        """Directional arrow line symbol; width + head scale with trip_count.
+
+        ``denom`` is the max flow (linear scaling). ``curved`` bends the arc.
+        Degrades to a static arrow if the data-defined / curve API is absent
+        (older QGIS), so the render never hard-fails on symbology.
+        """
+        arrow = QgsArrowSymbolLayer()
+        for setter, value in (("setIsCurved", bool(curved)), ("setIsRepeated", False)):
+            try:
+                getattr(arrow, setter)(value)
+            except Exception:
+                pass
+        fill = QgsFillSymbol.createSimple({"color": "#1f78b4", "outline_style": "no"})
+        try:
+            fill.setOpacity(0.85)
+        except Exception:
+            pass
+        arrow.setSubSymbol(fill)
+        width_expr = f'"trip_count" / {denom} * 3.0 + 0.4'
+        head_expr = f'"trip_count" / {denom} * 4.0 + 1.4'
+        dd_ok = False
+        try:
+            arrow.setDataDefinedProperty(
+                QgsSymbolLayer.PropertyArrowWidth, QgsProperty.fromExpression(width_expr)
+            )
+            arrow.setDataDefinedProperty(
+                QgsSymbolLayer.PropertyArrowHeadLength, QgsProperty.fromExpression(head_expr)
+            )
+            arrow.setDataDefinedProperty(
+                QgsSymbolLayer.PropertyArrowHeadThickness, QgsProperty.fromExpression(head_expr)
+            )
+            dd_ok = True
+        except Exception:
+            pass
+        if not dd_ok:
+            for setter, value in (
+                ("setArrowWidth", 1.2), ("setHeadLength", 3.0), ("setHeadThickness", 3.0)
+            ):
+                try:
+                    getattr(arrow, setter)(value)
+                except Exception:
+                    pass
+        symbol = QgsLineSymbol()
+        symbol.changeSymbolLayer(0, arrow)
+        return symbol
+
     def render_od_flows(
         self,
         output_png,
         zones_path,
         zone_id_field="zone_id",
         flows=None,
+        arc_style="line",
         basemap_paths=None,
         basemap_spec=None,
         width=1600,
@@ -1770,21 +1820,23 @@ class QgisMCPServer(QObject):
             mem.dataProvider().addFeatures(new_features)
             mem.updateExtents()
 
-            # Line symbol with data-defined stroke width based on trip_count.
-            symbol = QgsLineSymbol.createSimple({"line_color": "#1f78b4", "line_width": "0.4"})
-            symbol_layer = symbol.symbolLayer(0)
-            width_expr = f'"trip_count" / {max(max_flow, 1e-9)} * 4.0 + 0.3'
-            try:
-                symbol_layer.setDataDefinedProperty(
-                    QgsSymbolLayer.PropertyStrokeWidth,
-                    QgsProperty.fromExpression(width_expr),
-                )
-            except Exception:
-                # Older QGIS API surface; fall back to a uniform medium width.
-                QgsMessageLog.logMessage(
-                    "data-defined stroke width unavailable; using uniform 1.0",
-                    self.LOG_TAG, MSG_WARNING,
-                )
+            # Symbol: straight line (default) or a directional arrow that can curve.
+            denom = max(max_flow, 1e-9)
+            if arc_style in ("arrow", "curved"):
+                symbol = self._build_od_arrow_symbol(denom, curved=(arc_style == "curved"))
+            else:
+                symbol = QgsLineSymbol.createSimple({"line_color": "#1f78b4", "line_width": "0.4"})
+                width_expr = f'"trip_count" / {denom} * 4.0 + 0.3'
+                try:
+                    symbol.symbolLayer(0).setDataDefinedProperty(
+                        QgsSymbolLayer.PropertyStrokeWidth,
+                        QgsProperty.fromExpression(width_expr),
+                    )
+                except Exception:
+                    QgsMessageLog.logMessage(
+                        "data-defined stroke width unavailable; using uniform width",
+                        self.LOG_TAG, MSG_WARNING,
+                    )
             mem.setRenderer(QgsSingleSymbolRenderer(symbol))
 
             basemap_layers = []
