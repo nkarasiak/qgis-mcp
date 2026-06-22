@@ -1210,7 +1210,9 @@ def qgis_render_od_flows(
     value_col: Annotated[str, Field(description="Flow magnitude column. Arc widths scale linearly with this.")] = "trip_count",
     zone_id_field: Annotated[str, Field(description="Zone identifier field on zones_layer_path. Must match origin_col / dest_col values.")] = "zone_id",
     top_n: Annotated[int | None, Field(description="Render only the top-N flows by value. None renders all matched flows.")] = None,
-    basemap_paths: Annotated[list[str] | None, Field(description="Optional basemap layers drawn under arcs.")] = None,
+    basemap_paths: Annotated[list[str] | None, Field(description="Optional vector basemap layers drawn under arcs.")] = None,
+    basemap: Annotated[BasemapName, Field(description='Tile basemap drawn under the arcs ("positron"/"voyager"/"dark_matter"/"osm"/"esri_imagery"). "none" keeps the legacy white background. No API key needed.')] = "none",
+    basemap_opacity: Annotated[float, Field(description="Opacity of the tile basemap, 0.0-1.0.", ge=0.0, le=1.0)] = 1.0,
     width: Annotated[int, Field(description="Image width in pixels.", ge=200, le=8000)] = 1600,
     height: Annotated[int, Field(description="Image height in pixels.", ge=200, le=8000)] = 1200,
     dpi: Annotated[int, Field(description="Image DPI.", ge=72, le=600)] = 150,
@@ -1241,6 +1243,7 @@ def qgis_render_od_flows(
     abs_zones = os.path.abspath(zones_layer_path)
     abs_output = os.path.abspath(output_png)
     abs_basemaps = [os.path.abspath(p) for p in (basemap_paths or [])]
+    basemap_spec = _resolve_basemap(basemap, basemap_opacity)
 
     with open(abs_od, encoding="utf-8", newline="") as f:
         reader = _csv.DictReader(f)
@@ -1274,6 +1277,7 @@ def qgis_render_od_flows(
         "flows": flows,
         "zone_id_field": zone_id_field,
         "basemap_paths": abs_basemaps,
+        "basemap_spec": basemap_spec,
         "width": width,
         "height": height,
         "dpi": dpi,
@@ -1290,6 +1294,8 @@ def qgis_render_od_flows(
         min_flow_rendered=result["min_flow_rendered"],
         n_unmatched_origins=result["n_unmatched_origins"],
         n_unmatched_destinations=result["n_unmatched_destinations"],
+        basemap_attribution=result.get("basemap_attribution"),
+        basemap_source=result.get("basemap_source"),
     )
 
 
@@ -1311,7 +1317,9 @@ def qgis_render_link_density(
     min_density: Annotated[float, Field(description="Drop links with density below this. Use to denoise rare-traffic links.", ge=0.0)] = 1.0,
     top_n: Annotated[int | None, Field(description="Render only the top-N densest links. None = all matched links.")] = None,
     extent: Annotated[list[float] | None, Field(description="Render extent [xmin, ymin, xmax, ymax] in EPSG:4326. If omitted, uses DRM layer extent.")] = None,
-    basemap_paths: Annotated[list[str] | None, Field(description="Optional basemap layers drawn under links.")] = None,
+    basemap_paths: Annotated[list[str] | None, Field(description="Optional vector basemap layers drawn under links.")] = None,
+    basemap: Annotated[BasemapName, Field(description='Tile basemap drawn under the links ("positron"/"voyager"/"dark_matter"/"osm"/"esri_imagery"). "none" keeps the legacy white background. No API key needed.')] = "none",
+    basemap_opacity: Annotated[float, Field(description="Opacity of the tile basemap, 0.0-1.0.", ge=0.0, le=1.0)] = 1.0,
     width: Annotated[int, Field(description="Image width in pixels.", ge=200, le=8000)] = 1600,
     height: Annotated[int, Field(description="Image height in pixels.", ge=200, le=8000)] = 1200,
     dpi: Annotated[int, Field(description="Image DPI.", ge=72, le=600)] = 150,
@@ -1346,6 +1354,7 @@ def qgis_render_link_density(
     abs_output = os.path.abspath(output_png)
     abs_basemaps = [os.path.abspath(p) for p in (basemap_paths or [])]
     abs_csvs = [os.path.abspath(p) for p in trajectory_csvs]
+    basemap_spec = _resolve_basemap(basemap, basemap_opacity)
 
     if not os.path.exists(abs_drm):
         raise DRMNetworkNotFoundError(abs_drm)
@@ -1384,6 +1393,7 @@ def qgis_render_link_density(
         "palette": palette,
         "extent": list(extent) if extent is not None else None,
         "basemap_paths": abs_basemaps,
+        "basemap_spec": basemap_spec,
         "width": width,
         "height": height,
         "dpi": dpi,
@@ -1405,6 +1415,8 @@ def qgis_render_link_density(
         min_density=result["min_density"],
         max_density=result["max_density"],
         aggregation=aggregation,
+        basemap_attribution=result.get("basemap_attribution"),
+        basemap_source=result.get("basemap_source"),
     )
 
 

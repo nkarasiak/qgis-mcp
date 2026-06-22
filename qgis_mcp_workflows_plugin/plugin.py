@@ -1694,6 +1694,7 @@ class QgisMCPServer(QObject):
         zone_id_field="zone_id",
         flows=None,
         basemap_paths=None,
+        basemap_spec=None,
         width=1600,
         height=1200,
         dpi=150,
@@ -1794,7 +1795,12 @@ class QgisMCPServer(QObject):
                     transient_ids.append(bm.id())
                     basemap_layers.append(bm)
 
+            tile_bm, basemap_source = self._load_basemap_layer(
+                basemap_spec, project, transient_ids
+            )
             ordered_layers = [mem, zones, *basemap_layers]
+            if tile_bm is not None:
+                ordered_layers.append(tile_bm)
 
             extent_rect = QgsRectangle(zones.extent())
             dx = extent_rect.width() * 0.05
@@ -1806,10 +1812,16 @@ class QgisMCPServer(QObject):
 
             ms = QgsMapSettings()
             ms.setLayers(ordered_layers)
-            ms.setExtent(extent_rect)
             ms.setOutputSize(QSize(int(width), int(height)))
             ms.setOutputDpi(int(dpi))
-            ms.setDestinationCrs(zones.crs())
+            if tile_bm is not None:
+                out_crs = QgsCoordinateReferenceSystem("EPSG:3857")
+                extent_rect = self._reproject_extent_to_3857(extent_rect, zones.crs())
+                ms.setDestinationCrs(out_crs)
+            else:
+                out_crs = zones.crs()
+                ms.setDestinationCrs(out_crs)
+            ms.setExtent(extent_rect)
             color = QColor(background)
             if not color.isValid():
                 color = QColor(255, 255, 255)
@@ -1831,8 +1843,10 @@ class QgisMCPServer(QObject):
                     extent_rect.xMinimum(), extent_rect.yMinimum(),
                     extent_rect.xMaximum(), extent_rect.yMaximum(),
                 ],
-                "crs": zones.crs().authid() or "EPSG:4326",
+                "crs": out_crs.authid() or "EPSG:4326",
                 "n_layers": len(ordered_layers),
+                "basemap_attribution": basemap_spec.get("attribution") if basemap_spec else None,
+                "basemap_source": basemap_source,
                 "n_flows": len(flows),
                 "n_flows_rendered": len(rendered_flows),
                 "n_zones": len(centroids),
@@ -1861,6 +1875,7 @@ class QgisMCPServer(QObject):
         palette="YlOrRd",
         extent=None,
         basemap_paths=None,
+        basemap_spec=None,
         width=1600,
         height=1200,
         dpi=150,
@@ -1931,9 +1946,7 @@ class QgisMCPServer(QObject):
                 )
 
             # 4. Graduated renderer
-            ramp = QgsStyle.defaultStyle().colorRamp(palette)
-            if not ramp:
-                ramp = QgsStyle.defaultStyle().colorRamp("YlOrRd")
+            ramp = self._resolve_color_ramp(palette)
             symbol = QgsLineSymbol.createSimple({"line_width": "0.6"})
             renderer = QgsGraduatedSymbolRenderer(density_field)
             renderer.setSourceSymbol(symbol.clone())
@@ -1966,8 +1979,13 @@ class QgisMCPServer(QObject):
                         f"Basemap skipped (invalid): {bm_path}", self.LOG_TAG, MSG_WARNING
                     )
 
+            tile_bm, basemap_source = self._load_basemap_layer(
+                basemap_spec, project, transient_ids
+            )
             # basemaps below, DRM links on top
             ordered_layers = [drm_layer, *basemap_layers]
+            if tile_bm is not None:
+                ordered_layers.append(tile_bm)
 
             # Compute extent: explicit bbox or DRM layer extent with 5% padding
             if extent is not None:
@@ -1983,10 +2001,16 @@ class QgisMCPServer(QObject):
 
             ms = QgsMapSettings()
             ms.setLayers(ordered_layers)
-            ms.setExtent(extent_rect)
             ms.setOutputSize(QSize(int(width), int(height)))
             ms.setOutputDpi(int(dpi))
-            ms.setDestinationCrs(drm_layer.crs())
+            if tile_bm is not None:
+                out_crs = QgsCoordinateReferenceSystem("EPSG:3857")
+                extent_rect = self._reproject_extent_to_3857(extent_rect, drm_layer.crs())
+                ms.setDestinationCrs(out_crs)
+            else:
+                out_crs = drm_layer.crs()
+                ms.setDestinationCrs(out_crs)
+            ms.setExtent(extent_rect)
             ms.setBackgroundColor(QColor("white"))
 
             job = QgsMapRendererParallelJob(ms)
@@ -2005,8 +2029,10 @@ class QgisMCPServer(QObject):
                     extent_rect.xMinimum(), extent_rect.yMinimum(),
                     extent_rect.xMaximum(), extent_rect.yMaximum(),
                 ],
-                "crs": drm_layer.crs().authid() or "EPSG:4326",
+                "crs": out_crs.authid() or "EPSG:4326",
                 "n_layers": len(ordered_layers),
+                "basemap_attribution": basemap_spec.get("attribution") if basemap_spec else None,
+                "basemap_source": basemap_source,
                 "n_links_with_traffic": len(density),
                 "n_links_rendered": n_links_rendered,
                 "n_unmatched_link_ids": n_unmatched_link_ids,

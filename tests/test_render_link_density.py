@@ -189,3 +189,21 @@ def test_empty_after_filter_raises(fake_executor, tmp_path: Path):
             output_png="/tmp/x.png", min_density=99,
         )
     assert fake_executor.calls == []
+
+
+def test_basemap_preset_threads_spec(fake_executor, tmp_path: Path):
+    from qgis_mcp_workflows.server import qgis_render_link_density
+
+    traj = tmp_path / "traj.csv"
+    _write_traj_csv(traj, [{"link_id": "100001"}, {"link_id": "100001"}])
+    drm = tmp_path / "drm.gpkg"
+    drm.write_bytes(b"")
+
+    fake_executor.responses["render_link_density"] = _ok_response()
+    qgis_render_link_density(
+        trajectory_csvs=[str(traj)], drm_network_path=str(drm),
+        output_png="/tmp/x.png", basemap="dark_matter", basemap_opacity=0.6,
+    )
+    spec = fake_executor.calls[0][1]["basemap_spec"]
+    assert spec is not None and spec["kind"] == "xyz"
+    assert spec["opacity"] == 0.6
