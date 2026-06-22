@@ -63,3 +63,32 @@ def test_missing_field_raises_field_not_found(fake_executor):
 
     with pytest.raises(FieldNotFoundError, match="nope"):
         qgis_style_graduated(layer_id="L1", field="nope")
+
+
+def test_diverging_and_center_thread_into_params(fake_executor):
+    fake_executor.responses["set_layer_style"] = _ok_response()
+    qgis_style_graduated(
+        layer_id="L1", field="am_net", diverging=True, center=0.0, palette="vik"
+    )
+    params = fake_executor.calls[0][1]
+    assert params["diverging"] is True
+    assert params["center"] == 0.0
+
+
+def test_graduated_default_is_not_diverging(fake_executor):
+    fake_executor.responses["set_layer_style"] = _ok_response()
+    qgis_style_graduated(layer_id="L1", field="x")
+    params = fake_executor.calls[0][1]
+    assert params["diverging"] is False
+
+
+def test_graduated_diverging_response_echoed(fake_executor):
+    fake_executor.responses["set_layer_style"] = _ok_response(
+        diverging=True, center=0.0, diverging_one_sided=False
+    )
+    result = qgis_style_graduated(
+        layer_id="L1", field="am_net", diverging=True, center=0.0
+    )
+    assert result.diverging is True
+    assert result.center == 0.0
+    assert result.diverging_one_sided is False

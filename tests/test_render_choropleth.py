@@ -162,3 +162,34 @@ def test_paths_resolved_to_absolute(fake_executor, tmp_path: Path):
     assert os.path.isabs(params["zones_path"])
     assert os.path.isabs(params["output_png"])
     assert all(os.path.isabs(p) for p in params["basemap_paths"])
+
+
+def test_diverging_and_center_thread_into_params(fake_executor):
+    fake_executor.responses["render_choropleth"] = _ok_response()
+    qgis_render_choropleth(
+        zones_path="/z.shp", value_field="am_net", output_png="/o.png",
+        diverging=True, center=0.0, palette="vik",
+    )
+    params = fake_executor.calls[0][1]
+    assert params["diverging"] is True
+    assert params["center"] == 0.0
+
+
+def test_default_choropleth_is_not_diverging(fake_executor):
+    fake_executor.responses["render_choropleth"] = _ok_response()
+    qgis_render_choropleth(zones_path="/z.shp", value_field="x", output_png="/o.png")
+    params = fake_executor.calls[0][1]
+    assert params["diverging"] is False
+
+
+def test_diverging_response_fields_echoed(fake_executor):
+    resp = _ok_response()
+    resp.update({"diverging": True, "center": 0.0, "diverging_one_sided": False})
+    fake_executor.responses["render_choropleth"] = resp
+    result = qgis_render_choropleth(
+        zones_path="/z.shp", value_field="am_net", output_png="/o.png",
+        diverging=True, center=0.0,
+    )
+    assert result.diverging is True
+    assert result.center == 0.0
+    assert result.diverging_one_sided is False

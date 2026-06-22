@@ -207,6 +207,9 @@ class StyleResult(BaseModel):
 class GraduatedStyleResult(StyleResult):
     breaks: list[float]
     mode: str
+    diverging: bool = False
+    center: float = 0.0
+    diverging_one_sided: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +300,9 @@ class ChoroplethResult(RenderResult):
     max_value: float
     n_features: int
     join: JoinResult | None = None
+    diverging: bool = False
+    center: float = 0.0
+    diverging_one_sided: bool = False
 
 
 class TrajectoryResult(RenderResult):
@@ -649,6 +655,8 @@ def qgis_style_graduated(
     n_classes: Annotated[int, Field(description="Number of bins.", ge=2, le=15)] = 5,
     mode: Annotated[Literal["quantile", "equal_interval", "natural_breaks", "pretty"], Field(description="Binning strategy.")] = "quantile",
     palette: Annotated[str, Field(description='Sequential colorbrewer palette, e.g. "YlOrRd", "Blues", "Viridis".')] = "YlOrRd",
+    diverging: Annotated[bool, Field(description="Diverging color scheme with a fixed neutral midpoint, for signed data (e.g. net flux). Replaces mode-based boundaries with symmetric breaks around center; pair with a diverging palette (vik/RdBu/balance).")] = False,
+    center: Annotated[float, Field(description="Neutral midpoint for diverging mode (e.g. 0). Ignored when diverging is False.")] = 0.0,
 ) -> GraduatedStyleResult:
     """Apply graduated (value-based color ramp) symbology — the choropleth primitive.
 
@@ -668,6 +676,8 @@ def qgis_style_graduated(
         "classes": n_classes,
         "mode": mode,
         "color_ramp": palette,
+        "diverging": diverging,
+        "center": center,
     }
 
     try:
@@ -688,6 +698,9 @@ def qgis_style_graduated(
         ],
         breaks=result.get("breaks", []),
         mode=result.get("mode", mode),
+        diverging=result.get("diverging", diverging),
+        center=result.get("center", center),
+        diverging_one_sided=result.get("diverging_one_sided", False),
     )
 
 
@@ -762,6 +775,8 @@ def qgis_render_choropleth(
     n_classes: Annotated[int, Field(description="Number of choropleth bins.", ge=2, le=15)] = 5,
     mode: Annotated[Literal["quantile", "equal_interval", "natural_breaks", "pretty"], Field(description="Binning strategy.")] = "quantile",
     palette: Annotated[str, Field(description='Sequential colorbrewer palette, e.g. "YlOrRd", "Blues", "Viridis".')] = "YlOrRd",
+    diverging: Annotated[bool, Field(description="Diverging color scheme pinned at a neutral midpoint, for signed data (net flux = arrivals minus departures). Symmetric class breaks around center; pair with a diverging palette (vik/RdBu/balance).")] = False,
+    center: Annotated[float, Field(description="Neutral midpoint for diverging mode (e.g. 0). Ignored when diverging is False.")] = 0.0,
     title: Annotated[str | None, Field(description="Optional title rendered at the top of the figure.")] = None,
     legend: Annotated[bool, Field(description="Render a legend with class breaks.")] = True,
     basemap_paths: Annotated[list[str] | None, Field(description="Optional vector basemap layers drawn under the choropleth (e.g., coastline, rivers, prefecture borders).")] = None,
@@ -832,6 +847,8 @@ def qgis_render_choropleth(
         "n_classes": n_classes,
         "mode": mode,
         "palette": palette,
+        "diverging": diverging,
+        "center": center,
         "basemap_paths": abs_basemaps,
         "basemap_spec": _resolve_basemap(basemap, basemap_opacity),
         "width": width,
@@ -870,6 +887,9 @@ def qgis_render_choropleth(
         max_value=result["max_value"],
         n_features=result["n_features"],
         join=join_block,
+        diverging=result.get("diverging", diverging),
+        center=result.get("center", center),
+        diverging_one_sided=result.get("diverging_one_sided", False),
         basemap_attribution=result.get("basemap_attribution"),
         basemap_source=result.get("basemap_source"),
     )

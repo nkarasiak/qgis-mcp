@@ -45,6 +45,7 @@ from qgis.core import (
     QgsRasterLayer,
     QgsRectangle,
     QgsRendererCategory,
+    QgsRendererRange,
     QgsSettings,
     QgsSingleSymbolRenderer,
     QgsStyle,
@@ -1132,6 +1133,76 @@ class QgisMCPServer(QObject):
         xform = QgsCoordinateTransform(src_crs, dest, QgsProject.instance())
         return xform.transformBoundingBox(rect)
 
+    def _resolve_color_ramp(self, name, diverging=False):
+        """Resolve a color-ramp name to a QgsColorRamp.
+
+        Order: vendored scientific ramp (colormaps.build_ramp) → QGIS default
+        style ramp (keeps YlOrRd/Blues/Spectral working) → a sane default
+        (vik when diverging, else Spectral). Unknown names never raise.
+        """
+        from . import colormaps
+
+        ramp = colormaps.build_ramp(name)
+        if ramp is not None:
+            return ramp
+        ramp = QgsStyle.defaultStyle().colorRamp(name)
+        if ramp is not None:
+            return ramp
+        if diverging:
+            fallback = colormaps.build_ramp("vik")
+            if fallback is not None:
+                return fallback
+        return QgsStyle.defaultStyle().colorRamp("Spectral")
+
+    def _build_graduated_renderer(
+        self, layer, field, *, n_classes, mode, palette, diverging=False, center=0.0
+    ):
+        """Build a graduated renderer; return (renderer, breaks, one_sided).
+
+        Sequential (default): QGIS classification over the resolved ramp —
+        identical to the legacy path. Diverging: symmetric class breaks around
+        ``center`` with colors sampled so ``center`` sits on the ramp's neutral
+        midpoint (``mode`` is ignored). See colormaps.diverging_breaks.
+        """
+        symbol = QgsSymbol.defaultSymbol(layer.geometryType())
+        ramp = self._resolve_color_ramp(palette, diverging=diverging)
+
+        if not diverging:
+            renderer = QgsGraduatedSymbolRenderer(field)
+            renderer.setSourceSymbol(symbol.clone())
+            renderer.setSourceColorRamp(ramp)
+            renderer.setClassificationMethod(self._CLASSIFICATION_METHODS[mode]())
+            renderer.updateClasses(layer, int(n_classes))
+            ranges = list(renderer.ranges())
+            breaks = []
+            if ranges:
+                breaks.append(float(ranges[0].lowerValue()))
+                for r in ranges:
+                    breaks.append(float(r.upperValue()))
+            return renderer, breaks, False
+
+        from . import colormaps
+
+        values = []
+        for feat in layer.getFeatures():
+            try:
+                values.append(float(feat.attribute(field)))
+            except (TypeError, ValueError):
+                continue
+        vmin = min(values) if values else center
+        vmax = max(values) if values else center
+        bc = colormaps.diverging_breaks(
+            vmin, vmax, center=center, n_classes=int(n_classes)
+        )
+        ranges = []
+        for i in range(len(bc.positions)):
+            lo, hi = bc.breaks[i], bc.breaks[i + 1]
+            sym = symbol.clone()
+            sym.setColor(ramp.color(bc.positions[i]))
+            ranges.append(QgsRendererRange(lo, hi, sym, f"{lo:.4g}-{hi:.4g}"))
+        renderer = QgsGraduatedSymbolRenderer(field, ranges)
+        return renderer, list(bc.breaks), bc.one_sided
+
     def render_choropleth(
         self,
         zones_path,
@@ -1142,6 +1213,8 @@ class QgisMCPServer(QObject):
         n_classes=5,
         mode="quantile",
         palette="YlOrRd",
+        diverging=False,
+        center=0.0,
         basemap_paths=None,
         basemap_spec=None,
         width=1600,
@@ -1237,23 +1310,12 @@ class QgisMCPServer(QObject):
                     f"Sample CSV keys: {csv_sample}; sample layer keys: {sample_layer_keys}"
                 )
 
-            symbol = QgsSymbol.defaultSymbol(mem.geometryType())
-            ramp = QgsStyle.defaultStyle().colorRamp(palette)
-            if not ramp:
-                ramp = QgsStyle.defaultStyle().colorRamp("Spectral")
-            renderer = QgsGraduatedSymbolRenderer(value_field)
-            renderer.setSourceSymbol(symbol.clone())
-            renderer.setSourceColorRamp(ramp)
-            renderer.setClassificationMethod(method_cls())
-            renderer.updateClasses(mem, int(n_classes))
+            renderer, breaks, diverging_one_sided = self._build_graduated_renderer(
+                mem, value_field, n_classes=n_classes, mode=mode,
+                palette=palette, diverging=diverging, center=center,
+            )
             mem.setRenderer(renderer)
-
             ranges = list(renderer.ranges())
-            breaks: list[float] = []
-            if ranges:
-                breaks.append(float(ranges[0].lowerValue()))
-                for r in ranges:
-                    breaks.append(float(r.upperValue()))
 
             values_only = []
             for feat in mem.getFeatures():
@@ -1343,6 +1405,9 @@ class QgisMCPServer(QObject):
                 "n_features": len(values_only),
                 "n_matched": n_matched,
                 "n_unmatched": n_unmatched,
+                "diverging": diverging,
+                "center": center,
+                "diverging_one_sided": diverging_one_sided,
                 "basemap_attribution": basemap_spec.get("attribution") if basemap_spec else None,
                 "basemap_source": basemap_source,
             }
@@ -2052,6 +2117,8 @@ class QgisMCPServer(QObject):
         classes=5,
         color_ramp="Spectral",
         mode="equal_interval",
+        diverging=False,
+        center=0.0,
         **kwargs,
     ):
         """Apply categorical / graduated / single-symbol style to a vector layer.
@@ -2125,24 +2192,12 @@ class QgisMCPServer(QObject):
                     f"Unknown mode {mode!r}. Use one of: {list(self._CLASSIFICATION_METHODS)}."
                 )
 
-            symbol = QgsSymbol.defaultSymbol(layer.geometryType())
-            ramp = QgsStyle.defaultStyle().colorRamp(color_ramp)
-            if not ramp:
-                ramp = QgsStyle.defaultStyle().colorRamp("Spectral")
-
-            renderer = QgsGraduatedSymbolRenderer(field)
-            renderer.setSourceSymbol(symbol.clone())
-            renderer.setSourceColorRamp(ramp)
-            renderer.setClassificationMethod(method_cls())
-            renderer.updateClasses(layer, int(classes))
+            renderer, breaks, diverging_one_sided = self._build_graduated_renderer(
+                layer, field, n_classes=classes, mode=mode,
+                palette=color_ramp, diverging=diverging, center=center,
+            )
             layer.setRenderer(renderer)
-
             ranges = list(renderer.ranges())
-            breaks = []
-            if ranges:
-                breaks.append(float(ranges[0].lowerValue()))
-                for r in ranges:
-                    breaks.append(float(r.upperValue()))
 
             # Per-range feature counts via in-memory iteration (no QGIS API for this).
             class_entries = []
@@ -2170,6 +2225,9 @@ class QgisMCPServer(QObject):
                 "classes": class_entries,
                 "breaks": breaks,
                 "mode": mode,
+                "diverging": diverging,
+                "center": center,
+                "diverging_one_sided": diverging_one_sided,
             }
         else:
             raise Exception(
