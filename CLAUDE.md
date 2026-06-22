@@ -79,7 +79,7 @@ uv tool run ruff check src/ tests/
 | `QGIS_MCP_WORKFLOWS_LOG_FILE` | `~/.local/share/qgis-mcp-workflows/server.log` | Rotating log file (5MB × 3) — empty disables file logging |
 | `QGIS_MCP_WORKFLOWS_LOG_LEVEL` | `INFO` | File log level. Console (stderr) is always WARNING+ |
 
-## MCP Tools (14 total as of v1.2; 5 grouped tools in compound mode. See `docs/DESIGN.md` §4 for full signatures.)
+## MCP Tools (17 total as of v1.4; 5 grouped tools in compound mode. See `docs/DESIGN.md` §4 for full signatures.)
 
 | Tool | Status | Notes |
 |---|---|---|
@@ -87,13 +87,16 @@ uv tool run ruff check src/ tests/
 | `qgis_load_layer` | ✅ v0.3 / v0.4 | `crs=` override (v0.4) wired through `set_layer_crs` with rollback |
 | `qgis_project_load` | ✅ v0.5 | Loads .qgz; returns layers + layouts; stateful (subsequent `export_layout`/`batch_render` reuse the loaded project) |
 | `qgis_style_categorized` | ✅ v1.0 | Categorical symbology via plugin's `set_layer_style(style_type="categorized")`; returns per-class feature counts + colors. |
-| `qgis_style_graduated` | ✅ v1.0 | Graduated symbology with `mode ∈ {quantile, equal_interval, natural_breaks, pretty}`; returns explicit `breaks` array. |
+| `qgis_style_graduated` | ✅ v1.0 | Graduated symbology with `mode ∈ {quantile, equal_interval, natural_breaks, pretty}`; returns explicit `breaks` array. v1.4: `diverging`+`center` (symmetric breaks for signed data) and scientific colormaps via `colormaps.py` (shared `_build_graduated_renderer`). |
 | `qgis_render_map` | ✅ v0.3 | Plugin handler: `render_layers_to_path` |
-| `qgis_render_choropleth` | ✅ v0.3 | Plugin handler: `render_choropleth` (atomic load+style+render+cleanup) |
+| `qgis_render_choropleth` | ✅ v0.3 | Plugin handler: `render_choropleth` (atomic load+style+render+cleanup). v0.6: tile `basemap=`. v1.4: `diverging`+`center`, scientific colormaps, `label_field` (haloed labels). |
 | `qgis_render_trajectory` | ✅ v0.5 | Lines/points/heatmap from PFLOW CSV or GPX; stride sampling + `max_points` ceiling; optional `movingpandas` speed-binned line rendering when `[trajectory]` extra installed |
-| `qgis_render_od_flows` | ✅ v0.5 | Centroid arcs over a zones layer; data-defined stroke width; unmatched origin/destination counts surface in response |
-| `qgis_render_link_density` | ✅ v1.2 | DRM-link traffic density from PFLOW trajectories. Streaming MCP-side aggregation + plugin-side graduated line render. Requires one-time `scripts/build_drm_network.py` to produce `assets/drm_network.gpkg`. |
+| `qgis_render_od_flows` | ✅ v0.5 | Centroid arcs over a zones layer; data-defined stroke width; unmatched origin/destination counts surface in response. v1.4: `arc_style ∈ {line,arrow,curved}` (QgsArrowSymbolLayer), tile `basemap=`. |
+| `qgis_render_link_density` | ✅ v1.2 | DRM-link traffic density from PFLOW trajectories. Streaming MCP-side aggregation + plugin-side graduated line render. Requires one-time `scripts/build_drm_network.py` to produce `assets/drm_network.gpkg`. v1.4: tile `basemap=`, scientific colormaps. |
+| `qgis_render_diagram_map` | ✅ v1.4 | Chart-in-map: pie/bar `QgsDiagramRenderer` glyphs per feature, one slice/bar per `value_field`; optional tile basemap. |
+| `qgis_render_catchment` | ✅ v1.4 | Voronoi (Thiessen) service-area catchments around point features via `QgsGeometry.voronoiDiagram` (no Processing dep). |
 | `qgis_export_layout` | ✅ v0.5 | PNG/PDF/SVG via `QgsLayoutExporter`; loads `qgz_path` internally if not already loaded; `LayoutNotFoundError` when layout missing |
+| `qgis_compose_layout` | ✅ v1.4 | Programmatic `QgsPrintLayout`: titled map panel + linked legend / scale bar / north arrow, export PNG/PDF/SVG. Complements `export_layout` (which only exports pre-authored `.qgz`). |
 | `qgis_batch_render` | ✅ v0.5 | Fan-out per attribute value; active-layer convention (saved-active → first vector fallback); manifest + per-value errors; `subset_string` reset in `finally` |
 | `qgis_figures_to_pptx` | ✅ v0.3 | Pure python-pptx; `two_column` + `title_image_caption` degrade to `title_only` |
 | `qgis_eval` | ✅ v1.0 | Arbitrary PyQGIS escape hatch with `return_vars` capture. Plugin's `execute_code` augmented with `_json_safe()` fallback (non-serializable values → `repr()`). |

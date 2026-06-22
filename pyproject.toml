@@ -7,7 +7,7 @@ packages = ["src/qgis_mcp_workflows"]
 
 [project]
 name = "qgis-mcp-workflows"
-version = "1.3.0"
+version = "1.4.0"
 description = "Focused QGIS MCP server with workflow tools for transportation research figure pipelines (PFLOW, GUFM). Forked from nkarasiak/qgis-mcp."
 readme = "README.md"
 requires-python = ">=3.12"

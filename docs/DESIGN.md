@@ -72,7 +72,7 @@ Upstream's plugin and server stay untouched. If the user installs both, Claude D
 
 ---
 
-## 4. Tool surface (12 workflow + 1 escape hatch)
+## 4. Tool surface (15 workflow + 1 escape hatch)
 
 For each tool: signature, what it does, response shape, and the typical chain.
 
@@ -315,6 +315,24 @@ Use for the long tail. Document explicitly that this is an escape hatch, not a f
 
 ---
 
+### v1.4 additions (cartography) — 2026-06-23
+
+Shipped on `feat/choropleth-diverging-colormaps`, grounded in the `N:\TransInfor`
+transit-figure pipeline. Each a separate commit, unit-tested + live-verified.
+
+**New tools (3):**
+- `qgis_compose_layout(layer_paths, output_path, title=None, extent=None, page="a4_landscape", legend=True, scale_bar=True, north_arrow=True, dpi=300) → ComposeLayoutResult` — programmatic `QgsPrintLayout`: a titled map panel with linked legend, scale bar and north arrow, exported PNG/PDF/SVG. Complements `qgis_export_layout` (which only exports pre-authored `.qgz`). Single panel; multi-panel/inset is future.
+- `qgis_render_diagram_map(layer_path, value_fields, output_png, diagram_type="pie", size=10.0, palette="Set2", extent=None, basemap="none", basemap_opacity=1.0, width=1600, height=1200, dpi=150) → DiagramMapResult` — chart-in-map: a pie/bar `QgsDiagramRenderer` glyph per feature, one slice/bar per `value_field`.
+- `qgis_render_catchment(points_path, output_png, method="voronoi", extent=None, basemap="none", basemap_opacity=1.0, width=1600, height=1200, dpi=150) → CatchmentResult` — Voronoi (Thiessen) service-area catchments around points via `QgsGeometry.voronoiDiagram` (no Processing dependency).
+
+**New parameters on existing tools:**
+- `qgis_render_choropleth` / `qgis_style_graduated`: `diverging: bool = False` + `center: float = 0.0` — diverging colormap with symmetric class breaks pinned at `center`, for signed / net-flux data. `palette` now also resolves scientific colormaps (viridis, cividis, magma, batlow, vik, roma, balance, RdBu, BrBG) vendored in `qgis_mcp_workflows_plugin/colormaps.py` via the shared `_resolve_color_ramp` / `_build_graduated_renderer` helpers. Response echoes `diverging`, `center`, `diverging_one_sided`.
+- `qgis_render_choropleth`: `label_field: str | None = None` — labels each polygon with a white halo.
+- `qgis_render_od_flows`: `arc_style ∈ {"line", "arrow", "curved"}` — directional `QgsArrowSymbolLayer` arrows, optionally curved; width/head scale with flow.
+- `qgis_render_od_flows` / `qgis_render_link_density`: tile `basemap=` + `basemap_opacity` (same live-XYZ presets as choropleth); link-density color routes through the scientific-colormap helper.
+
+**Deferred to a follow-up PR:** `qgis_assign_section_load` (network all-or-nothing assignment; adds a `[network]` extra with networkx + scipy). Minor: trajectory tile basemap, OD/link halo labels.
+
 ## 5. Cross-cutting
 
 **Errors.** Every tool raises a typed exception class that maps to an MCP error response with a `next_action` hint. Examples:
@@ -368,6 +386,8 @@ If a v1 user needs any of these, the answer is: install upstream alongside, or w
 **v1.1 — rename release.** ✅ Shipped 2026-05-22. Package/plugin/console-script renamed to `qgis-mcp-workflows` (positioning over personal name). Env vars `QGIS_MCP_NORTH_*` → `QGIS_MCP_WORKFLOWS_*`. Co-existence with upstream unchanged: port 9877 stays, plugin folder is now `qgis_mcp_workflows_plugin`. No behavior changes; 99-test suite green before and after. CLAUDE.md, DESIGN.md, README, CHANGELOG updated; historical completion-report docs left untouched as point-in-time snapshots.
 
 **v1.2 — link-density tool.** ✅ Shipped 2026-05-22. New tool `qgis_render_link_density` for DRM-link traffic density choropleths from PFLOW trajectories. Companion one-time prep script `scripts/build_drm_network.py` builds `assets/drm_network.gpkg` from 47 prefecture-sharded DRM TSVs (~14 GB → ~1-2 GB GeoPackage). New optional `[drm]` extra (pyogrio + geopandas) used only by the prep script. New error: `DRMNetworkNotFoundError` with build-script hint. Big-data discipline: streaming aggregation MCP-side, only the aggregated `{link_id → density}` dict crosses the wire. Plugin handler adapted to use existing `QgsGraduatedSymbolRenderer(field)` + `_CLASSIFICATION_METHODS` pattern (not the planned `createRenderer` static method). Resolves §8 open question #8.
+
+**v1.4 — cartography pass.** ✅ Shipped 2026-06-23 on `feat/choropleth-diverging-colormaps`, grounded in the `N:\TransInfor` transit-figure pipeline. Seven slices, each its own commit + verified live against TransInfor data: (1) diverging color schemes + vendored scientific colormaps (`colormaps.py`, shared `_build_graduated_renderer`/`_resolve_color_ramp`); (2) tile basemaps + scientific colormaps on OD-flows & link-density; (3) directional/curved OD arcs (`arc_style`, `QgsArrowSymbolLayer`); (4) `qgis_compose_layout` (programmatic print layouts); (5) haloed `label_field` on choropleth; (6) `qgis_render_diagram_map` (chart-in-map pie/bar diagrams); (7) `qgis_render_catchment` (Voronoi service areas). Tool surface 14 → 17. Deferred to a follow-up PR: `qgis_assign_section_load` (network section-load assignment; `[network]` extra = networkx + scipy). Pre-existing ruff debt (SIM105 ×9, import-sort) left untouched.
 
 ---
 
