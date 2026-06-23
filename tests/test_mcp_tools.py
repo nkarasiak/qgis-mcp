@@ -950,6 +950,34 @@ async def test_get_3d_screenshot_tool(mock_connection):
 
 
 @pytest.mark.asyncio
+async def test_get_3d_screenshot_camera_params(mock_connection):
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {
+            "base64_data": "iVBOR==",
+            "mime_type": "image/png",
+            "width": 800,
+            "height": 600,
+            "view_index": 1,
+            "open_3d_views": 2,
+        },
+    }
+    from qgis_mcp.server import get_3d_screenshot
+
+    ctx = _make_ctx()
+    result = await get_3d_screenshot(
+        ctx, view_index=1, dpi=120, pitch=45, distance=2000, heading=30
+    )
+    assert result[0].type == "image"
+    # camera overrides are forwarded only when provided
+    mock_connection.send_command.assert_called_once_with(
+        "get_3d_screenshot",
+        {"view_index": 1, "dpi": 120, "pitch": 45, "distance": 2000, "heading": 30},
+        timeout=30,
+    )
+
+
+@pytest.mark.asyncio
 async def test_transform_coordinates_point(mock_connection):
     mock_connection.send_command.return_value = {
         "status": "success",

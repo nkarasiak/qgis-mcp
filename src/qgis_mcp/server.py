@@ -729,10 +729,27 @@ async def get_canvas_screenshot(ctx: Context) -> list:
     "scene + camera, rendered via a print-layout 3D map item (the 2D get_canvas_screenshot "
     "cannot capture the OpenGL 3D view). Requires a 3D map view to be open in QGIS "
     "(View > 3D Map Views > New 3D Map View). view_index selects which view when several "
-    "are open; dpi controls output resolution.",
+    "are open; dpi controls output resolution. Optional camera overrides (applied to the "
+    "capture only, leaving the live view unchanged): pitch (0 = straight down/top-down, "
+    "90 = horizontal/edge-on; ~45 = balanced oblique), heading (compass degrees), "
+    "distance (metres).",
 )
-async def get_3d_screenshot(ctx: Context, view_index: int = 0, dpi: int = 96) -> list:
-    result = await _send("get_3d_screenshot", {"view_index": view_index, "dpi": dpi})
+async def get_3d_screenshot(
+    ctx: Context,
+    view_index: int = 0,
+    dpi: int = 96,
+    pitch: float | None = None,
+    distance: float | None = None,
+    heading: float | None = None,
+) -> list:
+    params: dict[str, Any] = {"view_index": view_index, "dpi": dpi}
+    if pitch is not None:
+        params["pitch"] = pitch
+    if distance is not None:
+        params["distance"] = distance
+    if heading is not None:
+        params["heading"] = heading
+    result = await _send("get_3d_screenshot", params)
     return [
         ImageContent(
             type="image",

@@ -10,7 +10,7 @@ package = true
 
 [project]
 name = "qgis-mcp"
-version = "0.5.1"
+version = "0.5.2"
 description = "QGIS integration through the Model Context Protocol"
 readme = "README.md"
 requires-python = ">=3.12"

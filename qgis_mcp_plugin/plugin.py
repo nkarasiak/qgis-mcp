@@ -2068,7 +2068,9 @@ class QgisMCPServer(QObject):
             "height": pixmap.height(),
         }
 
-    def get_3d_screenshot(self, view_index=0, dpi=96, **kwargs):
+    def get_3d_screenshot(
+        self, view_index=0, dpi=96, pitch=None, distance=None, heading=None, **kwargs
+    ):
         """Capture an open 3D Map View as a PNG image.
 
         The 3D map view is an OpenGL ``QWindow`` that ``QWidget.grab()`` cannot
@@ -2076,6 +2078,11 @@ class QgisMCPServer(QObject):
         renders them through a print layout's 3D map item (whose offscreen 3D
         engine runs in C++). Requires a 3D map view to be open
         (View > 3D Map Views > New 3D Map View).
+
+        Optional ``pitch`` (0 = straight down / top-down, 90 = horizontal /
+        edge-on; ~45 is a balanced oblique), ``heading`` (compass degrees), and
+        ``distance`` (metres) override the captured camera angle without changing
+        the live view.
         """
         view_index = int(view_index)
         dpi = max(10, min(int(dpi), 600))  # clamp: bound render cost / memory use
@@ -2102,6 +2109,15 @@ class QgisMCPServer(QObject):
         # mutated or shared, and snapshot its current camera pose.
         map_settings = Qgs3DMapSettings(canvas3d.mapSettings())
         pose = canvas3d.cameraController().cameraPose()
+
+        # Optional camera overrides — applied only to this captured copy, so the
+        # live 3D view is left untouched.
+        if pitch is not None:
+            pose.setPitchAngle(max(0.0, min(float(pitch), 90.0)))
+        if heading is not None:
+            pose.setHeadingAngle(float(heading) % 360.0)
+        if distance is not None and float(distance) > 0:
+            pose.setDistanceFromCenterPoint(float(distance))
 
         # Match the output image to the 3D view's aspect ratio.
         size = canvas3d.size()

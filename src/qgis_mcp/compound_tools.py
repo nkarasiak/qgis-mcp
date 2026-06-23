@@ -366,8 +366,9 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "- set_extent: xmin (float), ymin (float), xmax (float), ymax (float), "
             "crs (str, optional)\n"
             "- screenshot: no params — returns inline image\n"
-            "- screenshot_3d: view_index (int, optional), dpi (int, optional) — "
-            "capture an open 3D map view as an inline image\n"
+            "- screenshot_3d: view_index (int, optional), dpi (int, optional), "
+            "pitch (float, optional: 0=top-down, 90=edge-on), distance (float, optional), "
+            "heading (float, optional) — capture an open 3D map view as an inline image\n"
             "- get_scale: no params\n"
             "- set_scale: scale (float, optional), rotation (float, optional)"
         ),
@@ -397,11 +398,11 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                 )
             ]
         elif action == "screenshot_3d":
-            params = {}
-            if "view_index" in kwargs:
-                params["view_index"] = kwargs["view_index"]
-            if "dpi" in kwargs:
-                params["dpi"] = kwargs["dpi"]
+            params = {
+                k: kwargs[k]
+                for k in ("view_index", "dpi", "pitch", "distance", "heading")
+                if k in kwargs
+            }
             result = await _send("get_3d_screenshot", params)
             return [
                 ImageContent(
