@@ -97,6 +97,56 @@ Add to `opencode.json` at your project root:
 </details>
 
 <details>
+<summary>Nous / Hermes-style agents and other MCP-compatible clients</summary>
+
+Any agent or client that supports the MCP stdio transport can use this server.  Add the
+following to your agent's MCP server configuration (exact key names vary by client — see
+your agent's docs):
+
+```json
+{
+  "mcpServers": {
+    "qgis": {
+      "command": "uvx",
+      "args": [
+        "--from", "https://github.com/GetBack2Basics/qgis-mcp/archive/refs/heads/main.zip",
+        "qgis-mcp-server"
+      ]
+    }
+  }
+}
+```
+
+With optional environment variables (e.g. custom port or auth token):
+
+```json
+{
+  "mcpServers": {
+    "qgis": {
+      "command": "uvx",
+      "args": [
+        "--from", "https://github.com/GetBack2Basics/qgis-mcp/archive/refs/heads/main.zip",
+        "qgis-mcp-server"
+      ],
+      "env": {
+        "QGIS_MCP_HOST": "localhost",
+        "QGIS_MCP_PORT": "9876",
+        "QGIS_MCP_TOKEN": "your-long-random-secret"
+      }
+    }
+  }
+}
+```
+
+After starting the agent, verify the connection by asking it to call the `ping` tool — it
+should return `{"pong": true}` when the QGIS plugin is running.
+
+For a full setup guide, troubleshooting steps, and compound-tool mode configuration see
+[`docs/agent-integration.md`](docs/agent-integration.md).
+
+</details>
+
+<details>
 <summary>Claude Desktop, Cursor, VS Code, Windsurf, and others</summary>
 
 Add to your client's MCP config file:

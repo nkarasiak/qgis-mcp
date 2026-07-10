@@ -1912,6 +1912,50 @@ def test_compound_tools_register():
     assert mock_mcp.tool.call_count >= 14
 
 
+# --- MCP server tool-discovery (no QGIS required) ---
+
+
+@pytest.mark.asyncio
+async def test_server_advertises_tools():
+    """MCP server must expose a non-empty tool list to any MCP client.
+
+    This validates generic MCP interoperability: the server module correctly
+    registers all tools via FastMCP so that agents (Claude Code, Codex CLI,
+    Nous/Hermes-style clients, etc.) can discover them without a live QGIS
+    connection.
+    """
+    from qgis_mcp.server import mcp
+
+    tools = await mcp.list_tools()
+    tool_names = [t.name for t in tools]
+
+    # Core tools that every MCP client depends on for basic interoperability
+    assert "ping" in tool_names, "ping tool missing — clients use it to verify connectivity"
+    assert "get_layers" in tool_names, "get_layers tool missing"
+    assert "render_map" in tool_names, "render_map tool missing"
+
+    # Sanity-check that the full tool suite is registered (not just a stub).
+    # The server currently exposes 103 granular tools; allow some headroom for
+    # future additions/removals while still catching gross omissions.
+    assert len(tools) >= 100, f"Expected at least 100 tools, got {len(tools)}"
+
+
+@pytest.mark.asyncio
+async def test_server_tool_schemas_are_valid():
+    """Every registered tool must have a non-empty name and description.
+
+    Generic MCP clients (including Nous/Hermes agents) rely on tool metadata
+    to build system prompts and tool-call payloads — missing descriptions
+    degrade agent reasoning quality.
+    """
+    from qgis_mcp.server import mcp
+
+    tools = await mcp.list_tools()
+    for tool in tools:
+        assert tool.name, f"Tool has empty name: {tool!r}"
+        assert tool.description, f"Tool '{tool.name}' has no description"
+
+
 # --- Optional shared-secret auth (QGIS_MCP_TOKEN) ---
 
 
