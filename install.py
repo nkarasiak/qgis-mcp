@@ -98,7 +98,7 @@ def _client_registry() -> dict[str, ClientInfo]:
     else:
         zed_cfg = home / ".config" / "zed" / "settings.json"
 
-    # opencode (https://opencode.ai) — uses "mcp" key with type/command-array format
+    # opencode (https://opencode.ai) - uses "mcp" key with type/command-array format
     if sys.platform == "win32":
         opencode_cfg = appdata / "opencode" / "config.json"
     else:
