@@ -2,10 +2,11 @@
 """Multi-client installer for QGIS MCP.
 
 Symlinks the QGIS plugin and configures MCP clients (Claude Desktop,
-Cursor, VS Code Copilot, Windsurf, Zed, Claude Code, Codex CLI).
+Cursor, VS Code Copilot, Windsurf, Zed, Claude Code, Codex CLI, opencode).
 
 Usage:
     python install.py                          # Interactive menu
+    python install.py --non-interactive --clients opencode
     python install.py --non-interactive --clients claude-desktop,cursor
     python install.py --remote                 # Use uvx (no local clone needed)
     python install.py --uninstall --clients cursor
@@ -97,6 +98,12 @@ def _client_registry() -> dict[str, ClientInfo]:
     else:
         zed_cfg = home / ".config" / "zed" / "settings.json"
 
+    # opencode (https://opencode.ai) — uses "mcp" key with type/command-array format
+    if sys.platform == "win32":
+        opencode_cfg = appdata / "opencode" / "config.json"
+    else:
+        opencode_cfg = home / ".config" / "opencode" / "config.json"
+
     return {
         "claude-desktop": {"path": claude_cfg, "key": "mcpServers"},
         "cursor": {"path": cursor_cfg, "key": "mcpServers"},
@@ -105,6 +112,7 @@ def _client_registry() -> dict[str, ClientInfo]:
         "zed": {"path": zed_cfg, "key": "context_servers"},
         "claude-code": {"print_only": True, "cli": "claude"},
         "codex": {"print_only": True, "cli": "codex"},
+        "opencode": {"path": opencode_cfg, "key": "mcp", "entry_format": "opencode"},
     }
 
 
@@ -184,6 +192,29 @@ def _remote_entry() -> dict:
 
 def _server_entry(client: str, remote: bool) -> dict:
     return _remote_entry() if remote else _local_entry()
+
+
+def _opencode_server_entry(remote: bool) -> dict:
+    """Build an MCP server entry in opencode's native format.
+
+    opencode uses ``{"type": "local", "command": [...]}`` (command as an array)
+    under the top-level ``"mcp"`` key instead of the ``mcpServers`` / split
+    command+args shape used by most other clients.
+    """
+    if remote:
+        cmd: list[str] = ["uvx", "--from", GITHUB_URL, "qgis-mcp-server"]
+    elif shutil.which("uv"):
+        cmd = [
+            "uv",
+            "--directory",
+            str(REPO_DIR),
+            "run",
+            "--no-sync",
+            "src/qgis_mcp/server.py",
+        ]
+    else:
+        cmd = [str(_venv_python()), str(REPO_DIR / "src" / "qgis_mcp" / "server.py")]
+    return {"type": "local", "command": cmd}
 
 
 # ── Plugin installation ────────────────────────────────────────────────────
@@ -354,7 +385,10 @@ def configure_client(client_name: str, remote: bool) -> None:
 
     path = Path(info["path"])
     key = info["key"]
-    entry = _server_entry(client_name, remote)
+    if info.get("entry_format") == "opencode":
+        entry = _opencode_server_entry(remote)
+    else:
+        entry = _server_entry(client_name, remote)
 
     config = _read_json(path)
     if path.exists():
@@ -408,7 +442,7 @@ def unconfigure_client(client_name: str) -> None:
 
 # ── Interactive menu ────────────────────────────────────────────────────────
 
-ALL_CLIENTS = ["claude-desktop", "cursor", "vscode", "windsurf", "zed", "claude-code", "codex"]
+ALL_CLIENTS = ["claude-desktop", "cursor", "vscode", "windsurf", "zed", "claude-code", "codex", "opencode"]
 
 
 def interactive_menu() -> list[str]:

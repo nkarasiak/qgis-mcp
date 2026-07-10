@@ -97,11 +97,37 @@ Add to `opencode.json` at your project root:
 </details>
 
 <details>
-<summary>Nous / Hermes-style agents and other MCP-compatible clients</summary>
+<summary>Nous / Hermes-style agents and other MCP-compatible clients (opencode, …)</summary>
 
-Any agent or client that supports the MCP stdio transport can use this server.  Add the
-following to your agent's MCP server configuration (exact key names vary by client — see
-your agent's docs):
+**opencode** (which runs Nous/Hermes and other models) is supported directly by the installer:
+
+```bash
+python install.py --non-interactive --clients opencode
+```
+
+This writes the correct config block to `~/.config/opencode/config.json`
+(`%APPDATA%\opencode\config.json` on Windows).
+
+To configure manually, add to your `opencode.json` or global opencode config:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "qgis": {
+      "type": "local",
+      "command": [
+        "uvx",
+        "--from", "https://github.com/GetBack2Basics/qgis-mcp/archive/refs/heads/main.zip",
+        "qgis-mcp-server"
+      ]
+    }
+  }
+}
+```
+
+Any other agent or client that supports the MCP stdio transport can also use this server.
+Generic config (exact key names vary by client — see your agent's docs):
 
 ```json
 {
@@ -117,28 +143,7 @@ your agent's docs):
 }
 ```
 
-With optional environment variables (e.g. custom port or auth token):
-
-```json
-{
-  "mcpServers": {
-    "qgis": {
-      "command": "uvx",
-      "args": [
-        "--from", "https://github.com/GetBack2Basics/qgis-mcp/archive/refs/heads/main.zip",
-        "qgis-mcp-server"
-      ],
-      "env": {
-        "QGIS_MCP_HOST": "localhost",
-        "QGIS_MCP_PORT": "9876",
-        "QGIS_MCP_TOKEN": "your-long-random-secret"
-      }
-    }
-  }
-}
-```
-
-After starting the agent, verify the connection by asking it to call the `ping` tool — it
+After starting the agent, verify by asking it to call the `ping` tool — it
 should return `{"pong": true}` when the QGIS plugin is running.
 
 For a full setup guide, troubleshooting steps, and compound-tool mode configuration see
