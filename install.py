@@ -239,6 +239,8 @@ def _hermes_bat_content(remote: bool) -> str:
         python = _venv_python()
         launch_cmd = f'"{python}" "{REPO_DIR / "src" / "qgis_mcp" / "server.py"}"'
     return (
+        # CRLF line endings are intentional: .bat files must use Windows line endings
+        # to work correctly regardless of the text editor used to create them.
         "@echo off\r\n"
         "REM Launcher for qgis-mcp-server, isolated from Hermes's own Python venv.\r\n"
         "REM Clears venv vars so uvx/uv uses the system Python, not Hermes's packages.\r\n"

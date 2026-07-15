@@ -3595,7 +3595,12 @@ class MCPConfiguratorDialog(QDialog):
         return entry
 
     def _hermes_preview_text(self, remote: bool) -> str:
-        """Return the full setup instructions for Hermes desktop app (Windows)."""
+        """Return the full setup instructions for Hermes desktop app (Windows).
+
+        Note: the bat-file content here mirrors install.py's _hermes_bat_content().
+        The plugin cannot import install.py (it runs inside QGIS), so the logic is
+        intentionally duplicated to keep the plugin self-contained.
+        """
         home = Path.home()
         appdata = Path(os.environ.get("APPDATA", str(home / "AppData" / "Roaming")))
         hermes_dir = appdata / "Hermes"
