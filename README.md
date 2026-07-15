@@ -97,6 +97,44 @@ Add to `opencode.json` at your project root:
 </details>
 
 <details>
+<summary>Hermes desktop app (Windows)</summary>
+
+Hermes stores MCP servers in `config.yaml` under an `mcpServers` block. A standalone `mcp.json` is **ignored**. You also need a small `.bat` launcher — running `uvx` directly inside Hermes causes a venv conflict (`ModuleNotFoundError: No module named 'pydantic_core._pydantic_core'`).
+
+**Step 1 — Create `%APPDATA%\Hermes\qgis-mcp-launch.bat`:**
+
+```batch
+@echo off
+REM Clears Hermes's venv vars so uvx uses a clean Python environment.
+set VIRTUAL_ENV=
+set PYTHONPATH=
+set PYTHONHOME=
+uvx --from "https://github.com/GetBack2Basics/qgis-mcp/archive/refs/heads/main.zip" qgis-mcp-server
+```
+
+**Step 2 — Add to `%APPDATA%\Hermes\config.yaml`:**
+
+```yaml
+mcpServers:
+  qgis:
+    command: "C:\\Users\\<you>\\AppData\\Roaming\\Hermes\\qgis-mcp-launch.bat"
+    args: []
+```
+
+Replace `<you>` with your Windows username. Restart Hermes, then verify with:
+```
+Call the QGIS ping tool.
+```
+
+> **Tip:** The QGIS plugin's **Setup & Configurator** dialog has a **hermes** entry in the
+> client dropdown. Select it and click **Copy** to get the bat file and YAML pre-filled
+> with your local paths.
+
+For the full guide see [`docs/agent-integration.md`](docs/agent-integration.md).
+
+</details>
+
+<details>
 <summary>Nous / Hermes-style agents and other MCP-compatible clients (opencode, …)</summary>
 
 **opencode** (which runs Nous/Hermes and other models) is supported directly by the installer:

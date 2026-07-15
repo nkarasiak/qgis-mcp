@@ -125,6 +125,85 @@ If QGIS is running with the plugin started you will get `{"pong": true}`.
 
 ---
 
+## Hermes desktop app (Windows)
+
+This section documents a verified-working local setup: QGIS on the same Windows machine
+as the **Hermes desktop app**, controlled through the QGIS MCP plugin — no remote box
+required.
+
+### Prerequisites
+
+- QGIS installed (OSGeo4W build at `C:\OSGeo4W` or standalone `C:\Program Files\QGIS 3.xx`).
+- The QGIS MCP plugin installed and enabled inside QGIS
+  (`Plugins` › `Manage and Install Plugins` › **QGIS MCP**).
+- Hermes desktop app running locally, with `uvx` available on `PATH`.
+
+### Why a launcher .bat is required
+
+Hermes ships with its own Python venv.  If you register `uvx` directly in Hermes's
+`config.yaml`, Hermes inherits its own `VIRTUAL_ENV` / `PYTHONPATH` values when it spawns
+the MCP server process.  The `qgis-mcp-server` then imports Hermes's (incompatible) copies
+of `mcp` and `pydantic`, causing:
+
+```
+ModuleNotFoundError: No module named 'pydantic_core._pydantic_core'
+```
+
+The fix is a small `.bat` file that clears the venv environment variables before calling
+`uvx`, so the MCP server runs in a clean environment.
+
+### Step 1 — Create the launcher bat file
+
+Create `qgis-mcp-launch.bat` in your Hermes config directory
+(typically `%APPDATA%\Hermes\`):
+
+```batch
+@echo off
+REM Launch qgis-mcp-server isolated from Hermes's own Python venv.
+REM Clearing venv vars prevents Hermes's pydantic/mcp from being imported.
+set VIRTUAL_ENV=
+set PYTHONPATH=
+set PYTHONHOME=
+uvx --from "https://github.com/GetBack2Basics/qgis-mcp/archive/refs/heads/main.zip" qgis-mcp-server
+```
+
+Full path example:
+```
+C:\Users\<you>\AppData\Roaming\Hermes\qgis-mcp-launch.bat
+```
+
+### Step 2 — Register the server in config.yaml
+
+Hermes stores MCP servers in `config.yaml` (not a separate `mcp.json`).  Open
+`%APPDATA%\Hermes\config.yaml` and add the `mcpServers` block — or merge it in if the file
+already exists:
+
+```yaml
+mcpServers:
+  qgis:
+    command: "C:\\Users\\<you>\\AppData\\Roaming\\Hermes\\qgis-mcp-launch.bat"
+    args: []
+```
+
+Replace `<you>` with your actual Windows username.
+
+### Step 3 — Verify
+
+1. Restart Hermes after editing `config.yaml`.
+2. Ask Hermes to call the `ping` tool:
+   ```
+   Call the QGIS ping tool.
+   ```
+3. You should get `{"pong": true}` when the QGIS plugin server is running.
+
+### Quick setup via the QGIS plugin configurator
+
+The QGIS MCP plugin's **Setup & Configurator** dialog (Plugins › QGIS MCP › MCP Setup
+Configurator) has a **hermes** entry in the client dropdown.  Select it and click **Copy**
+to get the full bat-file content and YAML snippet pre-filled with your local paths.
+
+---
+
 ## Environment variables
 
 | Variable | Default | Description |

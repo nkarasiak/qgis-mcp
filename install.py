@@ -17,10 +17,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
-import re
 from pathlib import Path
 
 REPO_DIR = Path(__file__).resolve().parent
@@ -104,6 +104,10 @@ def _client_registry() -> dict[str, ClientInfo]:
     else:
         opencode_cfg = home / ".config" / "opencode" / "config.json"
 
+    # Hermes desktop app (Windows) - uses config.yaml with mcpServers block.
+    # Requires a .bat launcher to avoid Hermes's venv polluting the MCP server.
+    hermes_cfg = appdata / "Hermes" / "config.yaml" if sys.platform == "win32" else None
+
     return {
         "claude-desktop": {"path": claude_cfg, "key": "mcpServers"},
         "cursor": {"path": cursor_cfg, "key": "mcpServers"},
@@ -113,6 +117,7 @@ def _client_registry() -> dict[str, ClientInfo]:
         "claude-code": {"print_only": True, "cli": "claude"},
         "codex": {"print_only": True, "cli": "codex"},
         "opencode": {"path": opencode_cfg, "key": "mcp", "entry_format": "opencode"},
+        "hermes": {"print_only": True, "entry_format": "hermes", "hermes_cfg": hermes_cfg},
     }
 
 
@@ -215,6 +220,61 @@ def _opencode_server_entry(remote: bool) -> dict:
     else:
         cmd = [str(_venv_python()), str(REPO_DIR / "src" / "qgis_mcp" / "server.py")]
     return {"type": "local", "command": cmd}
+
+
+def _hermes_bat_content(remote: bool) -> str:
+    """Return the content of qgis-mcp-launch.bat for Hermes desktop app (Windows).
+
+    The .bat clears the Python venv environment set by Hermes before launching
+    uvx, preventing Hermes's broken pydantic/mcp packages from being imported
+    by the qgis-mcp-server process.
+    """
+    if remote:
+        launch_cmd = f'uvx --from "{GITHUB_URL}" qgis-mcp-server'
+    elif shutil.which("uv"):
+        launch_cmd = (
+            f'uv --directory "{REPO_DIR}" run --no-sync src/qgis_mcp/server.py'
+        )
+    else:
+        python = _venv_python()
+        launch_cmd = f'"{python}" "{REPO_DIR / "src" / "qgis_mcp" / "server.py"}"'
+    return (
+        "@echo off\r\n"
+        "REM Launcher for qgis-mcp-server, isolated from Hermes's own Python venv.\r\n"
+        "REM Clears venv vars so uvx/uv uses the system Python, not Hermes's packages.\r\n"
+        "set VIRTUAL_ENV=\r\n"
+        "set PYTHONPATH=\r\n"
+        "set PYTHONHOME=\r\n"
+        f"{launch_cmd}\r\n"
+    )
+
+
+def _hermes_instructions(remote: bool) -> None:
+    """Print step-by-step Hermes desktop app setup instructions (Windows only)."""
+    home = _home()
+    hermes_dir = Path(os.environ.get("APPDATA", home / "AppData" / "Roaming")) / "Hermes"
+    bat_path = hermes_dir / "qgis-mcp-launch.bat"
+    cfg_path = hermes_dir / "config.yaml"
+
+    bat_content = _hermes_bat_content(remote)
+
+    print()
+    print("  Hermes desktop app (Windows) — manual setup required:")
+    print()
+    print(f"  Step 1 — Create the launcher: {bat_path}")
+    print()
+    for line in bat_content.splitlines():
+        print(f"    {line}")
+    print()
+    print(f"  Step 2 — Add to {cfg_path}:")
+    print()
+    bat_escaped = str(bat_path).replace("\\", "\\\\")
+    print("    mcpServers:")
+    print("      qgis:")
+    print(f'        command: "{bat_escaped}"')
+    print("        args: []")
+    print()
+    print("  See docs/agent-integration.md for full details.")
 
 
 # ── Plugin installation ────────────────────────────────────────────────────
@@ -333,6 +393,11 @@ def configure_client(client_name: str, remote: bool) -> None:
     registry = _client_registry()
     info = registry[client_name]
 
+    # Hermes desktop app: YAML config + bat launcher — print instructions only
+    if info.get("entry_format") == "hermes":
+        _hermes_instructions(remote)
+        return
+
     # CLI-based clients (Claude Code, Codex): use their `mcp add` subcommand
     if info.get("print_only"):
         cli_name = info.get("cli", "claude")
@@ -404,6 +469,13 @@ def unconfigure_client(client_name: str) -> None:
     registry = _client_registry()
     info = registry[client_name]
 
+    # Hermes: manual YAML edit required — just advise the user
+    if info.get("entry_format") == "hermes":
+        hermes_cfg = info.get("hermes_cfg")
+        cfg_hint = str(hermes_cfg) if hermes_cfg else "%APPDATA%\\Hermes\\config.yaml"
+        print(f"  Hermes: remove the 'qgis' key from mcpServers in {cfg_hint} manually.")
+        return
+
     if info.get("print_only"):
         cli_name = info.get("cli", "claude")
         cli_bin = shutil.which(cli_name)
@@ -442,7 +514,7 @@ def unconfigure_client(client_name: str) -> None:
 
 # ── Interactive menu ────────────────────────────────────────────────────────
 
-ALL_CLIENTS = ["claude-desktop", "cursor", "vscode", "windsurf", "zed", "claude-code", "codex", "opencode"]
+ALL_CLIENTS = ["claude-desktop", "cursor", "vscode", "windsurf", "zed", "claude-code", "codex", "opencode", "hermes"]
 
 
 def interactive_menu() -> list[str]:
