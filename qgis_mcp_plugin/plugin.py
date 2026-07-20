@@ -3320,6 +3320,13 @@ def _client_config_registry(repo_dir):
 
     opencode_cfg = home / ".config" / "opencode" / "opencode.json"
 
+    # Hermes desktop app (Windows) - YAML-based config, handled as print_only
+    hermes_cfg = (
+        appdata / "Hermes" / "config.yaml"
+        if sys.platform == "win32" and appdata
+        else None
+    )
+
     return {
         "claude-desktop": {"path": claude_cfg, "key": "mcpServers"},
         "cursor": {"path": cursor_cfg, "key": "mcpServers"},
@@ -3328,6 +3335,7 @@ def _client_config_registry(repo_dir):
         "zed": {"path": zed_cfg, "key": "context_servers"},
         "opencode": {"path": opencode_cfg, "key": "mcp"},
         "claude-code": {"print_only": True},
+        "hermes": {"print_only": True, "entry_format": "hermes", "hermes_cfg": hermes_cfg},
     }
 
 
@@ -3429,7 +3437,7 @@ class MCPConfiguratorDialog(QDialog):
         client_row.addWidget(QLabel("Client:"))
         self.client_combo = QComboBox()
         self.client_combo.addItems(
-            ["claude-code", "claude-desktop", "cursor", "opencode", "vscode", "windsurf", "zed"]
+            ["claude-code", "claude-desktop", "cursor", "hermes", "opencode", "vscode", "windsurf", "zed"]
         )
         self.client_combo.setMinimumWidth(180)
         self.client_combo.currentTextChanged.connect(self._on_client_changed)
@@ -3595,6 +3603,55 @@ class MCPConfiguratorDialog(QDialog):
             }
         return entry
 
+    def _hermes_preview_text(self, remote: bool) -> str:
+        """Return the full setup instructions for Hermes desktop app (Windows).
+
+        Note: the bat-file content here mirrors install.py's _hermes_bat_content().
+        The plugin cannot import install.py (it runs inside QGIS), so the logic is
+        intentionally duplicated to keep the plugin self-contained.
+        """
+        home = Path.home()
+        appdata = Path(os.environ.get("APPDATA", str(home / "AppData" / "Roaming")))
+        hermes_dir = appdata / "Hermes"
+        bat_path = hermes_dir / "qgis-mcp-launch.bat"
+        cfg_path = hermes_dir / "config.yaml"
+
+        if remote:
+            launch_cmd = f'uvx --from "{self.github_url}" qgis-mcp-server'
+        else:
+            uv = self._find_uv() or "uv"
+            launch_cmd = f'"{uv}" --directory "{self.repo_dir}" run --no-sync src/qgis_mcp/server.py'
+
+        bat_lines = [
+            "@echo off",
+            "REM Launch qgis-mcp-server isolated from Hermes's own Python venv.",
+            "REM Clearing venv vars prevents Hermes's pydantic/mcp from being imported.",
+            "set VIRTUAL_ENV=",
+            "set PYTHONPATH=",
+            "set PYTHONHOME=",
+            launch_cmd,
+        ]
+        bat_content = "\n".join(bat_lines)
+
+        bat_escaped = str(bat_path).replace("\\", "\\\\")
+        yaml_block = (
+            "mcpServers:\n"
+            "  qgis:\n"
+            f'    command: "{bat_escaped}"\n'
+            "    args: []"
+        )
+
+        return (
+            f"Step 1 — Create this file:\n"
+            f"  {bat_path}\n\n"
+            f"Contents:\n"
+            f"{bat_content}\n\n"
+            f"Step 2 — Add to:\n"
+            f"  {cfg_path}\n\n"
+            f"{yaml_block}\n\n"
+            f"See docs/agent-integration.md for full details."
+        )
+
     def update_preview(self):
         client = self.client_combo.currentText()
         remote = self.mode_combo.currentText().startswith("Remote")
@@ -3602,6 +3659,13 @@ class MCPConfiguratorDialog(QDialog):
         # Refresh only applies to remote (uvx) mode.
         self.refresh_check.setEnabled(remote)
         info = self._get_client_info(client)
+
+        if info.get("entry_format") == "hermes":
+            self.preview_label.setText(
+                "Manual setup required — copy the .bat content and YAML config below:"
+            )
+            self.preview_edit.setPlainText(self._hermes_preview_text(remote))
+            return
 
         if info.get("print_only"):
             if remote:
@@ -3624,6 +3688,23 @@ class MCPConfiguratorDialog(QDialog):
     def refresh_status(self):
         client = self.client_combo.currentText()
         info = self._get_client_info(client)
+
+        if info.get("entry_format") == "hermes":
+            hermes_cfg = info.get("hermes_cfg")
+            if hermes_cfg and hermes_cfg.exists():
+                self.status_label.setText(
+                    f"Status: config.yaml found — verify 'qgis' is in mcpServers ({hermes_cfg})"
+                )
+                self.status_label.setStyleSheet("color: orange;")
+            else:
+                cfg_hint = str(hermes_cfg) if hermes_cfg else "%APPDATA%\\Hermes\\config.yaml"
+                self.status_label.setText(
+                    f"Status: Follow the steps below, then edit {cfg_hint}"
+                )
+                self.status_label.setStyleSheet("color: gray;")
+            self.apply_btn.setEnabled(False)
+            self.update_preview()
+            return
 
         if info.get("print_only"):
             self.status_label.setText("Run the command above in your terminal.")
