@@ -547,7 +547,11 @@ async def list_qgis_instances(ctx: Context) -> dict[str, Any]:
             {"name": name, "host": host, "port": port, "reachable": ok}
             for (name, (host, port)), ok in zip(instances.items(), reachable, strict=True)
         ],
-        "default_instance": DEFAULT_INSTANCE,
+        # The name a call with no `instance` argument actually resolves to — not
+        # the constant "default", which would be a lie whenever no entry carries
+        # that name. This is the field an agent reads to learn where its
+        # instance-less calls land, so it has to be the resolved value.
+        "implicit_instance": implicit_instance(instances),
         "count": len(instances),
     }
 

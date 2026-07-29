@@ -2603,9 +2603,26 @@ async def test_list_qgis_instances_reports_configuration_and_reachability():
             {"name": "a", "host": "localhost", "port": 9876, "reachable": True},
             {"name": "b", "host": "lab", "port": 9877, "reachable": False},
         ],
-        "default_instance": "default",
+        # No entry is named 'default', so instance-less calls land on 'a' —
+        # reporting the constant "default" here would misdirect every caller
+        # that reads this field to find out where its calls go.
+        "implicit_instance": "a",
         "count": 2,
     }
+
+
+@pytest.mark.asyncio
+async def test_list_instances_reports_default_when_one_is_named_default():
+    """With an explicit 'default' entry, that is what instance-less calls use."""
+    from qgis_mcp.server import list_qgis_instances
+
+    with (
+        patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876,default=9877"}, clear=True),
+        patch("qgis_mcp.server._probe_instance", side_effect=[True, True]),
+    ):
+        result = await list_qgis_instances(_make_ctx())
+
+    assert result["implicit_instance"] == "default"
 
 
 def test_probe_instance_reports_unreachable_port():
