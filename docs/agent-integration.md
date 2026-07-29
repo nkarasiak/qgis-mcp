@@ -244,7 +244,6 @@ in `QGIS_MCP_INSTANCES`:
 ```
 
 - Every tool takes an optional `instance` argument: `get_layers(instance="planning")`.
-  Omitting it targets the instance named `default`.
 - `list_qgis_instances` reports the configured names, host, port, and whether each is
   currently reachable.
 - An unknown name is rejected with the list of configured names.
@@ -252,8 +251,12 @@ in `QGIS_MCP_INSTANCES`:
   (default `localhost`).
 - Each instance keeps its own pooled socket and its own lock, so two instances can be
   driven concurrently without blocking each other.
-- If `QGIS_MCP_INSTANCES` lists no `default` entry, every call must name an instance
-  explicitly.
+- Omitting `instance` targets the entry named `default`; when no entry is called `default`,
+  the **first** entry listed is used, so `planning=9877,archive=9878` works without
+  renaming anything.
+- **Not supported with `QGIS_MCP_TOOL_MODE=compound`.**  Compound tools carry no `instance`
+  argument, so configuring more than one instance in compound mode refuses to start rather
+  than silently routing every call to one QGIS.
 - `QGIS_MCP_TOKEN` is shared by all instances — set the same secret in each QGIS.
 
 ---

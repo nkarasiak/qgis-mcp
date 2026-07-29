@@ -325,10 +325,11 @@ One server registration can drive several running QGIS windows. Start each QGIS 
 }
 ```
 
-- Every tool takes an optional `instance` argument (`get_layers(instance="planning")`); omitting it targets the instance named `default`.
+- Every tool takes an optional `instance` argument (`get_layers(instance="planning")`). Omitting it targets the entry named `default`, or — when no entry is called `default` — the **first** entry listed, so `planning=9877,archive=9878` works without renaming anything.
 - `list_qgis_instances` returns the configured names with their host, port, and current reachability. An unknown name is rejected with the list of valid names.
 - Instance names match `[A-Za-z0-9_-]+`; entries without a host use `QGIS_MCP_HOST` (default `localhost`).
 - Each instance has its own pooled connection and its own lock, so two QGIS windows can be driven concurrently.
+- **Not supported with `QGIS_MCP_TOOL_MODE=compound`.** Compound tools carry no `instance` argument, so every call would silently hit one instance; configuring more than one instance in compound mode refuses to start rather than routing writes to the wrong QGIS.
 - When `QGIS_MCP_INSTANCES` is unset, exactly one instance named `default` is defined from `QGIS_MCP_HOST`/`QGIS_MCP_PORT` — existing setups are unaffected.
 - `QGIS_MCP_TOKEN` is shared across instances: the same secret must be set in every QGIS.
 

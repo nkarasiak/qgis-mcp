@@ -2310,15 +2310,72 @@ def test_unknown_instance_error_lists_configured_names():
         resolve_instance("nope")
 
 
-def test_unknown_default_instance_error_is_actionable():
-    """A config without a 'default' entry explains why an instance-less call fails."""
+def test_instance_less_call_falls_back_to_first_entry():
+    """Without a 'default' entry, an instance-less call uses the FIRST configured one.
+
+    Requiring an entry literally named 'default' would break the natural config
+    'a=9876,b=9877' for every instance-less call, which is how tools are
+    overwhelmingly invoked.
+    """
     from qgis_mcp.server import resolve_instance
 
-    with (
-        patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876"}, clear=True),
-        pytest.raises(ValueError, match="defines no 'default' entry"),
-    ):
-        resolve_instance(None)
+    with patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876,b=9877"}, clear=True):
+        assert resolve_instance(None) == "a"
+    # Written in the other order, the other entry wins — insertion order, not sorted.
+    with patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "zeta=9877,alpha=9876"}, clear=True):
+        assert resolve_instance(None) == "zeta"
+
+
+def test_explicit_default_entry_wins_over_first():
+    """'default' is preferred wherever it appears in the spec, not just first."""
+    from qgis_mcp.server import resolve_instance
+
+    with patch.dict(os.environ, {"QGIS_MCP_INSTANCES": "a=9876,default=9877"}, clear=True):
+        assert resolve_instance(None) == "default"
+
+
+def test_compound_mode_refuses_multiple_instances():
+    """Compound tools cannot select an instance, so the combination must not start.
+
+    Silently routing every compound call to one instance while the config
+    advertises several is a wrong-instance write with no error — worse than
+    refusing to boot.
+    """
+    import subprocess
+
+    env = {
+        **os.environ,
+        "QGIS_MCP_TOOL_MODE": "compound",
+        "QGIS_MCP_INSTANCES": "a=9876,b=9877",
+        "PYTHONPATH": os.path.join(os.path.dirname(__file__), "..", "src"),
+    }
+    proc = subprocess.run(
+        [sys.executable, "-c", "import qgis_mcp.server"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode != 0
+    assert "does not support multiple instances" in proc.stderr
+
+
+def test_compound_mode_allows_single_instance():
+    """Single-instance compound mode is unaffected by the guard."""
+    import subprocess
+
+    env = {
+        **os.environ,
+        "QGIS_MCP_TOOL_MODE": "compound",
+        "QGIS_MCP_INSTANCES": "solo=9876",
+        "PYTHONPATH": os.path.join(os.path.dirname(__file__), "..", "src"),
+    }
+    proc = subprocess.run(
+        [sys.executable, "-c", "import qgis_mcp.server"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
 
 
 def test_pool_keys_connections_by_instance():

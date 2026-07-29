@@ -168,19 +168,30 @@ def get_instances() -> dict[str, tuple[str, int]]:
 def _unknown_instance_error(name: str, instances: dict[str, tuple[str, int]]) -> ValueError:
     """Build the error raised for an instance name that is not configured."""
     valid = ", ".join(instances) or "(none)"
-    hint = ""
-    if name == DEFAULT_INSTANCE:
-        hint = (
-            " — QGIS_MCP_INSTANCES defines no 'default' entry, so every tool call must "
-            "pass an explicit instance name (or add 'default=<port>' to QGIS_MCP_INSTANCES)"
-        )
-    return ValueError(f"Unknown QGIS instance: {name!r}. Configured instances: {valid}{hint}")
+    return ValueError(f"Unknown QGIS instance: {name!r}. Configured instances: {valid}")
+
+
+def implicit_instance(instances: dict[str, tuple[str, int]]) -> str:
+    """The instance a call with no explicit name is routed to.
+
+    ``default`` when it exists, otherwise the FIRST configured entry — dict
+    insertion order, which is the order written in ``QGIS_MCP_INSTANCES``.
+    Without this fallback the natural config ``a=9876,b=9877`` would break every
+    instance-less call, and instance-less is how tools are overwhelmingly
+    invoked; requiring one entry to be literally named ``default`` is a trap
+    rather than a safeguard.
+    """
+    if DEFAULT_INSTANCE in instances:
+        return DEFAULT_INSTANCE
+    return next(iter(instances))
 
 
 def resolve_instance(instance: str | None) -> str:
-    """Validate an instance name; ``None`` resolves to ``default``."""
-    name = instance or DEFAULT_INSTANCE
+    """Validate an instance name; ``None`` resolves per :func:`implicit_instance`."""
     instances = get_instances()
+    if not instances:
+        raise ValueError("No QGIS instances configured — check QGIS_MCP_INSTANCES")
+    name = instance or implicit_instance(instances)
     if name not in instances:
         raise _unknown_instance_error(name, instances)
     return name
@@ -519,7 +530,8 @@ async def diagnose(ctx: Context, instance: str | None = None) -> dict[str, Any]:
     annotations=ToolAnnotations(readOnlyHint=True),
     description="List the configured QGIS instances with their name, host, port, and whether "
     "each is currently reachable. Pass a name as the 'instance' argument of any other tool to "
-    "target that QGIS window; omitting it targets the 'default' instance.",
+    "target that QGIS window; omitting it targets the instance named 'default', or the first "
+    "one listed when no instance is called 'default'.",
     structured_output=True,
 )
 async def list_qgis_instances(ctx: Context) -> dict[str, Any]:
@@ -2480,6 +2492,22 @@ async def set_layer_order(ctx: Context, layer_ids: list[str], instance: str | No
 
 _tool_mode = os.environ.get("QGIS_MCP_TOOL_MODE", "granular")
 if _tool_mode == "compound":
+    # Compound tools carry no `instance` parameter, so every call would silently
+    # go to the implicit instance while multi-instance config suggested
+    # otherwise — a wrong-instance write with no error is worse than refusing to
+    # start. Refuse the unsupported combination instead; single-instance
+    # compound mode is unaffected.
+    _compound_instances = get_instances()
+    if len(_compound_instances) > 1:
+        raise SystemExit(
+            "QGIS_MCP_TOOL_MODE=compound does not support multiple instances "
+            f"(QGIS_MCP_INSTANCES defines {len(_compound_instances)}: "
+            f"{', '.join(_compound_instances)}). Compound tools cannot select an "
+            "instance, so every call would silently target "
+            f"{implicit_instance(_compound_instances)!r}. Use granular mode for "
+            "multi-instance setups, or configure a single instance."
+        )
+
     from qgis_mcp.compound_tools import register_compound_tools
 
     # Replace granular tools with compound tools
