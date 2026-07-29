@@ -2,7 +2,7 @@
 
 Connect [QGIS](https://qgis.org/) to [Claude AI](https://claude.ai/) through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), enabling Claude to directly control QGIS — manage layers, edit features, run processing algorithms, render maps, and more.
 
-102 MCP tools covering layer management, feature editing, processing, rendering, styling, layout & atlas authoring, cross-layer SQL, plugin development, and system management. Compatible with QGIS 3.28–4.x. Works with Claude Code, Codex CLI, Gemini CLI, opencode, Claude Desktop, Cursor, VS Code, Windsurf, Zed, and more.
+104 MCP tools covering layer management, feature editing, processing, rendering, styling, layout & atlas authoring, cross-layer SQL, plugin development, and system management. Compatible with QGIS 3.28–4.x. Works with Claude Code, Codex CLI, Gemini CLI, opencode, Claude Desktop, Cursor, VS Code, Windsurf, Zed, and more.
 
 ## Architecture
 
@@ -240,7 +240,7 @@ To auto-update instead, add `--refresh-package qgis-mcp` before `--from` in the 
 
 After updating the plugin, click **Stop / Start** in the QGIS MCP dock widget (or reload via `Plugins` > `QGIS MCP` > `Reload Plugin`) to load the new code without restarting QGIS.
 
-## Tools (102)
+## Tools (103)
 
 | Category | Tools |
 |----------|-------|
@@ -255,7 +255,7 @@ After updating the plugin, click **Stop / Start** in the QGIS MCP dock widget (o
 | **Query** | `execute_sql`, `evaluate_expression`, `identify_features` |
 | **Layer tree** | `get_layer_tree`, `create_layer_group`, `move_layer_to_group`, `duplicate_layer`, `set_layer_order` |
 | **Plugins** | `list_plugins`, `get_plugin_info`, `reload_plugin` |
-| **System** | `ping`, `diagnose`, `get_qgis_info`, `get_raster_info`, `get_message_log`, `execute_code`, `batch_commands`, `validate_expression`, `get_project_variables`, `set_project_variable`, `get_setting`, `set_setting`, `transform_coordinates` |
+| **System** | `ping`, `diagnose`, `list_qgis_instances`, `get_qgis_info`, `get_raster_info`, `get_message_log`, `execute_code`, `batch_commands`, `validate_expression`, `get_project_variables`, `set_project_variable`, `get_setting`, `set_setting`, `transform_coordinates` |
 
 All tools are async with human-readable titles and annotations (`readOnly`, `destructive`, `idempotent`). Destructive tools ask for confirmation via MCP elicitation when supported; clients without elicitation proceed normally (fail-open) since tools are already gated by `ToolAnnotations`. Long-running tools report progress via MCP logging.
 
@@ -281,11 +281,12 @@ Groups: `system`, `project`, `layer`, `features`, `selection`, `style`, `canvas`
 |---------------------|---------|-------------|
 | `QGIS_MCP_HOST` | `localhost` | Host for socket connection |
 | `QGIS_MCP_PORT` | `9876` | Port for socket connection |
+| `QGIS_MCP_INSTANCES` | _(unset)_ | Address several running QGIS windows from one server. See [Multiple QGIS instances](#multiple-qgis-instances). |
 | `QGIS_MCP_TOKEN` | _(unset)_ | Optional shared secret. When set, the plugin rejects any command without a matching token. See [Authentication](#authentication). |
 | `QGIS_MCP_TRANSPORT` | `stdio` | MCP transport: `stdio` or `streamable-http` |
 | `QGIS_MCP_LOG_FILE` | `~/.local/share/qgis-mcp/server.log` | Log file path (empty to disable) |
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level |
-| `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (103 tools) or `compound` (25 grouped) |
+| `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (104 tools) or `compound` (25 grouped) |
 
 ### Authentication
 
@@ -307,6 +308,29 @@ By default the socket has **no authentication** — it binds to `localhost` only
    ```
 
 The token is compared in constant time. When `QGIS_MCP_TOKEN` is unset (the default), behaviour is unchanged. This raises the bar against other local users/processes; a process running as the same user can still read the token from your config, so it is not a sandbox.
+
+### Multiple QGIS instances
+
+One server registration can drive several running QGIS windows. Start each QGIS with the plugin on its own port, then list them in `QGIS_MCP_INSTANCES` as comma-separated `name=port` or `name=host:port` entries:
+
+```json
+{
+  "mcpServers": {
+    "qgis": {
+      "command": "uvx",
+      "args": ["--from", "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip", "qgis-mcp-server"],
+      "env": { "QGIS_MCP_INSTANCES": "default=9876,planning=9877,archive=lab-box:9878" }
+    }
+  }
+}
+```
+
+- Every tool takes an optional `instance` argument (`get_layers(instance="planning")`); omitting it targets the instance named `default`.
+- `list_qgis_instances` returns the configured names with their host, port, and current reachability. An unknown name is rejected with the list of valid names.
+- Instance names match `[A-Za-z0-9_-]+`; entries without a host use `QGIS_MCP_HOST` (default `localhost`).
+- Each instance has its own pooled connection and its own lock, so two QGIS windows can be driven concurrently.
+- When `QGIS_MCP_INSTANCES` is unset, exactly one instance named `default` is defined from `QGIS_MCP_HOST`/`QGIS_MCP_PORT` — existing setups are unaffected.
+- `QGIS_MCP_TOKEN` is shared across instances: the same secret must be set in every QGIS.
 
 ## Contributing
 

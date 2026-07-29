@@ -27,10 +27,13 @@ uv run --no-sync src/qgis_mcp/server.py
 # Run with custom host/port
 QGIS_MCP_HOST=192.168.1.100 QGIS_MCP_PORT=9877 uv run --no-sync src/qgis_mcp/server.py
 
+# Run against several QGIS instances from one server (tools take instance="b")
+QGIS_MCP_INSTANCES=default=9876,b=9877 uv run --no-sync src/qgis_mcp/server.py
+
 # Run with streamable HTTP transport (for remote/multi-client)
 QGIS_MCP_TRANSPORT=streamable-http uv run --no-sync src/qgis_mcp/server.py
 
-# Run with compound tool mode (reduces 103 tools to 25 grouped tools)
+# Run with compound tool mode (reduces 104 tools to 25 grouped tools)
 QGIS_MCP_TOOL_MODE=compound uv run --no-sync src/qgis_mcp/server.py
 
 # Run the multi-client installer (plugin symlink + MCP client config)
@@ -52,15 +55,16 @@ uv run --no-sync pytest tests/ -v
 |---|---|---|
 | `QGIS_MCP_HOST` | `localhost` | Host for QGIS plugin socket connection |
 | `QGIS_MCP_PORT` | `9876` | Port for QGIS plugin socket connection |
+| `QGIS_MCP_INSTANCES` | _(unset)_ | Comma-separated `name=port` / `name=host:port` list of QGIS instances addressable from one server (e.g. `default=9876,b=9877`). Unset = a single instance named `default` from `QGIS_MCP_HOST`/`QGIS_MCP_PORT`. Names match `[A-Za-z0-9_-]+`. |
 | `QGIS_MCP_TOKEN` | _(unset)_ | Optional shared secret. When set, the plugin requires a matching `token` on every command (constant-time compare); the client attaches it automatically. Unset = no auth (default, backward-compatible). |
 | `QGIS_MCP_TRANSPORT` | `stdio` | MCP transport: `stdio` or `streamable-http` |
 | `QGIS_MCP_LOG_FILE` | `~/.local/share/qgis-mcp/server.log` | Log file path (empty to disable file logging) |
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
-| `QGIS_MCP_TOOL_MODE` | `granular` | Tool registration mode: `granular` (103 tools) or `compound` (25 grouped tools) |
+| `QGIS_MCP_TOOL_MODE` | `granular` | Tool registration mode: `granular` (104 tools) or `compound` (25 grouped tools) |
 
 ## MCP Tools, Resources, Prompts, Protocol Features
 
-See the `qgis-mcp-tools` skill (`.claude/skills/qgis-mcp-tools/SKILL.md`) for the full tool table (102 tools), MCP resources, prompts, and protocol features (logging, elicitation, completions, annotations, compound mode).
+See the `qgis-mcp-tools` skill (`.claude/skills/qgis-mcp-tools/SKILL.md`) for the full tool table (103 tools), MCP resources, prompts, and protocol features (logging, elicitation, completions, annotations, compound mode).
 
 ## Key Details
 
@@ -70,6 +74,7 @@ See the `qgis-mcp-tools` skill (`.claude/skills/qgis-mcp-tools/SKILL.md`) for th
 - **Dev dependencies**: `pytest>=7.0`, `pytest-asyncio>=0.23`
 - **Socket protocol**: Length-prefixed framing over TCP. Each message: 4-byte big-endian uint32 length header + JSON payload bytes. Client sends `{"type": "<command>", "params": {...}}`, server responds `{"status": "success"|"error", "result": ...}`.
 - **Connection management**: MCP server validates connection via `getpeername()`. Host/port configurable via `QGIS_MCP_HOST`/`QGIS_MCP_PORT` env vars. QGIS plugin supports up to 10 concurrent clients (e.g. multiple Claude Code instances each spawning their own MCP server process).
+- **Multi-instance**: `QGIS_MCP_INSTANCES` lets one server address several running QGIS windows. `get_instances()` resolves the config from the environment on every call; connections, TTL validation timestamps, first-connect retry state and locks are all keyed by instance name (`_qgis_connections`, `_connection_validated_at`, `_first_connected`, `_qgis_locks`), so two instances never serialize against each other. `_send_sync()`/`_send()` take a trailing `instance` argument and every `@mcp.tool` function forwards its own `instance: str | None = None` parameter (`test_every_tool_forwards_instance` enforces this for all of them). Unset env = one instance named `default`, identical to the previous behaviour. Compound tool mode (`QGIS_MCP_TOOL_MODE=compound`) does **not** expose instance selection — its tools always target `default`.
 - **All tools async**: Every tool function is `async def` to enable `await ctx.info()`, `ctx.elicit()`, etc. The `_send_sync()` helper stays synchronous (blocking socket call — acceptable since responses are fast).
 - **Feature format**: Flat dicts with `_fid` (feature ID) and attributes at top level. Geometry in `_geometry` key when requested.
 - **`get_layer_features` limit**: MCP tool caps at 50 features (default 10). Supports `expression` for server-side filtering.

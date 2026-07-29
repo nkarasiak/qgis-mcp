@@ -3,12 +3,13 @@ name: qgis-mcp-tools
 description: Reference for all qgis-mcp MCP tools, resources, and prompts (names, titles, annotations, descriptions). Use when adding/modifying an MCP tool, explaining what a tool does, or checking tool annotations (readOnly/destructive/idempotent).
 ---
 
-# MCP Tools (102 total)
+# MCP Tools (103 total)
 
 | Tool | Title | Annotations | Description |
 |---|---|---|---|
 | `ping` | Ping | readOnly | Check server connectivity |
 | `diagnose` | Diagnose | readOnly | Full stack health check: QGIS version, plugin/server version match, providers, clients |
+| `list_qgis_instances` | List QGIS Instances | readOnly | Configured QGIS instances (name, host, port) + current reachability |
 | `get_qgis_info` | Get QGIS Info | readOnly | QGIS version, profile, plugins |
 | `get_project_info` | Get Project Info | readOnly | Project metadata, CRS, layers |
 | `load_project` | Load Project | — | Load a .qgs/.qgz file |
