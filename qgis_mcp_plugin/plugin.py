@@ -694,13 +694,21 @@ class QgisMCPServer(QObject):
                 "id": layer.id(),
                 "name": layer.name(),
                 "type": self._get_layer_type(layer),
-                "visible": (
-                    layer.isValid() and project.layerTreeRoot().findLayer(layer.id()).isVisible()
-                ),
+                "visible": layer.isValid() and self._is_visible(project, layer.id()),
             }
             info["layers"].append(layer_info)
 
         return info
+
+    def _is_visible(self, project, layer_id):
+        """Visibility of a layer in the layer tree.
+
+        Non-spatial tables (attribute-only tables, e.g. GeoPackage tables used by QGIS relations)
+        live in the project but have no node in the layer tree, so findLayer() returns None.
+        Treat them as not visible instead of raising AttributeError.
+        """
+        node = project.layerTreeRoot().findLayer(layer_id)
+        return node.isVisible() if node is not None else False
 
     def _get_layer_type(self, layer):
         if layer.type() == LAYER_VECTOR:
@@ -827,7 +835,7 @@ class QgisMCPServer(QObject):
                 "id": layer_id,
                 "name": layer.name(),
                 "type": self._get_layer_type(layer),
-                "visible": project.layerTreeRoot().findLayer(layer_id).isVisible(),
+                "visible": self._is_visible(project, layer_id),
             }
 
             if layer.type() == LAYER_VECTOR:
