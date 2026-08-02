@@ -1,5 +1,7 @@
 # QGIS MCP
 
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2Fnkarasiak%2Fqgis-mcp.svg)](https://mcptoplist.com/server/glama%2Fnkarasiak%2Fqgis-mcp)
+
 Connect [QGIS](https://qgis.org/) to [Claude AI](https://claude.ai/) through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), enabling Claude to directly control QGIS — manage layers, edit features, run processing algorithms, render maps, and more.
 
 117 MCP tools covering layer management, feature editing, processing, rendering, styling, layout & atlas authoring, cross-layer SQL, plugin development, and system management. Compatible with QGIS 3.28–4.x. Works with Claude Code, Codex CLI, Gemini CLI, Qwen Code, Kimi Code CLI, GitHub Copilot CLI, opencode, LM Studio, Claude Desktop, Cursor, VS Code, Windsurf, Zed, and more.
