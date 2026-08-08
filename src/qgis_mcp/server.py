@@ -2276,7 +2276,7 @@ async def list_connections(
         "assume a default such as 5432. Set connection_mode='endpoint_using_auth_manager'. Credentials must be "
         "held in an existing QGIS Authentication Manager configuration; passwords are never accepted.\n"
         "  Mode B — service with QGIS Auth Manager: provide name, service (the service name defined in "
-        ".pg_service.conf), auth_config_id (all required)." 
+        ".pg_service.conf), auth_config_id (all required)."
         "Set connection_mode='service_using_auth_manager'. Credentials must be "
         "held in an existing QGIS Authentication Manager configuration; passwords are never accepted."
         "database is an optional override when it's not set in the config file.\n"
