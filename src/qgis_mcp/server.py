@@ -17,7 +17,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
-from typing import Any
+from typing import Any, Literal
 
 try:
     from mcp.server.fastmcp import Context, FastMCP
@@ -2265,32 +2265,50 @@ async def list_connections(
 
 @mcp.tool(
     title="Create PostgreSQL Connection",
-    description="Validate and save a new PostgreSQL Browser-panel connection. Credentials must be held in "
-    "an existing QGIS Authentication Manager configuration; passwords are never accepted. Fails "
-    "if name already exists or the database cannot be reached. port must be the actual database "
-    "port supplied by the caller or user - this tool does not assume a default such as 5432. "
-    "ssl_mode is one of prefer (default), disable, allow, require, verify-ca, or verify-full.",
+    description=(
+        "Create a new PostgreSQL Browser-panel connection. Validate it and save it. "
+        "Fails if name already exists or the database cannot be reached. "
+        "ssl_mode is one of prefer (default), disable, allow, require, verify-ca, or verify-full.\n\n"
+        "Three mutually exclusive modes — when the user's intent is unclear, always ask which of the 3 modes apply "
+        "before calling this tool:\n"
+        "  Mode A — explicit endpoint with QGIS Auth Manager: provide name, host, port, database, auth_config_id (all required). "
+        "port must be the actual database port supplied by the caller or user — this tool does not "
+        "assume a default such as 5432. Set connection_mode='endpoint_using_auth_manager'. Credentials must be "
+        "held in an existing QGIS Authentication Manager configuration; passwords are never accepted.\n"
+        "  Mode B — service with QGIS Auth Manager: provide name, service (the service name defined in "
+        ".pg_service.conf), auth_config_id (all required)." 
+        "Set connection_mode='service_using_auth_manager'. Credentials must be "
+        "held in an existing QGIS Authentication Manager configuration; passwords are never accepted."
+        "database is an optional override when it's not set in the config file.\n"
+        "  Mode C — service only: provide name, service  (all required). "
+        "Set connection_mode='service_only'. database is an optional dbname override when it's not set in the "
+        "config file. Do not pass auth_config_id for this path."
+    ),
     structured_output=True,
 )
 async def create_postgresql_connection(
     ctx: Context,
     name: str,
-    host: str,
-    port: int,
-    database: str,
-    auth_config_id: str,
+    connection_mode: Literal["endpoint_using_auth_manager", "service_using_auth_manager", "service_only"],
+    host: str | None = None,
+    port: int | None = None,
+    database: str | None = None,
+    auth_config_id: str | None = None,
     ssl_mode: str = "prefer",
+    service: str | None = None,
     instance: str | None = None,
 ) -> dict[str, Any]:
     return await _send(
         "create_postgresql_connection",
         {
             "name": name,
+            "connection_mode": connection_mode,
             "host": host,
             "port": port,
             "database": database,
             "auth_config_id": auth_config_id,
             "ssl_mode": ssl_mode,
+            "service": service,
         },
         timeout=TIMEOUT_LONG,
         instance=instance,

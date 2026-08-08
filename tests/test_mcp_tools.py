@@ -2945,6 +2945,7 @@ async def test_create_postgresql_connection_uses_auth_config_and_long_timeout(mo
     output = await create_postgresql_connection(
         _make_ctx(),
         name="warehouse",
+        connection_mode="endpoint_using_auth_manager",
         host="db.example.test",
         port=5433,
         database="gis",
@@ -2956,11 +2957,13 @@ async def test_create_postgresql_connection_uses_auth_config_and_long_timeout(mo
         "create_postgresql_connection",
         {
             "name": "warehouse",
+            "connection_mode": "endpoint_using_auth_manager",
             "host": "db.example.test",
             "port": 5433,
             "database": "gis",
             "auth_config_id": "authcfg1",
             "ssl_mode": "verify-full",
+            "service": None,
         },
         timeout=60,
     )

@@ -94,7 +94,7 @@ description: Reference for all qgis-mcp MCP tools, resources, and prompts (names
 | `undo_edits` | Undo Edits | - | Undo N steps on the layer's own undo stack |
 | `redo_edits` | Redo Edits | - | Redo N previously undone steps |
 | `list_connections` | List Connections | readOnly | Saved Browser-panel connections (PostgreSQL, GeoPackage, SpatiaLite, ...); passwords redacted |
-| `create_postgresql_connection` | Create PostgreSQL Connection | - | Validate and save a PostgreSQL Browser-panel connection with an existing QGIS Authentication Manager configuration; passwords are never accepted, and the caller must supply the real database port instead of assuming `5432` |
+| `create_postgresql_connection` | Create PostgreSQL Connection | — | Validate and save a PostgreSQL Browser-panel connection. Callers must explicitly set `credential_source` to `qgis_auth_manager` or `service_file`. Three connection modes — ask the user which applies: (A) name+host+port+database+auth_config_id with `connection_mode=endpoint_using_auth_manager`; passwords never accepted; (B) name+service name+auth_config_id+optional database override with `connection_mode=service_using_auth_manager`; (C) name+ service name+optional database override with `connection_mode=service_only` |
 | `list_connection_tables` | List Connection Tables | readOnly | Schemas, then tables with geometry column, CRS, primary key and kind |
 | `add_layer_from_connection` | Add Layer from Connection | - | Load a connection table, or a database-side SQL query, as a layer (60s) |
 | `import_layer_to_connection` | Import Layer to Connection | destructive | Write a vector layer into a connection as a new table; `overwrite` elicits (60s) |

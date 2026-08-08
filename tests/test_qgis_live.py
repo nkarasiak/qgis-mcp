@@ -1014,6 +1014,7 @@ def test_create_postgresql_connection_rejects_unknown_auth_config(client):
         "create_postgresql_connection",
         {
             "name": name,
+            "connection_mode": "endpoint_using_auth_manager",
             "host": "db.example.test",
             "port": 5432,
             "database": "gis",

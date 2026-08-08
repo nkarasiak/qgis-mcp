@@ -483,12 +483,16 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "the QGIS Browser panel entries.\n"
             "Actions: list, create, list_tables, add_layer, import_layer, execute_sql\n"
             "- list: provider (str, optional filter, e.g. 'postgres', 'ogr')\n"
-            "- create: PostgreSQL only - name, host, port, database, auth_config_id (all required); "
-            "port has no default and must be the actual database port supplied by the caller or user "
-            "(do not assume 5432). ssl_mode (str, default 'prefer': "
-            "prefer|disable|allow|require|verify-ca|verify-full). Uses an existing QGIS "
-            "Authentication Manager configuration and validates before saving\n"
-            "- list_tables: provider (str), connection (str), schema (str, optional - omit on "
+            "- create: PostgreSQL only — name (required). Three mutually exclusive connection modes:"
+            "You must set the connection_mode according to the selected Mode."
+            "Mode A — explicit endpoint with QGIS Auth Manager: connection_mode='endpoint_using_auth_manager'; name, host, port, database, auth_config_id (all required); "
+            "(do not assume default port 5432). "
+            "Mode B — service with QGIS Auth Manager: connection_mode='service_using_auth_manager'; name service, auth_config_id (all required); database optional override. "
+            "Mode C — service only: connection_mode='service_only'; name, service (all required); database optional override. "
+            "When the user's intent is unclear, ask which path applies before calling. "
+            "ssl_mode (str, default 'prefer': prefer|disable|allow|require|verify-ca|verify-full). "
+            "Uses an existing QGIS Authentication Manager configuration (modes A/B) and validates before saving\n"
+            "- list_tables: provider (str), connection (str), schema (str, optional — omit on "
             "schema-aware providers to get the schema list first)\n"
             "- add_layer: provider (str), connection (str), table (str) + schema (str, optional), "
             "OR sql (str) for a database-side query layer; geometry_column (str, optional), "
@@ -512,11 +516,13 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                 "create_postgresql_connection",
                 {
                     "name": kwargs["name"],
-                    "host": kwargs["host"],
-                    "port": kwargs["port"],
-                    "database": kwargs["database"],
-                    "auth_config_id": kwargs["auth_config_id"],
+                    "connection_mode": kwargs["connection_mode"],
+                    "host": kwargs.get("host"),
+                    "port": kwargs.get("port"),
+                    "database": kwargs.get("database"),
+                    "auth_config_id": kwargs.get("auth_config_id"),
                     "ssl_mode": kwargs.get("ssl_mode", "prefer"),
+                    "service": kwargs.get("service"),
                 },
                 timeout=TIMEOUT_LONG,
             )
