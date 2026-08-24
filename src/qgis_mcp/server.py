@@ -30,6 +30,10 @@ try:
     from mcp.shared.exceptions import McpError
 except ImportError:  # mcp >= 2.0 renamed McpError -> MCPError
     from mcp.shared.exceptions import MCPError as McpError
+try:
+    from mcp.shared.exceptions import NoBackChannelError
+except ImportError:  # mcp < 2.0 has no back-channel concept (initialize() is always duplex)
+    NoBackChannelError = None
 from mcp.types import (
     Annotations,
     Completion,
@@ -461,7 +465,10 @@ async def _confirm_destructive(ctx: Context, message: str) -> bool:
 
     Returns True if client doesn't support elicitation (fail-open), since
     the tool is already marked destructive via ToolAnnotations and the client
-    can gate execution at the tool-call level.
+    can gate execution at the tool-call level. Raises RuntimeError if the
+    request could not be delivered at all (fail-closed) - client capability is
+    unknown in that case, so proceeding would silently defeat the confirmation
+    gate the caller explicitly opted into.
 
     Skipped by default: MCP clients gate destructive tool calls themselves
     (helped by the destructiveHint annotation), so eliciting here is a second
@@ -479,7 +486,22 @@ async def _confirm_destructive(ctx: Context, message: str) -> bool:
         return True
     try:
         response = await ctx.elicit(message=message, schema=_ConfirmSchema)
-    except McpError:
+    except McpError as e:
+        if NoBackChannelError is not None and isinstance(e, NoBackChannelError):
+            # The client may well support elicitation - the transport just can't
+            # deliver a server-initiated request in this mode (e.g. mcp SDK
+            # Client(mode="auto")'s modern per-request dispatch, which has no
+            # persistent channel). We were never able to ask, so - unlike genuine
+            # "client doesn't support elicitation" - fail closed, not open:
+            # QGIS_MCP_AUTO_CONFIRM=0 means the operator wants a confirmation gate.
+            raise RuntimeError(
+                "Cannot confirm destructive operation: this connection has no "
+                "back-channel for server-initiated requests, so the confirmation "
+                "prompt could not be sent (the client's MCP SDK likely negotiated "
+                'mode="auto"/the modern per-request protocol). Reconnect with '
+                'mode="legacy", or unset QGIS_MCP_AUTO_CONFIRM (or set it to '
+                "something other than 0/false/no/off) to skip confirmation prompts."
+            ) from e
         # Client doesn't support elicitation - proceed (fail-open).
         # The destructive ToolAnnotations hint lets clients gate at call time.
         # Only McpError is caught: a malformed elicit() call must not read as
