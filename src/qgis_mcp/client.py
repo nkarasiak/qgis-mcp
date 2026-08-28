@@ -18,6 +18,7 @@ from qgis_mcp.protocol import (
     RECV_CHUNK_SIZE,
     TIMEOUT_DEFAULT,
     TIMEOUT_LONG,
+    CommandTimeout,
     get_auth_token,
     get_client_version,
     get_install_info,
@@ -155,7 +156,7 @@ class QgisMCPClient:
             # the socket so the connection cache reconnects on the next call.
             logger.warning("Socket operation timed out after %ds", timeout)
             self.disconnect()
-            raise ConnectionError(f"Socket operation timed out after {timeout}s") from err
+            raise CommandTimeout(f"Socket operation timed out after {timeout}s") from err
         except ValueError as err:
             # Protocol framing error (e.g. "Response too large") - the socket
             # buffer is now out of sync, so close it and let callers reconnect.

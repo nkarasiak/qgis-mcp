@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from mcp_compat import make_mcp_error
 
 from qgis_mcp.helpers import HEADER_STRUCT, get_auth_token
+from qgis_mcp.protocol import CommandTimeout
 from qgis_mcp.server import QgisMCPClient, _ConfirmSchema, _send_sync
 
 # --- Fixtures ---
@@ -173,6 +174,55 @@ def test_first_connect_uses_patient_retries():
     # Verify escalating delays: 1.0, 2.0, 3.0, 5.0
     delays = [call.args[0] for call in mock_sleep.call_args_list]
     assert delays == [1.0, 2.0, 3.0, 5.0]
+
+
+def test_command_timeout_is_not_retried():
+    """A timed-out command already reached QGIS, so retrying would run it twice."""
+    import qgis_mcp.server as srv
+
+    client = MagicMock(spec=QgisMCPClient)
+    client.socket = MagicMock()
+    client.socket.getpeername.return_value = ("localhost", 9876)
+    client.send_command.side_effect = CommandTimeout("Socket operation timed out after 30s")
+
+    srv._first_connected.add("default")
+    try:
+        with (
+            patch("qgis_mcp.server.get_qgis_connection", return_value=client),
+            patch("qgis_mcp.server._invalidate_connection") as mock_invalidate,
+            patch("qgis_mcp.server.time.sleep") as mock_sleep,
+            pytest.raises(CommandTimeout),
+        ):
+            _send_sync("add_raster_layer", {"path": "/tmp/x.tif"})
+    finally:
+        srv._first_connected.discard("default")
+
+    assert client.send_command.call_count == 1
+    mock_sleep.assert_not_called()
+    # The socket still has an abandoned response coming, so it must go.
+    mock_invalidate.assert_called_once_with("default")
+
+
+def test_connect_timeout_still_retries():
+    """A slow *connect* leaves nothing running in QGIS, so patience still applies."""
+    import qgis_mcp.server as srv
+
+    failure = ConnectionError("Could not connect to QGIS instance 'default'")
+    failure.__cause__ = TimeoutError("timed out")
+
+    srv._first_connected.discard("default")
+    try:
+        with (
+            patch("qgis_mcp.server.get_qgis_connection", side_effect=failure) as mock_connect,
+            patch("qgis_mcp.server._invalidate_connection"),
+            patch("qgis_mcp.server.time.sleep"),
+            pytest.raises(ConnectionError),
+        ):
+            _send_sync("ping")
+    finally:
+        srv._first_connected.discard("default")
+
+    assert mock_connect.call_count == 5
 
 
 # --- Tool-level tests (all async) ---

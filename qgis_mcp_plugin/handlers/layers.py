@@ -629,35 +629,33 @@ class LayerHandlers:
         self, layer_id, output_path, target_crs=None, filter_expression=None, **kwargs
     ):
         """Export a vector/raster layer to disk. target_crs reprojects; format by extension."""
-        import processing
-
         layer = self._layer(layer_id)
 
         if layer.type() == LAYER_VECTOR:
             src = layer
             if filter_expression:
-                r = processing.run(
+                r = self._run_alg(
                     "native:extractbyexpression",
                     {"INPUT": layer, "EXPRESSION": filter_expression, "OUTPUT": "memory:"},
                 )
                 src = r["OUTPUT"]
             if target_crs:
-                processing.run(
+                self._run_alg(
                     "native:reprojectlayer",
                     {"INPUT": src, "TARGET_CRS": target_crs, "OUTPUT": output_path},
                 )
             else:
-                processing.run("native:savefeatures", {"INPUT": src, "OUTPUT": output_path})
+                self._run_alg("native:savefeatures", {"INPUT": src, "OUTPUT": output_path})
             return {"ok": True, "output": output_path}
 
         if layer.type() == LAYER_RASTER:
             if target_crs:
-                processing.run(
+                self._run_alg(
                     "gdal:warpreproject",
                     {"INPUT": layer, "TARGET_CRS": target_crs, "OUTPUT": output_path},
                 )
             else:
-                processing.run("gdal:translate", {"INPUT": layer, "OUTPUT": output_path})
+                self._run_alg("gdal:translate", {"INPUT": layer, "OUTPUT": output_path})
             return {"ok": True, "output": output_path}
 
         raise CommandError(f"Unsupported layer type for export: {layer_id}")

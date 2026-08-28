@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 import time
 import uuid
@@ -1272,3 +1273,141 @@ def test_bad_parameters_are_not_reported_as_plugin_defects(client):
     assert wrong_type["status"] == "error"
     # This one really does fail inside the handler, so it stays a flagged defect.
     assert wrong_type.get("internal") is True, wrong_type
+
+
+@pytest.fixture(scope="module")
+def sample_raster(client):
+    """A tiny single-band GeoTIFF, written where the plugin itself can read it."""
+    code = """
+import os, tempfile
+from osgeo import gdal, osr
+
+path = os.path.join(tempfile.mkdtemp(prefix="qgis_mcp_test_"), "in.tif")
+ds = gdal.GetDriverByName("GTiff").Create(path, 20, 20, 1, gdal.GDT_Byte)
+ds.SetGeoTransform((0, 0.5, 0, 10, 0, -0.5))
+srs = osr.SpatialReference()
+srs.ImportFromEPSG(4326)
+ds.SetProjection(srs.ExportToWkt())
+ds.GetRasterBand(1).Fill(42)
+ds = None
+print(path)
+"""
+    resp = client.send_command("execute_code", {"code": code})
+    assert resp["status"] == "success", resp
+    path = resp["result"]["stdout"].strip()
+    yield path
+    shutil.rmtree(os.path.dirname(path), ignore_errors=True)
+
+
+def test_failed_processing_run_is_not_reported_as_success(client, sample_raster):
+    """A GDAL algorithm that wrote nothing must not come back as a success.
+
+    ``processing.run()`` hands back an algorithm's declared outputs whatever the
+    subprocess did, so before this check the caller got a path to a file that
+    was never written and no error field to tell it apart from a real run.
+    """
+    out_dir = os.path.dirname(sample_raster)
+    bad = os.path.join(out_dir, "bad.tif")
+
+    # Band 99 of a single-band raster: gdal_translate exits 1 and writes nothing.
+    resp = client.send_command(
+        "execute_processing",
+        {
+            "algorithm": "gdal:translate",
+            "parameters": {"INPUT": sample_raster, "EXTRA": "-b 99", "OUTPUT": bad},
+        },
+        timeout=60,
+    )
+    assert resp["status"] == "error", resp
+    assert bad in resp["message"], resp["message"]
+    # The caller's parameters were wrong, so this is not a plugin defect.
+    assert not resp.get("internal"), resp
+    assert not os.path.exists(bad)
+
+
+def test_processing_run_that_writes_its_output_still_succeeds(client, sample_raster):
+    """The output check must not turn working runs into failures."""
+    out_dir = os.path.dirname(sample_raster)
+    good = os.path.join(out_dir, "good.tif")
+
+    resp = client.send_command(
+        "execute_processing",
+        {
+            "algorithm": "gdal:translate",
+            "parameters": {"INPUT": sample_raster, "OUTPUT": good},
+        },
+        timeout=60,
+    )
+    assert resp["status"] == "success", resp
+    assert os.path.exists(good)
+    assert "warnings" not in resp["result"], resp["result"]
+
+    # GDAL writes plenty of non-fatal warnings to stderr, which is why the check
+    # is "did the file appear" and not "was anything reported". Those runs stay
+    # successful, with the warnings passed along instead of swallowed.
+    warned = os.path.join(out_dir, "warned.tif")
+    resp = client.send_command(
+        "execute_processing",
+        {
+            "algorithm": "gdal:translate",
+            "parameters": {
+                "INPUT": sample_raster,
+                "EXTRA": "-srcwin 10 10 30 30",
+                "OUTPUT": warned,
+            },
+        },
+        timeout=60,
+    )
+    assert resp["status"] == "success", resp
+    assert os.path.exists(warned)
+    assert any("outside" in w for w in resp["result"]["warnings"]), resp["result"]
+
+
+def test_processing_batch_reports_the_run_that_failed(client, sample_raster):
+    """Same gap in execute_processing_batch: every index came back as success."""
+    out_dir = os.path.dirname(sample_raster)
+    ok_path = os.path.join(out_dir, "batch_ok.tif")
+    bad_path = os.path.join(out_dir, "batch_bad.tif")
+
+    resp = client.send_command(
+        "execute_processing_batch",
+        {
+            "algorithm": "gdal:translate",
+            "parameters_list": [
+                {"INPUT": sample_raster, "OUTPUT": ok_path},
+                {"INPUT": sample_raster, "EXTRA": "-b 99", "OUTPUT": bad_path},
+            ],
+        },
+        timeout=60,
+    )
+    assert resp["status"] == "success", resp
+    runs = resp["result"]["results"]
+    assert runs[0]["status"] == "success", runs[0]
+    assert runs[1]["status"] == "error", runs[1]
+    assert bad_path in runs[1]["message"], runs[1]
+    assert os.path.exists(ok_path)
+    assert not os.path.exists(bad_path)
+
+
+def test_timeout_closes_the_socket_instead_of_desyncing_it(client):
+    """A timed-out command must not leave its response for the next call to read.
+
+    The plugin keeps working after the client gives up, so the abandoned
+    response arrives into the socket buffer where the next command's framed read
+    would take it as its own - every later call on that connection then returns
+    a previous call's result. Closing the socket is what prevents it, so this
+    uses a throwaway connection rather than the module-scoped one.
+    """
+    probe = QgisMCPClient()
+    if not probe.connect():
+        pytest.skip("QGIS MCP Server is not running on localhost:9876")
+    try:
+        with pytest.raises(ConnectionError):
+            probe.send_command("execute_code", {"code": "import time; time.sleep(3)"}, timeout=1)
+        assert probe.socket is None
+
+        assert probe.connect()
+        # Without the close above this returns the abandoned execute_code result.
+        assert probe.send_command("ping")["result"] == {"pong": True}
+    finally:
+        probe.disconnect()

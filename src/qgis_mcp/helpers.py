@@ -19,6 +19,7 @@ from qgis_mcp.protocol import (  # noqa: F401 - re-exported for server-side impo
     RECV_CHUNK_SIZE,
     TIMEOUT_DEFAULT,
     TIMEOUT_LONG,
+    CommandTimeout,
     get_auth_token,
     get_client_version,
     get_update_command,

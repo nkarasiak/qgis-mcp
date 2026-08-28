@@ -46,6 +46,7 @@ from qgis_mcp.helpers import (
     DEFAULT_PORT,
     TIMEOUT_DEFAULT,
     TIMEOUT_LONG,
+    CommandTimeout,
     enrich_diagnose,
     make_layer_response,
     make_project_response,
@@ -374,6 +375,19 @@ def _send_sync(
             except _CONNECTION_ERRORS as exc:
                 last_exc = exc
                 _invalidate_connection(name)
+                if isinstance(exc, CommandTimeout):
+                    # QGIS has the command and is still working on it; only the
+                    # response was abandoned. Retrying would run it a second
+                    # time: the layer added twice, the file written twice. A slow
+                    # *connect* is a plain ConnectionError from
+                    # get_qgis_connection() and does keep its retries.
+                    logger.warning(
+                        "Command %r timed out on instance %r - not retrying (%s)",
+                        command_type,
+                        name,
+                        exc,
+                    )
+                    raise
                 if _first_connected and _is_refusal(exc):
                     # The host answered: nothing is listening on that port. Another
                     # instance has already connected, so this is a closed QGIS

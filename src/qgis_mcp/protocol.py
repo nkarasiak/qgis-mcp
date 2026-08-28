@@ -36,6 +36,16 @@ BATCH_BLOCKED_COMMANDS = frozenset(
 )
 
 
+class CommandTimeout(ConnectionError):
+    """The command reached QGIS but the client gave up waiting for its response.
+
+    A ``ConnectionError`` so every existing reconnect path still fires, but its
+    own type because the two halves mean different things to a caller: failing
+    to reach QGIS leaves nothing behind, while abandoning a response leaves the
+    command running in QGIS. Retrying the second kind runs it twice.
+    """
+
+
 def get_auth_token():
     """Return the shared-secret socket token, or ``None`` when auth is disabled.
 

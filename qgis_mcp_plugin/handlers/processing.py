@@ -44,6 +44,10 @@ from ..compat import (
 from ..errors import CommandError
 from ..registry import command
 
+# Reported errors reach the caller, so keep only the informative head of them.
+_MAX_TRACKED_ERRORS = 10
+_MAX_ERROR_LENGTH = 500
+
 
 class _ResponsiveFeedback(QgsProcessingFeedback):
     """Processing feedback that keeps the GUI alive and enforces a deadline.
@@ -69,9 +73,11 @@ class _ResponsiveFeedback(QgsProcessingFeedback):
 
     def __init__(self, budget_seconds):
         super().__init__()
+        self.budget = budget_seconds
         self._deadline = time.monotonic() + budget_seconds
         self._last_pump = 0.0
         self.timed_out = False
+        self.errors = []
 
     def _tick(self):
         now = time.monotonic()
@@ -91,6 +97,14 @@ class _ResponsiveFeedback(QgsProcessingFeedback):
         self._tick()
         super().pushInfo(info)
 
+    def reportError(self, error, fatalError=False):
+        # The GDAL providers shell out and surface a non-zero exit code only
+        # through here, never through the results dict, so keeping the messages
+        # is the only way a failed run can be described to the caller.
+        if len(self.errors) < _MAX_TRACKED_ERRORS:
+            self.errors.append(str(error)[:_MAX_ERROR_LENGTH])
+        super().reportError(error, fatalError)
+
 
 class ProcessingHandlers:
     """Processing algorithms, models and the analysis commands built on them."""
@@ -99,21 +113,89 @@ class ProcessingHandlers:
     # why - before the client abandons the request and leaves QGIS still working.
     _PROCESSING_TIMEOUT = 55
 
+    # Output values that name no file on disk, so there is nothing to verify.
+    _NON_FILE_OUTPUTS: ClassVar[tuple] = (
+        "TEMPORARY_OUTPUT",
+        "memory:",
+        "ogr:",
+        "postgres:",
+        "postgresql:",
+        "mssql:",
+    )
+
+    def _run_alg(self, algorithm, parameters, feedback=None):
+        """Run *algorithm*, raising when it did not actually produce its output.
+
+        ``processing.run()`` returns an algorithm's declared outputs whether or
+        not the run succeeded. The GDAL providers shell out and report a
+        non-zero exit code only through the feedback object, so a command that
+        wrote nothing still comes back as ``{"OUTPUT": "/path/never/written"}``
+        and the caller builds on a file that does not exist. Checking the
+        caller's own output paths catches that for every provider without
+        parsing anyone's error text, which is translated and provider-specific.
+        """
+        import processing
+
+        if feedback is None:
+            feedback = _ResponsiveFeedback(self._PROCESSING_TIMEOUT)
+        result = processing.run(algorithm, parameters, feedback=feedback)
+        if feedback.timed_out:
+            raise CommandError(
+                f"Processing cancelled after {feedback.budget:g}s. Pass a larger 'timeout', "
+                "or run heavy raster work with GDAL outside QGIS."
+            )
+        missing = self._missing_outputs(algorithm, parameters)
+        if missing:
+            detail = f": {feedback.errors[0]}" if feedback.errors else ""
+            raise CommandError(
+                f"{algorithm} reported success but wrote no {', '.join(missing)}{detail}"
+            )
+        return result
+
+    def _missing_outputs(self, algorithm, parameters):
+        """Output paths the caller asked for that are not on disk after the run."""
+        from qgis.core import QgsProcessingDestinationParameter
+
+        alg = algorithm
+        if isinstance(alg, str):
+            alg = QgsApplication.processingRegistry().algorithmById(alg)
+        if alg is None:
+            return []
+
+        missing = []
+        for param in alg.parameterDefinitions():
+            if not isinstance(param, QgsProcessingDestinationParameter):
+                continue
+            value = parameters.get(param.name())
+            if not isinstance(value, str) or not value:
+                continue
+            path = value.split("|", 1)[0]
+            if "://" in path or path.startswith(self._NON_FILE_OUTPUTS):
+                continue
+            parent = os.path.dirname(path)
+            # A parent that does not exist means this is not a plain filesystem
+            # path after all (a provider uri, a layer name), so leave it alone
+            # rather than call the run failed on a guess.
+            if parent and not os.path.isdir(parent):
+                continue
+            if not os.path.exists(path):
+                missing.append(path)
+        return missing
+
     @command
     def execute_processing(self, algorithm, parameters, timeout=None, **kwargs):
         try:
-            import processing
-
             QgsMessageLog.logMessage(f"Processing: {algorithm}", self.LOG_TAG, MSG_INFO)
             budget = self._PROCESSING_TIMEOUT if timeout is None else float(timeout)
             feedback = _ResponsiveFeedback(budget)
-            result = processing.run(algorithm, parameters, feedback=feedback)
-            if feedback.timed_out:
-                raise CommandError(
-                    f"Processing cancelled after {budget:g}s. Pass a larger 'timeout', "
-                    "or run heavy raster work with GDAL outside QGIS."
-                )
-            return {"algorithm": algorithm, "result": {k: str(v) for k, v in result.items()}}
+            result = self._run_alg(algorithm, parameters, feedback)
+            response = {"algorithm": algorithm, "result": {k: str(v) for k, v in result.items()}}
+            if feedback.errors:
+                # The outputs are there, so this is not a failure - but GDAL
+                # writes real warnings to stderr and swallowing them is what
+                # made a silently failed run so hard to see.
+                response["warnings"] = feedback.errors
+            return response
         except CommandError:
             # Already a deliberate, user-facing message (the timeout above).
             # Re-wrapping it produced "Processing error: Processing cancelled
@@ -618,7 +700,6 @@ class ProcessingHandlers:
     @command
     def run_model(self, model, parameters=None, **kwargs):
         """Run a Processing model by registered id or by .model3 file path."""
-        import processing
         from qgis.core import QgsProcessingDestinationParameter
 
         parameters = dict(parameters or {})
@@ -648,7 +729,7 @@ class ProcessingHandlers:
                 if isinstance(param, QgsProcessingDestinationParameter):
                     parameters.setdefault(param.name(), "TEMPORARY_OUTPUT")
 
-        result = processing.run(target, parameters)
+        result = self._run_alg(target, parameters)
         return {"model": model, "result": {k: str(v) for k, v in result.items()}}
 
     @command
@@ -670,12 +751,10 @@ class ProcessingHandlers:
     @command
     def execute_processing_batch(self, algorithm, parameters_list, **kwargs):
         """Run the same algorithm once per parameter dict; collect per-run results."""
-        import processing
-
         results = []
         for i, params in enumerate(parameters_list):
             try:
-                r = processing.run(algorithm, params)
+                r = self._run_alg(algorithm, params)
                 results.append(
                     {
                         "index": i,
@@ -752,8 +831,6 @@ class ProcessingHandlers:
         stats: list of int codes (0=count,1=sum,2=mean,3=median,4=stdev,5=min,
         6=max,7=range,8=minority,9=majority,10=variety,11=variance).
         """
-        import processing
-
         poly = self._get_vector_layer(polygon_layer)
         rast = self._get_raster_layer(raster_layer)
         params = {
@@ -764,7 +841,7 @@ class ProcessingHandlers:
             "STATISTICS": stats or [0, 1, 2],
             "OUTPUT": output_path or "memory:zonal_stats",
         }
-        r = processing.run("native:zonalstatisticsfb", params)
+        r = self._run_alg("native:zonalstatisticsfb", params)
         return self._register_output(r["OUTPUT"], "zonal_stats")
 
     @command
@@ -804,8 +881,6 @@ class ProcessingHandlers:
         4=overlaps,5=within,6=crosses). method: 0=one-to-many, 1=first match,
         2=largest overlap.
         """
-        import processing
-
         target = self._get_vector_layer(target_layer)
         join = self._get_vector_layer(join_layer)
         params = {
@@ -817,7 +892,7 @@ class ProcessingHandlers:
             "PREFIX": prefix,
             "OUTPUT": output_path or "memory:joined",
         }
-        r = processing.run("native:joinattributesbylocation", params)
+        r = self._run_alg("native:joinattributesbylocation", params)
         return self._register_output(r["OUTPUT"], "joined")
 
     def _register_output(self, out, default_name):
