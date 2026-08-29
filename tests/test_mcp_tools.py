@@ -2074,6 +2074,40 @@ async def test_destructive_tool_actually_elicits(mock_connection):
 
 
 @pytest.mark.asyncio
+async def test_destructive_tool_fails_closed_without_back_channel(mock_connection):
+    """A client with no back-channel for server-initiated requests must not proceed.
+
+    Discovered downstream: a consumer's live test caught `execute_code` actually
+    running under a client using the mcp SDK's default `mode="auto"` - see
+    notes.md. Traced to `ctx.elicit()` raising `NoBackChannelError` under that
+    mode's stateless per-request dispatch, which has no channel to deliver a
+    server-initiated request *regardless of the client's actual elicitation
+    support*. Since capability is unknown in that case, the correct behavior is
+    to fail closed (never reach QGIS) rather than the old fail-open. This
+    reproduces it in-process against the real `Client` dispatch machinery (not
+    the `_make_ctx` mock), the same way `test_destructive_tool_actually_elicits`
+    does for #27.
+    """
+    pytest.importorskip(
+        "mcp.client.client", reason='mode="auto" negotiation needs the mcp>=2.0 Client'
+    )
+    from mcp.client.client import Client
+
+    from qgis_mcp.server import mcp
+
+    mock_connection.send_command.return_value = {"status": "success", "result": {"ok": True}}
+
+    client = Client(mcp, mode="auto")
+    async with client:
+        result = await client.call_tool("remove_layer", {"layer_id": "L1"})
+
+    # No back-channel to ask on, so the operation must not reach QGIS.
+    assert mock_connection.send_command.call_count == 0
+    assert result.is_error is True
+    assert "back-channel" in result.content[0].text.lower()
+
+
+@pytest.mark.asyncio
 async def test_confirm_destructive_declined_blocks_send(mock_connection):
     """A declined confirmation must abort rather than fall through to fail-open."""
     from qgis_mcp.server import remove_layer
@@ -2092,6 +2126,23 @@ async def test_confirm_destructive_reraises_non_mcp_errors(mock_connection):
     ctx = _make_ctx()
     ctx.elicit = AsyncMock(side_effect=AttributeError("'dict' object has no attribute ..."))
     with pytest.raises(AttributeError):
+        await _confirm_destructive(ctx, "Remove layer?")
+
+
+@pytest.mark.asyncio
+async def test_confirm_destructive_fails_closed_on_no_back_channel(mock_connection):
+    """A NoBackChannelError means we couldn't ask, not that the client can't answer - fail closed."""
+    from mcp_compat import make_no_back_channel_error
+
+    from qgis_mcp.server import _confirm_destructive
+
+    error = make_no_back_channel_error()
+    if error is None:
+        pytest.skip("NoBackChannelError needs mcp>=2.0")
+
+    ctx = _make_ctx()
+    ctx.elicit = AsyncMock(side_effect=error)
+    with pytest.raises(RuntimeError, match="back-channel"):
         await _confirm_destructive(ctx, "Remove layer?")
 
 

@@ -26,6 +26,15 @@ def make_mcp_error(message="Elicitation not supported", code=-32601):
         return McpError(code, message)
 
 
+def make_no_back_channel_error(method="elicitation/create"):
+    """Build the real NoBackChannelError, or None on mcp < 2.0 (no such concept)."""
+    try:
+        from mcp.shared.exceptions import NoBackChannelError
+    except ImportError:
+        return None
+    return NoBackChannelError(method)
+
+
 def lowlevel_server(mcp):
     """The low-level Server behind a FastMCP (1.x) / MCPServer (2.x) instance."""
     server = getattr(mcp, "_mcp_server", None) or getattr(mcp, "_lowlevel_server", None)
