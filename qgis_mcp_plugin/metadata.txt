@@ -19,7 +19,7 @@ about=Socket server plugin that exposes QGIS operations to LLMs through the
     - Non-blocking TCP socket server with length-prefixed framing
     - Toolbar button with port configuration dropdown
 
-version=0.12.0
+version=0.12.1
 author=Nicolas Karasiak
 email=nicart@gmail.com
 tags=mcp,ai,claude,llm,automation,socket,remote
@@ -31,7 +31,12 @@ category=Plugins
 icon=icons/icon.png
 experimental=False
 deprecated=False
-changelog=0.12.0 : Processing runs that wrote no output now fail instead of
+changelog=0.12.1 : With QGIS_MCP_AUTO_CONFIRM=0, destructive tools now fail
+    closed when the connection cannot carry the confirmation prompt (mcp 2.x
+    clients on the 2026-07-28 protocol) instead of running unconfirmed (#41).
+    Error messages reach the client through mcp 2.1 again. Reported and first
+    implemented by awheeler262. Thank you.
+    0.12.0 : Processing runs that wrote no output now fail instead of
     reporting success, and GDAL warnings surface in a separate warnings key
     (#40). A socket timeout closes the connection and is never retried, so a
     late response can no longer desync every later call (#39). Reported by
