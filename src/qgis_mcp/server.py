@@ -2302,31 +2302,25 @@ async def list_connections(
 
 @mcp.tool(
     title="Create PostgreSQL Connection",
-    description=(
-        "Create a new PostgreSQL Browser-panel connection. Validate it and save it. "
-        "Fails if name already exists or the database cannot be reached. "
-        "ssl_mode is one of prefer (default), disable, allow, require, verify-ca, or verify-full.\n\n"
-        "Three mutually exclusive modes — when the user's intent is unclear, always ask which of the 3 modes apply "
-        "before calling this tool:\n"
-        "  Mode A — explicit endpoint with QGIS Auth Manager: provide name, host, port, database, auth_config_id (all required). "
-        "port must be the actual database port supplied by the caller or user — this tool does not "
-        "assume a default such as 5432. Set connection_mode='endpoint_using_auth_manager'. Credentials must be "
-        "held in an existing QGIS Authentication Manager configuration; passwords are never accepted.\n"
-        "  Mode B — service with QGIS Auth Manager: provide name, service (the service name defined in "
-        ".pg_service.conf), auth_config_id (all required)."
-        "Set connection_mode='service_using_auth_manager'. Credentials must be "
-        "held in an existing QGIS Authentication Manager configuration; passwords are never accepted."
-        "database is an optional override when it's not set in the config file.\n"
-        "  Mode C — service only: provide name, service  (all required). "
-        "Set connection_mode='service_only'. database is an optional dbname override when it's not set in the "
-        "config file. Do not pass auth_config_id for this path."
-    ),
+    description="Validate and save a new PostgreSQL Browser-panel connection. Passwords are never "
+    "accepted: credentials come from a QGIS Authentication Manager configuration, from the libpq "
+    "service file (pg_service.conf), or both. connection_mode selects which parameters are "
+    "required; when the user's intent is unclear, ask which mode applies before calling. "
+    "endpoint_using_auth_manager: host, port, database, auth_config_id (port must be the actual "
+    "database port supplied by the caller or user, this tool never assumes 5432). "
+    "service_using_auth_manager: service (the name defined in pg_service.conf) and auth_config_id; "
+    "database optionally overrides the service file's dbname. service_only: service; database "
+    "optionally overrides dbname; do not pass auth_config_id. Parameters a mode does not use are "
+    "rejected. Fails if name already exists or the database cannot be reached. ssl_mode is one of "
+    "prefer (default), disable, allow, require, verify-ca, or verify-full.",
     structured_output=True,
 )
 async def create_postgresql_connection(
     ctx: Context,
     name: str,
-    connection_mode: Literal["endpoint_using_auth_manager", "service_using_auth_manager", "service_only"],
+    connection_mode: Literal[
+        "endpoint_using_auth_manager", "service_using_auth_manager", "service_only"
+    ],
     host: str | None = None,
     port: int | None = None,
     database: str | None = None,

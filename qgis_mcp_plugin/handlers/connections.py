@@ -1,8 +1,8 @@
 """Handlers for saved data source connections (the Browser panel entries).
 
 Connection URIs are password-redacted before they leave the plugin, and
-PostgreSQL connections are created from an external credential source: QGIS
-Authentication Manager or a libpq, never a raw or otherwised exposed password.
+PostgreSQL connections are created from a QGIS Authentication Manager config id,
+from the libpq service file (pg_service.conf), or both, never from a password.
 """
 
 import contextlib
@@ -12,6 +12,7 @@ from typing import ClassVar
 from qgis.core import (
     QgsAbstractDatabaseProviderConnection,
     QgsApplication,
+    QgsCredentials,
     QgsDataSourceUri,
     QgsProject,
     QgsProviderRegistry,
@@ -37,6 +38,16 @@ from ..compat import (
 )
 from ..errors import CommandError
 from ..registry import command
+
+
+class _QuietCredentials(QgsCredentials):
+    """Refuse every credential request instead of opening the Enter Credentials dialog."""
+
+    def request(self, realm, username, password, message=""):
+        return False, username, password
+
+    def requestMasterPassword(self, password, stored=False):
+        return False, password
 
 
 class ConnectionHandlers:
@@ -81,18 +92,6 @@ class ConnectionHandlers:
             )
         return connections[connection]
 
-    def _connect_and_save_postgresql(self, metadata, uri, name, service=None):
-        try:
-            connection = metadata.createConnection(uri.uri(False), {})
-            connection.executeSql("SELECT 1")
-        except Exception as exc:
-            if service:
-                raise CommandError(
-                    f"Failed to connect to PostgreSQL via service {service!r}: {exc}"
-                ) from exc
-            raise CommandError(f"Failed to connect to PostgreSQL: {exc}") from exc
-        metadata.saveConnection(connection, name)
-
     @command
     def list_connections(self, provider=None, **kwargs):
         """List saved data source connections (PostgreSQL, GeoPackage, ...)."""
@@ -116,11 +115,19 @@ class ConnectionHandlers:
                 entries.append(entry)
         return {"connections": entries, "count": len(entries)}
 
+    # connection_mode -> the parameters that mode requires. `name` is always required and
+    # the service modes take `database` as an optional override of the service file's dbname.
+    _POSTGRESQL_MODES: ClassVar[dict] = {
+        "endpoint_using_auth_manager": ("host", "port", "database", "auth_config_id"),
+        "service_using_auth_manager": ("service", "auth_config_id"),
+        "service_only": ("service",),
+    }
+
     @command
     def create_postgresql_connection(
         self,
         name,
-        connection_mode=None,
+        connection_mode="endpoint_using_auth_manager",
         host=None,
         port=None,
         database=None,
@@ -129,122 +136,95 @@ class ConnectionHandlers:
         service=None,
         **kwargs,
     ):
-        """Create a new PostgreSQL Browser connection; persist it after validation.
+        """Validate and persist a password-free PostgreSQL Browser connection.
 
-        Only allowing password-less connections; three modes:
-          A) Explicit endpoint with QGIS Auth Manager: connection_mode=qgis_auth_manager;
-             name + host + port + database + auth_config_id (all required).
-          B) Service with QGIS Auth Manager: connection_mode=qgis_auth_manager;
-             name + service + auth_config_id (all required).
-          C) Only Service: connection_mode=service_file; name + service (required);
-             authentication from service file (pg_service.conf).
-
-        In paths B/C, database is an optional override for the service-file dbname. When it's missing from the config file, it normally defaults to the user name.
+        Credentials come from a QGIS Authentication Manager configuration, from the libpq
+        service file (pg_service.conf), or both; a password is never accepted.
+        `connection_mode` selects which parameters are required (`_POSTGRESQL_MODES`) and
+        anything else that was passed is rejected rather than silently ignored.
         """
+        required = self._pick(self._POSTGRESQL_MODES, connection_mode, "connection mode")
+        given = {
+            "name": name,
+            "host": host,
+            "port": port,
+            "database": database,
+            "auth_config_id": auth_config_id,
+            "service": service,
+        }
+        given = {key: "" if value is None else str(value).strip() for key, value in given.items()}
+        for key in ("name", *required):
+            if not given[key]:
+                raise CommandError(f"{key} is required for connection_mode {connection_mode!r}")
+        allowed = {"name", "database", *required}
+        for key, value in given.items():
+            if value and key not in allowed:
+                raise CommandError(f"{key} is not used by connection_mode {connection_mode!r}")
+        name, host, database = given["name"], given["host"], given["database"]
+        auth_config_id, service = given["auth_config_id"], given["service"]
+        port_error = "PostgreSQL port must be an integer from 1 to 65535"
+        if "port" in required:
+            try:
+                port = int(given["port"])
+            except ValueError as exc:
+                raise CommandError(port_error) from exc
+            if not 1 <= port <= 65535:
+                raise CommandError(port_error)
 
         normalized_ssl_mode = str(ssl_mode).strip().lower().replace("_", "-")
-        ssl_value = self._POSTGRESQL_SSL_MODES.get(normalized_ssl_mode)
-        if ssl_value is None:
-            allowed = ", ".join(self._POSTGRESQL_SSL_MODES)
-            raise CommandError(
-                f"Unknown SSL mode {ssl_mode!r}; expected one of: {allowed}"
-            )
+        ssl_value = self._pick(self._POSTGRESQL_SSL_MODES, normalized_ssl_mode, "SSL mode")
+
+        if auth_config_id and auth_config_id not in QgsApplication.authManager().configIds():
+            raise CommandError(f"Authentication configuration {auth_config_id!r} does not exist")
 
         metadata = QgsProviderRegistry.instance().providerMetadata("postgres")
         if metadata is None:
-            raise CommandError(
-                "The PostgreSQL provider is not available in this QGIS installation"
-            )
+            raise CommandError("The PostgreSQL provider is not available in this QGIS installation")
         try:
             existing = metadata.connections(False)
         except Exception as exc:
-            raise CommandError(
-                f"PostgreSQL saved connections are unavailable: {exc}"
-            ) from exc
+            raise CommandError(f"PostgreSQL saved connections are unavailable: {exc}") from exc
         if name in existing:
-            raise CommandError(
-                f"A saved PostgreSQL connection named {name!r} already exists"
-            )
+            raise CommandError(f"A saved PostgreSQL connection named {name!r} already exists")
 
         uri = QgsDataSourceUri()
+        if service:
+            uri.setConnection(service, database, "", "", ssl_value, auth_config_id)
+            target = f"service {service!r}"
+        else:
+            uri.setConnection(host, str(port), database, "", "", ssl_value, auth_config_id)
+            target = f"{host}:{port}/{database}"
+        # QgsPostgresConn asks QgsCredentials for a username and password whenever libpq
+        # refuses the connection. In the GUI that is a modal dialog, which stalls the event
+        # loop this server runs on until someone clicks Cancel (#37): answer "no" instead.
+        previous = QgsCredentials.instance()
+        quiet = _QuietCredentials()
+        quiet.setInstance(quiet)
+        try:
+            connection = metadata.createConnection(uri.uri(False), {})
+            connection.executeSql("SELECT 1")
+        except Exception as exc:
+            raise CommandError(f"Failed to connect to PostgreSQL ({target}): {exc}") from exc
+        finally:
+            quiet.setInstance(previous)
 
-        # Mode A
-        if connection_mode == "endpoint_using_auth_manager":
-            auth_manager = QgsApplication.authManager()
-            if auth_config_id not in auth_manager.configIds():
-                raise CommandError(
-                    f"Authentication configuration {auth_config_id!r} does not exist"
-                )
-
-            uri.setConnection(
-                host,
-                str(port),
-                database,
-                "",
-                "",
-                ssl_value,
-                "auth_config_id",
-            )
-            self._connect_and_save_postgresql(metadata, uri, name)
-            return {
-                "ok": True,
-                "provider": "postgres",
-                "name": name,
-                "connection_mode": connection_mode,
-                "host": host,
-                "port": port,
-                "database": database,
-                "auth_config_id": auth_config_id,
-                "ssl_mode": normalized_ssl_mode,
-                "validated": True,
-            }
-
-        # Mode B
-        if connection_mode == "service_using_auth_manager":
-            auth_manager = QgsApplication.authManager()
-            if auth_config_id not in auth_manager.configIds():
-                raise CommandError(
-                    f"Authentication configuration {auth_config_id!r} does not exist"
-                )
-
-            db_override = database or ""
-            uri.setConnection(
-                service,
-                db_override,
-                "",
-                "",
-                ssl_value,
-                auth_config_id,
-            )
-            self._connect_and_save_postgresql(metadata, uri, name, service=service)
-            return {
-                "ok": True,
-                "provider": "postgres",
-                "name": name,
-                "connection_mode": connection_mode,
-                "service": service,
-                "database_override": db_override or None,
-                "auth_config_id": auth_config_id,
-                "ssl_mode": normalized_ssl_mode,
-                "validated": True,
-            }
-
-        # Mode C
-        if connection_mode == "service_only":
-            db_override = database or ""
-            uri.setConnection(service, db_override, "", "", ssl_value)
-            self._connect_and_save_postgresql(metadata, uri, name, service=service)
-            return {
-                "ok": True,
-                "provider": "postgres",
-                "name": name,
-                "connection_mode": connection_mode,
-                "service": service,
-                "database_override": db_override or None,
-                "auth_config_id": auth_config_id,
-                "ssl_mode": normalized_ssl_mode,
-                "validated": True,
-            }
+        metadata.saveConnection(connection, name)
+        details = {
+            key: given[key]
+            for key in ("host", "database", "auth_config_id", "service")
+            if given[key]
+        }
+        if "port" in required:
+            details["port"] = port
+        return {
+            "ok": True,
+            "provider": "postgres",
+            "name": name,
+            "connection_mode": connection_mode,
+            **details,
+            "ssl_mode": normalized_ssl_mode,
+            "validated": True,
+        }
 
     @command
     def list_connection_tables(self, provider, connection, schema=None, **kwargs):
