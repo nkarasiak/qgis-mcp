@@ -19,7 +19,7 @@ about=Socket server plugin that exposes QGIS operations to LLMs through the
     - Non-blocking TCP socket server with length-prefixed framing
     - Toolbar button with port configuration dropdown
 
-version=0.13.0
+version=0.13.1
 author=Nicolas Karasiak
 email=nicart@gmail.com
 tags=mcp,ai,claude,llm,automation,socket,remote
@@ -31,7 +31,12 @@ category=Plugins
 icon=icons/icon.png
 experimental=False
 deprecated=False
-changelog=0.13.0 : create_postgresql_connection gains connection_mode: an explicit
+changelog=0.13.1 : execute_code and execute_processing_batch take a timeout
+    (default 55s) enforced in the plugin, so a long script comes back with its
+    output so far and timed_out instead of a client timeout while QGIS keeps
+    running (#43). Every execute_code result carries elapsed. Reported by
+    amnesic. Thank you.
+    0.13.0 : create_postgresql_connection gains connection_mode: an explicit
     endpoint with an Authentication Manager config, a pg_service.conf service
     with that config, or the service alone (#37). A refused connection now
     returns an error instead of opening the Enter Credentials dialog under
