@@ -1493,20 +1493,26 @@ async def get_processing_providers(ctx: Context, instance: str | None = None) ->
     title="Execute Processing Batch",
     description="Run one algorithm once per parameter dict in 'parameters_list'. "
     "Returns a per-run result with index and success/error status. Use for applying "
-    "the same operation over many inputs in a single round-trip.",
+    "the same operation over many inputs in a single round-trip. timeout: seconds for the "
+    "whole batch (default 55); runs that would start after it has elapsed come back as "
+    "'skipped' with the completed ones intact, so raise it or split the list for big batches.",
 )
 async def execute_processing_batch(
     ctx: Context,
     algorithm: str,
     parameters_list: list[dict],
+    timeout: int | None = None,
     instance: str | None = None,
 ) -> dict:
     await ctx.info(f"Batch processing {algorithm}: {len(parameters_list)} run(s)")
+    params: dict[str, Any] = {"algorithm": algorithm, "parameters_list": parameters_list}
+    if timeout is None:
+        socket_timeout = TIMEOUT_LONG
+    else:
+        params["timeout"] = timeout
+        socket_timeout = int(timeout) + 5
     return await _send(
-        "execute_processing_batch",
-        {"algorithm": algorithm, "parameters_list": parameters_list},
-        timeout=TIMEOUT_LONG,
-        instance=instance,
+        "execute_processing_batch", params, timeout=socket_timeout, instance=instance
     )
 
 
@@ -1745,16 +1751,31 @@ async def render_map(
     title="Execute Code",
     annotations=ToolAnnotations(destructiveHint=True),
     description="Execute arbitrary PyQGIS code. Use for operations not covered by other tools. "
-    "Has access to QgsProject, iface, and core QGIS classes. Returns stdout/stderr.",
+    "Has access to QgsProject, iface, and core QGIS classes. Returns stdout/stderr and elapsed "
+    "seconds. timeout: seconds before the script is cancelled (default 55); a script that runs "
+    "past it comes back with timed_out=True and the output printed so far, and its side effects "
+    "stand. Raise timeout or split bulk work into several calls; QGIS is unresponsive while a "
+    "script runs. A single blocking call (time.sleep, GDAL) cannot be interrupted before it returns.",
 )
-async def execute_code(ctx: Context, code: str, instance: str | None = None) -> dict:
+async def execute_code(
+    ctx: Context, code: str, timeout: int | None = None, instance: str | None = None
+) -> dict:
     if not await _confirm_destructive(
         ctx, "Execute arbitrary PyQGIS code? This can modify your project and system."
     ):
         return {"ok": False, "message": "Cancelled by user"}
     await ctx.info("Executing PyQGIS code...")
     await ctx.report_progress(0, 100)
-    result = await _send("execute_code", {"code": code}, timeout=TIMEOUT_LONG, instance=instance)
+    params: dict[str, Any] = {"code": code}
+    # Same ordering as execute_processing: the plugin's deadline comes first so
+    # the caller gets a message and the partial output instead of a client
+    # timeout while QGIS keeps running the script (#43).
+    if timeout is None:
+        socket_timeout = TIMEOUT_LONG
+    else:
+        params["timeout"] = timeout
+        socket_timeout = int(timeout) + 5
+    result = await _send("execute_code", params, timeout=socket_timeout, instance=instance)
     await ctx.report_progress(100, 100)
     return result
 

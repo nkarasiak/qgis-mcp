@@ -4,6 +4,7 @@ import contextlib
 import io
 import os
 import sys
+import time
 import traceback
 
 try:
@@ -33,8 +34,39 @@ from ..errors import CommandError
 from ..registry import command
 
 
+class _CodeDeadline(Exception):
+    """Raised by the execute_code trace function once the budget is spent."""
+
+
 class SystemHandlers:
     """QGIS health, versions, message log, plugin list and settings."""
+
+    # Below the client's TIMEOUT_LONG (60s) for the same reason as
+    # ProcessingHandlers._PROCESSING_TIMEOUT: the plugin gives up, and says why,
+    # before the client abandons the request and the result is lost (#43).
+    _CODE_TIMEOUT = 55
+    _CODE_FILENAME = "<qgis_mcp execute_code>"
+
+    def _deadline_tracer(self, deadline):
+        """Trace function that raises _CodeDeadline once *deadline* has passed.
+
+        Checked on every function call anywhere and on every line of the script's
+        own frames (module level and the functions it defines), never on lines
+        inside library code, so the cost is proportional to the script rather
+        than to what it calls. A single blocking call (time.sleep, a GDAL warp)
+        cannot be interrupted this way: it returns when it returns, and the
+        check fires right after.
+        """
+
+        def trace(frame, event, arg):
+            # Only before work starts (a call, a line), never on return: a script
+            # that finishes late has finished, and saying it was cancelled would
+            # send the caller looking for work that was actually done.
+            if event in ("call", "line") and time.monotonic() >= deadline:
+                raise _CodeDeadline
+            return trace if frame.f_code.co_filename == self._CODE_FILENAME else None
+
+        return trace
 
     @command
     def ping(self, **kwargs):
@@ -138,12 +170,21 @@ class SystemHandlers:
         return info
 
     @command
-    def execute_code(self, code, **kwargs):
+    def execute_code(self, code, timeout=None, **kwargs):
         QgsMessageLog.logMessage(f"Executing code ({len(code)} chars)", self.LOG_TAG, MSG_INFO)
+        budget = self._CODE_TIMEOUT if timeout is None else float(timeout)
+        started = time.monotonic()
         stdout_capture = io.StringIO()
         stderr_capture = io.StringIO()
         original_stdout = sys.stdout
         original_stderr = sys.stderr
+        previous_trace = sys.gettrace()
+
+        def output(**fields):
+            fields["stdout"] = stdout_capture.getvalue()
+            fields["stderr"] = stderr_capture.getvalue()
+            fields["elapsed"] = round(time.monotonic() - started, 2)
+            return fields
 
         try:
             sys.stdout = stdout_capture
@@ -159,22 +200,24 @@ class SystemHandlers:
                 "QgsCoordinateReferenceSystem": QgsCoordinateReferenceSystem,
             }
 
-            exec(code, namespace)  # nosec B102 - intentional: MCP execute_code tool
-
-            return {
-                "executed": True,
-                "stdout": stdout_capture.getvalue(),
-                "stderr": stderr_capture.getvalue(),
-            }
+            compiled = compile(code, self._CODE_FILENAME, "exec")
+            sys.settrace(self._deadline_tracer(started + budget))
+            try:
+                exec(compiled, namespace)  # nosec B102 - intentional: MCP execute_code tool
+            finally:
+                sys.settrace(previous_trace)
+            return output(executed=True)
+        except _CodeDeadline:
+            return output(
+                executed=False,
+                timed_out=True,
+                error=(
+                    f"Code cancelled after {budget:g}s (timeout). Pass a larger 'timeout' or "
+                    "split the work into smaller scripts; side effects up to this point stand."
+                ),
+            )
         except Exception as e:
-            error_traceback = traceback.format_exc()
-            return {
-                "executed": False,
-                "error": str(e),
-                "traceback": error_traceback,
-                "stdout": stdout_capture.getvalue(),
-                "stderr": stderr_capture.getvalue(),
-            }
+            return output(executed=False, error=str(e), traceback=traceback.format_exc())
         finally:
             sys.stdout = original_stdout
             sys.stderr = original_stderr

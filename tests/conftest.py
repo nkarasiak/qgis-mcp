@@ -1,17 +1,83 @@
-"""Shared fixtures for all integration tests (require running QGIS plugin).
-
-Unit tests (test_mcp_tools.py) use mocked sockets and don't need these.
-"""
+"""Shared fixtures: integration tests (running QGIS plugin) and the stubbed-qgis handler tests."""
 
 import os
 import sys
+import types
 import uuid
+from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from qgis_mcp.client import QgisMCPClient
+
+PLUGIN_DIR = Path(__file__).resolve().parents[1] / "qgis_mcp_plugin"
+# Every module the handler package imports at module level from outside the plugin.
+QGIS_MODULES = (
+    "processing",
+    "qgis",
+    "qgis._3d",
+    "qgis.analysis",
+    "qgis.core",
+    "qgis.utils",
+    "qgis.PyQt",
+    "qgis.PyQt.QtCore",
+    "qgis.PyQt.QtGui",
+    "qgis.PyQt.QtWidgets",
+)
+
+
+class FakeQObject:
+    """Subclassable stand-in for a qgis base class: every method is a no-op.
+
+    Subclassing a MagicMock *instance* turns the subclass into a mock whose side_effect is
+    the bases tuple, so the second instantiation raises StopIteration.
+    """
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: None
+
+
+class FakeCredentials(FakeQObject):
+    current = "gui-dialog"
+
+    @staticmethod
+    def instance():
+        return FakeCredentials.current
+
+    def setInstance(self, instance):
+        FakeCredentials.current = instance
+
+
+@pytest.fixture(scope="session")
+def plugin_handlers():
+    """The plugin's handler package imported against a stubbed qgis (no QGIS needed)."""
+    saved = {name: sys.modules.get(name) for name in QGIS_MODULES}
+    for name in QGIS_MODULES:
+        sys.modules[name] = MagicMock()
+    sys.modules["qgis.core"].QgsCredentials = FakeCredentials
+    sys.modules["qgis.core"].QgsProcessingFeedback = FakeQObject
+    # A bare package: the real __init__ imports plugin.py, which needs a live QGIS.
+    package = types.ModuleType("qgis_mcp_plugin")
+    package.__path__ = [str(PLUGIN_DIR)]
+    sys.modules["qgis_mcp_plugin"] = package
+    import qgis_mcp_plugin.handlers as handlers
+
+    yield handlers
+    for name in [
+        m for m in sys.modules if m == "qgis_mcp_plugin" or m.startswith("qgis_mcp_plugin.")
+    ]:
+        del sys.modules[name]
+    for name, module in saved.items():
+        if module is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = module
 
 
 @pytest.fixture(autouse=True)

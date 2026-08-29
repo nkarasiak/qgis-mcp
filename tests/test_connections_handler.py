@@ -4,67 +4,21 @@ Regression for #37: the endpoint mode once passed the literal string "auth_confi
 to QgsDataSourceUri.setConnection, which nothing short of a live database would catch.
 """
 
-import sys
 import types
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-PLUGIN_DIR = Path(__file__).resolve().parents[1] / "qgis_mcp_plugin"
-QGIS_MODULES = (
-    "processing",
-    "qgis",
-    "qgis._3d",
-    "qgis.analysis",
-    "qgis.core",
-    "qgis.utils",
-    "qgis.PyQt",
-    "qgis.PyQt.QtCore",
-    "qgis.PyQt.QtGui",
-    "qgis.PyQt.QtWidgets",
-)
-
 
 @pytest.fixture(scope="module")
-def handlers():
-    saved = {name: sys.modules.get(name) for name in QGIS_MODULES}
-    for name in QGIS_MODULES:
-        sys.modules[name] = MagicMock()
+def handlers(plugin_handlers):
+    connections = plugin_handlers.connections
 
-    class FakeCredentials:
-        """Subclassable stand-in: a MagicMock base turns the subclass into a one-shot mock."""
-
-        current = "gui-dialog"
-
-        @staticmethod
-        def instance():
-            return FakeCredentials.current
-
-        def setInstance(self, instance):
-            FakeCredentials.current = instance
-
-    sys.modules["qgis.core"].QgsCredentials = FakeCredentials
-    # A bare package: the real __init__ imports plugin.py, which needs a live QGIS.
-    package = types.ModuleType("qgis_mcp_plugin")
-    package.__path__ = [str(PLUGIN_DIR)]
-    sys.modules["qgis_mcp_plugin"] = package
-    from qgis_mcp_plugin.handlers import base, connections
-
-    class Server(connections.ConnectionHandlers, base.HandlerBase):
+    class Server(connections.ConnectionHandlers, plugin_handlers.base.HandlerBase):
         pass
 
     connections.Server = Server
-    yield connections
-    for name in [
-        m for m in sys.modules if m == "qgis_mcp_plugin" or m.startswith("qgis_mcp_plugin.")
-    ]:
-        del sys.modules[name]
-    for name, module in saved.items():
-        if module is None:
-            sys.modules.pop(name, None)
-        else:
-            sys.modules[name] = module
+    return connections
 
 
 @pytest.fixture

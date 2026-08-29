@@ -749,12 +749,31 @@ class ProcessingHandlers:
         return {"providers": providers, "count": len(providers)}
 
     @command
-    def execute_processing_batch(self, algorithm, parameters_list, **kwargs):
-        """Run the same algorithm once per parameter dict; collect per-run results."""
+    def execute_processing_batch(self, algorithm, parameters_list, timeout=None, **kwargs):
+        """Run the same algorithm once per parameter dict; collect per-run results.
+
+        `timeout` bounds the whole batch (default `_PROCESSING_TIMEOUT`), not each run:
+        runs that would start after it has elapsed are reported as skipped, so the caller
+        gets the results collected so far instead of a client timeout that loses all of
+        them (#43).
+        """
+        budget = self._PROCESSING_TIMEOUT if timeout is None else float(timeout)
+        deadline = time.monotonic() + budget
         results = []
         for i, params in enumerate(parameters_list):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                results.append(
+                    {
+                        "index": i,
+                        "status": "skipped",
+                        "message": f"Batch budget of {budget:g}s exhausted before this run started",
+                    }
+                )
+                continue
             try:
-                r = self._run_alg(algorithm, params)
+                feedback = _ResponsiveFeedback(min(self._PROCESSING_TIMEOUT, remaining))
+                r = self._run_alg(algorithm, params, feedback)
                 results.append(
                     {
                         "index": i,
@@ -764,7 +783,10 @@ class ProcessingHandlers:
                 )
             except Exception as e:
                 results.append({"index": i, "status": "error", "message": str(e)})
-        return {"algorithm": algorithm, "results": results, "count": len(results)}
+        response = {"algorithm": algorithm, "results": results, "count": len(results)}
+        if any(r["status"] == "skipped" for r in results):
+            response["timed_out"] = True
+        return response
 
     @command
     def raster_calculator(self, expression, output_path, reference_layer=None, **kwargs):

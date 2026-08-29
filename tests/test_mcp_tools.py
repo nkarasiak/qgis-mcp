@@ -403,6 +403,36 @@ async def test_execute_code_tool(mock_connection):
     ctx.info.assert_awaited_once_with("Executing PyQGIS code...")
 
 
+@pytest.mark.asyncio
+async def test_execute_code_timeout_keeps_the_plugin_deadline_first(mock_connection):
+    """#43: like execute_processing, the plugin must give up 5s before the socket does."""
+    mock_connection.send_command.return_value = {"status": "success", "result": {"executed": True}}
+    from qgis_mcp.server import execute_code
+
+    await execute_code(_make_ctx(), code="x = 1")
+    mock_connection.send_command.assert_called_once_with(
+        "execute_code", {"code": "x = 1"}, timeout=60
+    )
+    mock_connection.send_command.reset_mock()
+    await execute_code(_make_ctx(), code="x = 1", timeout=300)
+    mock_connection.send_command.assert_called_once_with(
+        "execute_code", {"code": "x = 1", "timeout": 300}, timeout=305
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_processing_batch_timeout_bounds_the_whole_batch(mock_connection):
+    mock_connection.send_command.return_value = {"status": "success", "result": {"results": []}}
+    from qgis_mcp.server import execute_processing_batch
+
+    await execute_processing_batch(_make_ctx(), algorithm="a", parameters_list=[{}], timeout=120)
+    mock_connection.send_command.assert_called_once_with(
+        "execute_processing_batch",
+        {"algorithm": "a", "parameters_list": [{}], "timeout": 120},
+        timeout=125,
+    )
+
+
 # --- QgisMCPClient tests ---
 
 

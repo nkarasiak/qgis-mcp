@@ -825,8 +825,9 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "Actions: execute, execute_batch, list_algorithms, get_help, get_providers, "
             "create_model, list_models, run_model\n"
             "- execute: algorithm (str), parameters (dict)\n"
-            "- execute_batch: algorithm (str), parameters_list (list[dict]) - one run per dict, "
-            "per-run success/error status\n"
+            "- execute_batch: algorithm (str), parameters_list (list[dict]), timeout (int, optional, "
+            "seconds for the whole batch, default 55) - one run per dict, per-run "
+            "success/error/skipped status\n"
             "- list_algorithms: search (str, optional), provider (str, optional)\n"
             "- get_help: algorithm_id (str)\n"
             "- get_providers: no params - providers with algorithm counts and active status\n"
@@ -867,11 +868,12 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
         elif action == "execute_batch":
             runs = kwargs["parameters_list"]
             await ctx.info(f"Batch processing {kwargs['algorithm']}: {len(runs)} run(s)")
-            return await _send(
-                "execute_processing_batch",
-                {"algorithm": kwargs["algorithm"], "parameters_list": runs},
-                timeout=TIMEOUT_LONG,
-            )
+            params = {"algorithm": kwargs["algorithm"], "parameters_list": runs}
+            socket_timeout = TIMEOUT_LONG
+            if kwargs.get("timeout") is not None:
+                params["timeout"] = kwargs["timeout"]
+                socket_timeout = int(kwargs["timeout"]) + 5
+            return await _send("execute_processing_batch", params, timeout=socket_timeout)
         elif action == "list_algorithms":
             params = {}
             if "search" in kwargs:
@@ -921,7 +923,8 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
         description=(
             "Execute arbitrary PyQGIS code.\n"
             "Actions: execute\n"
-            "- execute: code (str) - destructive, requires confirmation"
+            "- execute: code (str), timeout (int, optional, seconds before the script is cancelled, "
+            "default 55; output so far is returned) - destructive, requires confirmation"
             f"{_PARAMS_NOTE}"
         ),
         annotations=ToolAnnotations(destructiveHint=True),
@@ -937,7 +940,12 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                 return {"ok": False, "message": "Cancelled by user"}
             await ctx.info("Executing PyQGIS code...")
             await ctx.report_progress(0, 100)
-            result = await _send("execute_code", {"code": kwargs["code"]}, timeout=TIMEOUT_LONG)
+            params = {"code": kwargs["code"]}
+            socket_timeout = TIMEOUT_LONG
+            if kwargs.get("timeout") is not None:
+                params["timeout"] = kwargs["timeout"]
+                socket_timeout = int(kwargs["timeout"]) + 5
+            result = await _send("execute_code", params, timeout=socket_timeout)
             await ctx.report_progress(100, 100)
             return result
         else:
