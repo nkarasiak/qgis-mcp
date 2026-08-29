@@ -16,7 +16,7 @@ from mcp_compat import make_mcp_error
 
 from qgis_mcp.helpers import HEADER_STRUCT, get_auth_token
 from qgis_mcp.protocol import CommandTimeout
-from qgis_mcp.server import QgisMCPClient, _ConfirmSchema, _send_sync
+from qgis_mcp.server import NoBackChannelError, QgisMCPClient, ToolError, _ConfirmSchema, _send_sync
 
 # --- Fixtures ---
 
@@ -69,13 +69,13 @@ def test_send_unwraps_success_envelope(mock_connection):
 
 def test_send_raises_on_error(mock_connection):
     mock_connection.send_command.return_value = {"status": "error", "message": "Layer not found"}
-    with pytest.raises(RuntimeError, match="Layer not found"):
+    with pytest.raises(ToolError, match="Layer not found"):
         _send_sync("get_layer_features", {"layer_id": "bad_id"})
 
 
 def test_send_raises_on_none_response(mock_connection):
     mock_connection.send_command.return_value = None
-    with pytest.raises(RuntimeError, match="No response"):
+    with pytest.raises(ToolError, match="No response"):
         _send_sync("ping")
 
 
@@ -804,7 +804,7 @@ async def test_reload_plugin_self_blocked(mock_connection):
     from qgis_mcp.server import reload_plugin
 
     ctx = _make_ctx()
-    with pytest.raises(RuntimeError, match="Cannot reload MCP plugin"):
+    with pytest.raises(ToolError, match="Cannot reload MCP plugin"):
         await reload_plugin(ctx, plugin_name="qgis_mcp_plugin")
 
 
@@ -2075,18 +2075,12 @@ async def test_destructive_tool_actually_elicits(mock_connection):
 
 @pytest.mark.asyncio
 async def test_destructive_tool_fails_closed_without_back_channel(mock_connection):
-    """A client with no back-channel for server-initiated requests must not proceed.
+    """A connection with no back-channel must fail closed, not open.
 
-    Discovered downstream: a consumer's live test caught `execute_code` actually
-    running under a client using the mcp SDK's default `mode="auto"` - see
-    notes.md. Traced to `ctx.elicit()` raising `NoBackChannelError` under that
-    mode's stateless per-request dispatch, which has no channel to deliver a
-    server-initiated request *regardless of the client's actual elicitation
-    support*. Since capability is unknown in that case, the correct behavior is
-    to fail closed (never reach QGIS) rather than the old fail-open. This
-    reproduces it in-process against the real `Client` dispatch machinery (not
-    the `_make_ctx` mock), the same way `test_destructive_tool_actually_elicits`
-    does for #27.
+    Under mcp>=2.0's Client(mode="auto"), ctx.elicit() raises NoBackChannelError
+    whatever the client's elicitation support, so the old fail-open ran
+    destructive tools unconfirmed (#41). Same real-dispatch setup as
+    test_destructive_tool_actually_elicits (#27).
     """
     pytest.importorskip(
         "mcp.client.client", reason='mode="auto" negotiation needs the mcp>=2.0 Client'
@@ -2132,17 +2126,14 @@ async def test_confirm_destructive_reraises_non_mcp_errors(mock_connection):
 @pytest.mark.asyncio
 async def test_confirm_destructive_fails_closed_on_no_back_channel(mock_connection):
     """A NoBackChannelError means we couldn't ask, not that the client can't answer - fail closed."""
-    from mcp_compat import make_no_back_channel_error
-
     from qgis_mcp.server import _confirm_destructive
 
-    error = make_no_back_channel_error()
-    if error is None:
+    if not NoBackChannelError:
         pytest.skip("NoBackChannelError needs mcp>=2.0")
 
     ctx = _make_ctx()
-    ctx.elicit = AsyncMock(side_effect=error)
-    with pytest.raises(RuntimeError, match="back-channel"):
+    ctx.elicit = AsyncMock(side_effect=NoBackChannelError("elicitation/create"))
+    with pytest.raises(ToolError, match="back-channel"):
         await _confirm_destructive(ctx, "Remove layer?")
 
 

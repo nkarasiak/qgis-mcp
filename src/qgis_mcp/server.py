@@ -33,7 +33,11 @@ except ImportError:  # mcp >= 2.0 renamed McpError -> MCPError
 try:
     from mcp.shared.exceptions import NoBackChannelError
 except ImportError:  # mcp < 2.0 has no back-channel concept (initialize() is always duplex)
-    NoBackChannelError = None
+    NoBackChannelError = ()  # `except ():` catches nothing
+try:
+    from mcp.server.fastmcp.exceptions import ToolError
+except ImportError:  # mcp >= 2.0; only ToolError text reaches the client on mcp >= 2.1
+    from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import (
     Annotations,
     Completion,
@@ -424,7 +428,7 @@ def _send_sync(
             raise last_exc  # type: ignore[misc]  # unreachable, but satisfies type checker
 
     if not result or result.get("status") == "error":
-        raise RuntimeError(result.get("message", "Command failed") if result else "No response")
+        raise ToolError(result.get("message", "Command failed") if result else "No response")
     return result.get("result", {})
 
 
@@ -459,7 +463,7 @@ async def _send(
         hint = _get_error_hint(message)
         if hint:
             logger.warning(f"Error hint added for: {message}")
-            raise RuntimeError(f"{message}\n\nHINT: {hint}") from exc
+            raise ToolError(f"{message}\n\nHINT: {hint}") from exc
         raise
 
 
@@ -479,7 +483,7 @@ async def _confirm_destructive(ctx: Context, message: str) -> bool:
 
     Returns True if client doesn't support elicitation (fail-open), since
     the tool is already marked destructive via ToolAnnotations and the client
-    can gate execution at the tool-call level. Raises RuntimeError if the
+    can gate execution at the tool-call level. Raises ToolError if the
     request could not be delivered at all (fail-closed) - client capability is
     unknown in that case, so proceeding would silently defeat the confirmation
     gate the caller explicitly opted into.
@@ -500,22 +504,19 @@ async def _confirm_destructive(ctx: Context, message: str) -> bool:
         return True
     try:
         response = await ctx.elicit(message=message, schema=_ConfirmSchema)
-    except McpError as e:
-        if NoBackChannelError is not None and isinstance(e, NoBackChannelError):
-            # The client may well support elicitation - the transport just can't
-            # deliver a server-initiated request in this mode (e.g. mcp SDK
-            # Client(mode="auto")'s modern per-request dispatch, which has no
-            # persistent channel). We were never able to ask, so - unlike genuine
-            # "client doesn't support elicitation" - fail closed, not open:
-            # QGIS_MCP_AUTO_CONFIRM=0 means the operator wants a confirmation gate.
-            raise RuntimeError(
-                "Cannot confirm destructive operation: this connection has no "
-                "back-channel for server-initiated requests, so the confirmation "
-                "prompt could not be sent (the client's MCP SDK likely negotiated "
-                'mode="auto"/the modern per-request protocol). Reconnect with '
-                'mode="legacy", or unset QGIS_MCP_AUTO_CONFIRM (or set it to '
-                "something other than 0/false/no/off) to skip confirmation prompts."
-            ) from e
+    except NoBackChannelError as e:
+        # The client may well support elicitation - this connection just has no
+        # channel for server-initiated requests (protocol 2026-07-28 per-request
+        # dispatch, stateless or JSON-response streamable HTTP). We were never
+        # able to ask, so - unlike genuine "client doesn't support elicitation" -
+        # fail closed: QGIS_MCP_AUTO_CONFIRM=0 means the operator wants a gate.
+        raise ToolError(
+            "Cannot confirm destructive operation: this connection has no "
+            "back-channel for server-initiated requests, so the confirmation "
+            "prompt cannot be sent. Unset QGIS_MCP_AUTO_CONFIRM to rely on the "
+            "client's own destructive-tool gate instead."
+        ) from e
+    except McpError:
         # Client doesn't support elicitation - proceed (fail-open).
         # The destructive ToolAnnotations hint lets clients gate at call time.
         # Only McpError is caught: a malformed elicit() call must not read as
