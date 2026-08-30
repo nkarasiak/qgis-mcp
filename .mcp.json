@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "qgis-workflows": {
+      "command": "uv",
+      "args": ["run", "--no-sync", "src/qgis_mcp_workflows/server.py"],
+      "env": {}
+    }
+  }
+}

@@ -28,7 +28,15 @@
       "Bash(grep *)",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(git rm *)"
+      "Bash(git rm *)",
+      "mcp__qgis-workflows__qgis_eval",
+      "Bash(claude --version)",
+      "Bash(claude mcp *)",
+      "Bash(cd /n/TransInfor && find . -type f -name \"*.py\" -o -name \"*.qml\" -o -name \"*.md\" -o -name \"*.txt\" -o -name \"*.qgz\" -o -name \"*.qgs\" 2>/dev/null | head -50)",
+      "Bash(git -C \"H:/Dropbox/qgis-mcp-north\" log --oneline -28)",
+      "Bash(git -C \"H:/Dropbox/qgis-mcp-north\" checkout -b feat/choropleth-diverging-colormaps)",
+      "Bash(git -C \"H:/Dropbox/qgis-mcp-north\" add \"docs/superpowers/specs/2026-06-22-choropleth-diverging-colormaps-design.md\")",
+      "Bash(git -C H:/Dropbox/qgis-mcp-north commit -m 'docs\\(spec\\): design for choropleth diverging colors + scientific colormaps' -m 'First slice of the MCP cartography improvements, prioritized against the N:/TransInfor transit figures \\(ward_tide net-flux\\) and the map-beauty roadmap. *)"
     ]
   }
 }

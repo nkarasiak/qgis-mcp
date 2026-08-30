@@ -1,0 +1,17 @@
+schema: spec-driven
+
+context: |
+  qgis-mcp-workflows (v1.1.0) — a fork of nkarasiak/qgis-mcp that exposes QGIS to Claude over MCP for transport-research figure pipelines (PFLOW, GUFM).
+  Stack: Python 3.11+, managed with uv (pyproject.toml). Package qgis_mcp_workflows; run the server via `uv run --no-sync qgis-mcp-workflows-server`.
+  Two transports: `plugin` (TCP socket :9877 -> running QGIS Desktop) and `headless` (PyQGIS subprocess), selected via --transport=auto|plugin|headless; both execute the same QgisMCPServer.execute_command. Wire protocol is length-prefixed JSON.
+  Surface is 12 workflow tools + 1 escape hatch (qgis_eval), not 51 PyQGIS primitives. docs/DESIGN.md is the spec — if code disagrees, update the doc first. Tests inject a FakeExecutor via executors.set_executor().
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
