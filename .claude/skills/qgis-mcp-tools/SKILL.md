@@ -36,7 +36,7 @@ description: Reference for all qgis-mcp MCP tools, resources, and prompts (names
 | `set_canvas_extent` | Set Canvas Extent | idempotent | Set canvas extent with optional CRS transform |
 | `get_canvas_screenshot` | Get Canvas Screenshot | readOnly | Fast canvas widget grab (no re-render), inline image |
 | `get_raster_info` | Get Raster Info | readOnly | Raster band count, stats, nodata, dimensions |
-| `execute_processing` | Execute Processing | - | Run QGIS Processing algorithm (plugin cancels after `timeout` seconds, default 55; socket outlasts it, async+progress+logging) |
+| `execute_processing` | Execute Processing | - | Run QGIS Processing algorithm (plugin cancels after `timeout` seconds, default 55; socket outlasts it, async+progress+logging). `load_results` adds the outputs to the project and returns them as `loaded_layers` - the only way to keep a `TEMPORARY_OUTPUT`/`memory:` result; vector and raster destinations only, never file or folder ones |
 | `list_processing_algorithms` | List Processing Algorithms | readOnly | Search algorithms by keyword/provider |
 | `get_algorithm_help` | Get Algorithm Help | readOnly | Algorithm parameters, outputs, description |
 | `create_processing_model` | Create Processing Model | - | Build a `.model3` workflow from a structured spec (inputs, steps, outputs); always saved into the QGIS user models folder and registered (numeric suffix on name collision); supports `@input` / `$step.OUTPUT` / `=expression` references |

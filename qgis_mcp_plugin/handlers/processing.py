@@ -123,7 +123,7 @@ class ProcessingHandlers:
         "mssql:",
     )
 
-    def _run_alg(self, algorithm, parameters, feedback=None):
+    def _run_alg(self, algorithm, parameters, feedback=None, load=False):
         """Run *algorithm*, raising when it did not actually produce its output.
 
         ``processing.run()`` returns an algorithm's declared outputs whether or
@@ -133,18 +133,26 @@ class ProcessingHandlers:
         and the caller builds on a file that does not exist. Checking the
         caller's own output paths catches that for every provider without
         parsing anyone's error text, which is translated and provider-specific.
+
+        ``load=True`` swaps in ``processing.runAndLoadResults`` so the outputs
+        are added to the project. That helper rewrites the destination entries
+        of *parameters* in place (into ``QgsProcessingOutputLayerDefinition``),
+        which would turn the output check below into a no-op, so the check runs
+        against a snapshot taken before the run.
         """
         import processing
 
         if feedback is None:
             feedback = _ResponsiveFeedback(self._PROCESSING_TIMEOUT)
-        result = processing.run(algorithm, parameters, feedback=feedback)
+        declared = dict(parameters)
+        runner = processing.runAndLoadResults if load else processing.run
+        result = runner(algorithm, parameters, feedback=feedback)
         if feedback.timed_out:
             raise CommandError(
                 f"Processing cancelled after {feedback.budget:g}s. Pass a larger 'timeout', "
                 "or run heavy raster work with GDAL outside QGIS."
             )
-        missing = self._missing_outputs(algorithm, parameters)
+        missing = self._missing_outputs(algorithm, declared)
         if missing:
             detail = f": {feedback.errors[0]}" if feedback.errors else ""
             raise CommandError(
@@ -183,13 +191,24 @@ class ProcessingHandlers:
         return missing
 
     @command
-    def execute_processing(self, algorithm, parameters, timeout=None, **kwargs):
+    def execute_processing(self, algorithm, parameters, timeout=None, load_results=False, **kwargs):
         try:
             QgsMessageLog.logMessage(f"Processing: {algorithm}", self.LOG_TAG, MSG_INFO)
             budget = self._PROCESSING_TIMEOUT if timeout is None else float(timeout)
             feedback = _ResponsiveFeedback(budget)
-            result = self._run_alg(algorithm, parameters, feedback)
+            project = QgsProject.instance()
+            before = set(project.mapLayers()) if load_results else ()
+            result = self._run_alg(algorithm, parameters, feedback, load=load_results)
             response = {"algorithm": algorithm, "result": {k: str(v) for k, v in result.items()}}
+            if load_results:
+                # Which layers appeared is the provider-agnostic answer: only
+                # sink/vector/raster destinations are loaded, and the name QGIS
+                # gives them is not the caller's output value.
+                response["loaded_layers"] = [
+                    {"id": lid, "name": layer.name()}
+                    for lid, layer in project.mapLayers().items()
+                    if lid not in before
+                ]
             if feedback.errors:
                 # The outputs are there, so this is not a failure - but GDAL
                 # writes real warnings to stderr and swallowing them is what

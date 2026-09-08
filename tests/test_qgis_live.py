@@ -1390,6 +1390,72 @@ def test_processing_batch_reports_the_run_that_failed(client, sample_raster):
     assert not os.path.exists(bad_path)
 
 
+def test_load_results_keeps_a_temporary_output_in_the_project(client, setup_test_data):
+    """#46: a TEMPORARY_OUTPUT is discarded when the run ends unless it is loaded.
+
+    That is the case no follow-up ``add_vector_layer`` can rescue, so it is what
+    ``load_results`` exists for: the response has to name a layer the caller can
+    then query.
+    """
+    before = {
+        layer["id"]
+        for layer in client.send_command("get_layers", {"limit": 200})["result"]["layers"]
+    }
+
+    resp = client.send_command(
+        "execute_processing",
+        {
+            "algorithm": "native:buffer",
+            "parameters": {
+                "INPUT": setup_test_data,
+                "DISTANCE": 1.0,
+                "OUTPUT": "TEMPORARY_OUTPUT",
+            },
+            "load_results": True,
+        },
+        timeout=60,
+    )
+    assert resp["status"] == "success", resp
+    loaded = resp["result"]["loaded_layers"]
+    assert len(loaded) == 1, loaded
+
+    after = {
+        layer["id"]
+        for layer in client.send_command("get_layers", {"limit": 200})["result"]["layers"]
+    }
+    assert {entry["id"] for entry in loaded} == after - before
+    try:
+        features = client.send_command(
+            "get_layer_features", {"layer_id": loaded[0]["id"], "limit": 10}
+        )
+        assert features["status"] == "success", features
+        assert features["result"]["feature_count"] == 5
+    finally:
+        client.send_command("remove_layer", {"layer_id": loaded[0]["id"]})
+
+
+def test_load_results_still_catches_a_run_that_wrote_nothing(client, sample_raster):
+    """``runAndLoadResults`` rewrites the destination values of the parameters dict.
+
+    Checking the rewritten dict finds no string paths to check, which would turn
+    the #40 output verification into a no-op for every loaded run.
+    """
+    bad = os.path.join(os.path.dirname(sample_raster), "load_bad.tif")
+
+    resp = client.send_command(
+        "execute_processing",
+        {
+            "algorithm": "gdal:translate",
+            "parameters": {"INPUT": sample_raster, "EXTRA": "-b 99", "OUTPUT": bad},
+            "load_results": True,
+        },
+        timeout=60,
+    )
+    assert resp["status"] == "error", resp
+    assert bad in resp["message"], resp["message"]
+    assert not os.path.exists(bad)
+
+
 def test_timeout_closes_the_socket_instead_of_desyncing_it(client):
     """A timed-out command must not leave its response for the next call to read.
 

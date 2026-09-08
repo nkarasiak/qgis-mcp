@@ -1327,18 +1327,25 @@ async def get_raster_info(
     description="Execute a QGIS Processing algorithm. Use get_algorithm_help to discover parameters. "
     "Layer params accept layer IDs or file paths. Set OUTPUT to 'memory:' for temp layers. "
     "timeout: seconds before the algorithm is cancelled (default 55). Raise it for heavy "
-    "raster work, but note that long jobs hold the QGIS session for their duration.",
+    "raster work, but note that long jobs hold the QGIS session for their duration. "
+    "load_results: add the algorithm's outputs to the project and list them in "
+    "'loaded_layers' (the processing.runAndLoadResults() behaviour). This is the only way "
+    "to keep a 'TEMPORARY_OUTPUT'/'memory:' result, which is otherwise discarded when the "
+    "run ends. Only vector and raster destinations are loaded, never file or folder ones.",
 )
 async def execute_processing(
     ctx: Context,
     algorithm: str,
     parameters: dict,
     timeout: int | None = None,
+    load_results: bool = False,
     instance: str | None = None,
 ) -> dict:
     await ctx.info(f"Running algorithm: {algorithm}")
     await ctx.report_progress(0, 100)
     params: dict[str, Any] = {"algorithm": algorithm, "parameters": parameters}
+    if load_results:
+        params["load_results"] = True
     # Keep the two deadlines ordered: the plugin must give up first so the
     # failure comes back as a real message instead of the client timing out
     # while QGIS keeps grinding on an orphaned job.

@@ -824,7 +824,10 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "QGIS Processing framework.\n"
             "Actions: execute, execute_batch, list_algorithms, get_help, get_providers, "
             "create_model, list_models, run_model\n"
-            "- execute: algorithm (str), parameters (dict)\n"
+            "- execute: algorithm (str), parameters (dict), timeout (int, optional, seconds "
+            "before the algorithm is cancelled, default 55), load_results (bool, optional) - "
+            "add the outputs to the project and list them in 'loaded_layers'; the only way to "
+            "keep a 'TEMPORARY_OUTPUT'/'memory:' result\n"
             "- execute_batch: algorithm (str), parameters_list (list[dict]), timeout (int, optional, "
             "seconds for the whole batch, default 55) - one run per dict, per-run "
             "success/error/skipped status\n"
@@ -858,11 +861,14 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
         if action == "execute":
             await ctx.info(f"Running algorithm: {kwargs['algorithm']}")
             await ctx.report_progress(0, 100)
-            result = await _send(
-                "execute_processing",
-                {"algorithm": kwargs["algorithm"], "parameters": kwargs["parameters"]},
-                timeout=TIMEOUT_LONG,
-            )
+            params = {"algorithm": kwargs["algorithm"], "parameters": kwargs["parameters"]}
+            socket_timeout = TIMEOUT_LONG
+            if kwargs.get("timeout") is not None:
+                params["timeout"] = kwargs["timeout"]
+                socket_timeout = int(kwargs["timeout"]) + 5
+            if kwargs.get("load_results"):
+                params["load_results"] = True
+            result = await _send("execute_processing", params, timeout=socket_timeout)
             await ctx.report_progress(100, 100)
             return result
         elif action == "execute_batch":
