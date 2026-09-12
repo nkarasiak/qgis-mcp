@@ -300,6 +300,28 @@ async def test_get_layer_features_no_expression_omitted(mock_connection):
 
 
 @pytest.mark.asyncio
+async def test_get_layer_features_caches_on_result_size_not_limit(mock_connection):
+    """A high limit that matched three features is not a large result."""
+    from qgis_mcp.server import get_layer_features
+
+    ctx = _make_ctx()
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"features": [{"_fid": i} for i in range(3)], "feature_count": 3},
+    }
+    small = await get_layer_features(ctx, layer_id="test", limit=50)
+    assert "features_resource" not in small
+    assert "_hint" not in small
+
+    mock_connection.send_command.return_value = {
+        "status": "success",
+        "result": {"features": [{"_fid": i} for i in range(21)], "feature_count": 21},
+    }
+    large = await get_layer_features(ctx, layer_id="test", limit=50)
+    assert large["features_resource"].startswith("qgis://cache/")
+
+
+@pytest.mark.asyncio
 async def test_batch_commands_tool(mock_connection):
     mock_connection.send_command.return_value = {
         "status": "success",
@@ -499,6 +521,20 @@ async def test_delete_features_by_expression(mock_connection):
     await delete_features(ctx, layer_id="test", expression="id > 5")
     call_params = mock_connection.send_command.call_args[0][1]
     assert call_params["expression"] == "id > 5"
+
+
+@pytest.mark.asyncio
+async def test_delete_features_confirmation_names_empty_fids(mock_connection):
+    """fids=[] must not be described as an expression the caller never passed."""
+    from qgis_mcp.server import delete_features
+
+    mock_connection.send_command.return_value = {"status": "success", "result": {"deleted": 0}}
+    confirm = AsyncMock(return_value=True)
+    with patch("qgis_mcp.server._confirm_destructive", confirm):
+        await delete_features(_make_ctx(), layer_id="test", fids=[])
+    message = confirm.call_args[0][1]
+    assert "fids=[]" in message
+    assert "expression" not in message
 
 
 @pytest.mark.asyncio
@@ -3249,6 +3285,41 @@ def test_diagnose_match_has_no_fix_field():
     check = next(c for c in enriched["checks"] if c["name"] == "version_match")
     assert check["status"] == "ok"
     assert "fix" not in check["detail"]
+
+
+def test_resource_cache_evicts_oldest_past_the_cap():
+    """Nothing prunes these entries, so the cache has to bound itself."""
+    from qgis_mcp.server import _CACHE_MAX_ENTRIES, _cache_as_resource, _resource_cache
+
+    _resource_cache.clear()
+    uris = [_cache_as_resource([n]) for n in range(_CACHE_MAX_ENTRIES + 3)]
+    assert len(_resource_cache) == _CACHE_MAX_ENTRIES
+    oldest, newest = uris[0].rsplit("/", 1)[1], uris[-1].rsplit("/", 1)[1]
+    assert oldest not in _resource_cache
+    assert newest in _resource_cache
+    _resource_cache.clear()
+
+
+def test_probe_instance_reports_a_closed_peer_as_unreachable():
+    """getpeername() on the pooled socket answers long after the peer is gone."""
+    import socket as socket_module
+
+    from qgis_mcp.server import _probe_instance, _qgis_connections
+
+    ours, theirs = socket_module.socketpair()
+    with socket_module.socket() as closed:
+        closed.bind(("localhost", 0))
+        port = closed.getsockname()[1]
+
+    conn = MagicMock()
+    conn.socket = ours
+    _qgis_connections["closed-peer"] = conn
+    try:
+        theirs.close()  # the QGIS side went away, the pooled socket has not noticed
+        assert _probe_instance("closed-peer", "localhost", port) is False
+    finally:
+        _qgis_connections.pop("closed-peer", None)
+        ours.close()
 
 
 def test_client_version_is_length_capped():

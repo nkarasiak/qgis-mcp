@@ -14,6 +14,7 @@ import socket
 import sys
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
@@ -277,20 +278,12 @@ def get_qgis_connection(instance: str = DEFAULT_INSTANCE) -> QgisMCPClient:
 def _probe_instance(instance: str, host: str, port: int, timeout: float = 1.0) -> bool:
     """Return True when *instance* currently accepts a socket connection.
 
-    Reuses the pooled connection when one is already live, else opens a
-    short-timeout TCP connection and closes it immediately. Deliberately not
-    _send_sync(): its first-connect retry schedule would make listing a single
-    unreachable instance take ~11s.
+    Always a fresh short-timeout TCP connection, closed immediately. The pooled
+    socket cannot answer this: getpeername() keeps reporting the address after
+    the peer has gone away, so a closed QGIS window would still read as
+    reachable. Deliberately not _send_sync(): its first-connect retry schedule
+    would make listing a single unreachable instance take ~11s.
     """
-    conn = _qgis_connections.get(instance)
-    # Bind the socket once: disconnect() sets it to None, so re-reading the
-    # attribute after the guard can hand us None and raise AttributeError, which
-    # suppress(OSError) would not catch.
-    sock = conn.socket if conn is not None else None
-    if sock is not None:
-        with contextlib.suppress(OSError):
-            sock.getpeername()
-            return True
     try:
         with socket.create_connection((host, port), timeout=timeout):
             return True
@@ -332,6 +325,15 @@ def _is_refusal(exc: Exception) -> bool:
     )
 
 
+def _retry_schedule(retries: int | None) -> tuple[int, list[float]]:
+    """Return (attempts, delays) for a send: see _send_sync for the reasoning."""
+    if retries is not None:
+        return max(1, retries), _RETRY_DELAYS
+    if _first_connected:
+        return _MAX_RETRIES, _RETRY_DELAYS
+    return _FIRST_CONNECT_RETRIES, _FIRST_CONNECT_DELAYS
+
+
 def _send_sync(
     command_type: str,
     params: dict | None = None,
@@ -363,15 +365,7 @@ def _send_sync(
     name = resolve_instance(instance)
     last_exc: Exception | None = None
 
-    if retries is not None:
-        max_retries = max(1, retries)
-        delays = _RETRY_DELAYS
-    elif _first_connected:
-        max_retries = _MAX_RETRIES
-        delays = _RETRY_DELAYS
-    else:
-        max_retries = _FIRST_CONNECT_RETRIES
-        delays = _FIRST_CONNECT_DELAYS
+    max_retries, delays = _retry_schedule(retries)
 
     with _get_instance_lock(name):
         for attempt in range(max_retries):
@@ -451,7 +445,7 @@ def _get_error_hint(message: str) -> str | None:
 async def _send(
     command_type: str,
     params: dict | None = None,
-    timeout: int = 30,
+    timeout: int = TIMEOUT_DEFAULT,
     instance: str | None = None,
     retries: int | None = None,
 ) -> dict:
@@ -567,13 +561,18 @@ mcp = FastMCP(
 # Resource Cache for large results
 # ---------------------------------------------------------------------------
 
-_resource_cache: dict[str, str] = {}
+_CACHE_MAX_ENTRIES = 32
+# Bounded and ordered: entries are never read back in most sessions, so an
+# unbounded dict would hold every large result until the process exits.
+_resource_cache: OrderedDict[str, str] = OrderedDict()
 
 
-def _cache_as_resource(data: Any, name_hint: str = "cache") -> str:
+def _cache_as_resource(data: Any) -> str:
     """Generate a random ID, store data as JSON, and return a URI."""
     cache_id = secrets.token_hex(8)
     _resource_cache[cache_id] = json.dumps(data)
+    while len(_resource_cache) > _CACHE_MAX_ENTRIES:
+        _resource_cache.popitem(last=False)
     return f"qgis://cache/{cache_id}"
 
 
@@ -884,7 +883,8 @@ async def zoom_to_layer(ctx: Context, layer_id: str, instance: str | None = None
     description="Get features from a vector layer. Flat dicts: _fid + attributes at top level. "
     "expression filter (QGIS, e.g. "
     '"name = \'Berlin\'", "population > 1000000"), limit (max 50, default 10), offset for paging, '
-    "optional geometry in _geometry key.",
+    "optional geometry in _geometry key. feature_count is the layer total; matched is the "
+    "count after the expression filter.",
     structured_output=True,
 )
 async def get_layer_features(
@@ -908,9 +908,10 @@ async def get_layer_features(
         params["expression"] = expression
     result = await _send("get_layer_features", params, instance=instance)
 
-    # Large Results to Resources (Task 9)
-    if limit > 20 and "features" in result:
-        uri = _cache_as_resource(result["features"], f"{layer_id}_features")
+    # Large Results to Resources (Task 9). Keyed off what came back, not what was
+    # asked for: a limit of 50 that matched 3 features is not a large result.
+    if len(result.get("features", [])) > 20:
+        uri = _cache_as_resource(result["features"])
         result["features_resource"] = uri
         result["_hint"] = f"Result contains many features. You can also access them via {uri}"
 
@@ -976,7 +977,8 @@ async def update_features(
     title="Delete Features",
     annotations=ToolAnnotations(destructiveHint=True),
     description="Delete features by feature IDs or expression filter. "
-    "Provide either fids (list of ints) or expression (string), not both.",
+    "Provide either fids (list of ints) or expression (string), not both. Returns requested "
+    "and the measured deleted count.",
 )
 async def delete_features(
     ctx: Context,
@@ -985,7 +987,9 @@ async def delete_features(
     expression: str | None = None,
     instance: str | None = None,
 ) -> dict:
-    target = f"fids={fids}" if fids else f"expression='{expression}'"
+    # `is not None`, so an explicit empty list does not get described as an
+    # expression the caller never passed.
+    target = f"fids={fids}" if fids is not None else f"expression='{expression}'"
     if not await _confirm_destructive(ctx, f"Delete features from layer {layer_id} ({target})?"):
         return {"ok": False, "message": "Cancelled by user"}
     params = {"layer_id": layer_id}
@@ -2898,7 +2902,8 @@ async def remove_layout(ctx: Context, layout_name: str, instance: str | None = N
     title="Execute SQL",
     description="SQL across loaded layers via a virtual layer; reference layers by name in "
     "FROM/JOIN. as_layer=True registers the result as a new layer (set geometry_field for "
-    "spatial output); else returns rows inline (max 1000). layers limits sources by layer id.",
+    "spatial output); else returns rows inline, capped by limit (default 1000, negative for all) "
+    "with a truncated flag. layers limits sources by layer id.",
 )
 async def execute_sql(
     ctx: Context,
@@ -2908,6 +2913,7 @@ async def execute_sql(
     layer_name: str = "sql_result",
     geometry_field: str | None = None,
     uid_field: str | None = None,
+    limit: int = 1000,
     instance: str | None = None,
 ) -> dict:
     return await _send(
@@ -2919,6 +2925,7 @@ async def execute_sql(
             "layer_name": layer_name,
             "geometry_field": geometry_field,
             "uid_field": uid_field,
+            "limit": limit,
         },
         timeout=TIMEOUT_LONG,
         instance=instance,

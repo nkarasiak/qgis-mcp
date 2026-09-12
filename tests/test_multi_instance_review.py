@@ -2,8 +2,8 @@
 
 Covers, in order: the schema cost paid by single-instance users, the retry
 schedule that made a call to a closed instance cost ~21s every time, the
-_probe_instance race on a socket cleared mid-disconnect, and the missing connect
-timeout that let a routable-but-dead host stall for minutes.
+_probe_instance shortcut that read a pooled socket instead of the peer, and the
+missing connect timeout that let a routable-but-dead host stall for minutes.
 """
 
 import os
@@ -329,21 +329,25 @@ class _VanishingSocket:
         return live
 
 
-def test_probe_instance_survives_a_socket_cleared_mid_probe():
-    """Re-reading conn.socket after the guard used to raise AttributeError.
+def test_probe_instance_ignores_the_pooled_socket():
+    """The pooled connection is never consulted, so no race can reach it.
 
-    suppress(OSError) does not catch it, so it escaped through the gather in
-    list_qgis_instances.
+    It could not answer the question either: getpeername() keeps succeeding
+    after the peer closed, which reported a dead instance as reachable.
     """
     import qgis_mcp.server as srv
+
+    with socket.socket() as closed:
+        closed.bind(("localhost", 0))
+        port = closed.getsockname()[1]
 
     conn = _VanishingSocket()
     srv._qgis_connections["racy"] = conn
     try:
-        assert srv._probe_instance("racy", "localhost", 9876) is True
+        assert srv._probe_instance("racy", "localhost", port) is False
     finally:
         srv._qgis_connections.pop("racy", None)
-    assert conn.reads == 1, "conn.socket must be read once, not re-read after the guard"
+    assert conn.reads == 0, "the pooled socket must not be consulted"
 
 
 # --- Connect timeout ---

@@ -52,8 +52,12 @@ def enrich_diagnose(result: dict) -> dict:
             "is recommended rather than required. Restart your MCP client after "
             "running the fix."
         )
-    result["checks"].append({"name": "version_match", "status": version_match, "detail": detail})
-    if version_match == "mismatch" and result["status"] == "healthy":
+    # An older plugin's diagnose may not carry either key, and this check is the
+    # one that reports exactly that kind of drift - it must not raise on it.
+    result.setdefault("checks", []).append(
+        {"name": "version_match", "status": version_match, "detail": detail}
+    )
+    if version_match == "mismatch" and result.get("status") == "healthy":
         result["status"] = "degraded"
 
     return result

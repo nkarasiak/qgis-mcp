@@ -8,6 +8,7 @@ Each compound tool takes an ``action`` string as its first parameter and
 dispatches to the same ``_send()`` logic used by the granular tools.
 """
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 try:
@@ -50,12 +51,46 @@ _LAYOUT_ITEM_COMMANDS = {
 }
 
 
-def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
-    """Register compound tools on the MCP server instance."""
+#: An action handler takes the request context and the caller's ``params`` dict.
+_Action = Callable[[Context, dict[str, Any]], Awaitable[Any]]
+
+
+async def _dispatch(
+    group: str, actions: dict[str, _Action], ctx: Context, action: str, params: dict | None
+) -> Any:
+    """Run the handler *action* names in *actions*, or report an unknown action.
+
+    One lookup for every group, so the "Unknown action" message is written once
+    rather than at the tail of each dispatch chain.
+    """
+    handler = actions.get(action)
+    if handler is None:
+        raise ToolError(f"Unknown {group} action: {action}")
+    return await handler(ctx, params or {})
+
+
+def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa: C901
+    """Register compound tools on the MCP server instance.
+
+    One registration function by design: every handler closes over *_send* and
+    *_confirm_destructive*. C901 is silenced because it charges this function
+    for the branches of the nested handlers as well, and those are already as
+    small as each action allows.
+    """
 
     # ------------------------------------------------------------------
     # 1. system
     # ------------------------------------------------------------------
+
+    async def system_diagnose(ctx, kwargs):
+        await ctx.info("Running diagnostics...")
+        return enrich_diagnose(await _send("diagnose"))
+
+    system_actions: dict[str, _Action] = {
+        "ping": lambda ctx, kwargs: _send("ping"),
+        "diagnose": system_diagnose,
+        "get_qgis_info": lambda ctx, kwargs: _send("get_qgis_info"),
+    }
 
     @mcp.tool(
         title="System",
@@ -73,20 +108,36 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def system(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        if action == "ping":
-            return await _send("ping")
-        elif action == "diagnose":
-            await ctx.info("Running diagnostics...")
-            result = await _send("diagnose")
-            return enrich_diagnose(result)
-        elif action == "get_qgis_info":
-            return await _send("get_qgis_info")
-        else:
-            raise ToolError(f"Unknown system action: {action}")
+        return await _dispatch("system", system_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 2. project
     # ------------------------------------------------------------------
+
+    async def project_load(ctx, kwargs):
+        path = kwargs["path"]
+        await ctx.info(f"Loading project: {path}")
+        return make_project_response(await _send("load_project", {"path": path}))
+
+    async def project_create(ctx, kwargs):
+        return make_project_response(await _send("create_new_project", {"path": kwargs["path"]}))
+
+    async def project_save(ctx, kwargs):
+        payload = {}
+        if "path" in kwargs:
+            payload["path"] = kwargs["path"]
+        return await _send("save_project", payload)
+
+    async def project_set_crs(ctx, kwargs):
+        return make_project_response(await _send("set_project_crs", {"crs": kwargs["crs"]}))
+
+    project_actions: dict[str, _Action] = {
+        "get_info": lambda ctx, kwargs: _send("get_project_info"),
+        "load": project_load,
+        "create": project_create,
+        "save": project_save,
+        "set_crs": project_set_crs,
+    }
 
     @mcp.tool(
         title="Project",
@@ -105,31 +156,133 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def project(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any] | list:
-        kwargs = params or {}
-        if action == "get_info":
-            return await _send("get_project_info")
-        elif action == "load":
-            path = kwargs["path"]
-            await ctx.info(f"Loading project: {path}")
-            result = await _send("load_project", {"path": path})
-            return make_project_response(result)
-        elif action == "create":
-            result = await _send("create_new_project", {"path": kwargs["path"]})
-            return make_project_response(result)
-        elif action == "save":
-            params = {}
-            if "path" in kwargs:
-                params["path"] = kwargs["path"]
-            return await _send("save_project", params)
-        elif action == "set_crs":
-            result = await _send("set_project_crs", {"crs": kwargs["crs"]})
-            return make_project_response(result)
-        else:
-            raise ToolError(f"Unknown project action: {action}")
+        return await _dispatch("project", project_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 3. layer
     # ------------------------------------------------------------------
+
+    async def layer_add_vector(ctx, kwargs):
+        payload = {"path": kwargs["path"], "provider": kwargs.get("provider", "ogr")}
+        if "name" in kwargs:
+            payload["name"] = kwargs["name"]
+        return make_layer_response(await _send("add_vector_layer", payload))
+
+    async def layer_add_raster(ctx, kwargs):
+        payload = {"path": kwargs["path"], "provider": kwargs.get("provider", "gdal")}
+        if "name" in kwargs:
+            payload["name"] = kwargs["name"]
+        return make_layer_response(await _send("add_raster_layer", payload))
+
+    async def layer_remove(ctx, kwargs):
+        layer_id = kwargs["layer_id"]
+        if not await _confirm_destructive(ctx, f"Remove layer {layer_id}? This cannot be undone."):
+            return {"ok": False, "message": "Cancelled by user"}
+        return await _send("remove_layer", {"layer_id": layer_id})
+
+    async def layer_create_memory(ctx, kwargs):
+        payload = {
+            "name": kwargs["name"],
+            "geometry_type": kwargs["geometry_type"],
+            "crs": kwargs.get("crs", "EPSG:4326"),
+        }
+        if "fields" in kwargs:
+            payload["fields"] = kwargs["fields"]
+        result = await _send("create_memory_layer", payload)
+        return make_layer_response(result, fallback_name=kwargs["name"])
+
+    async def layer_set_labeling(ctx, kwargs):
+        payload: dict[str, Any] = {
+            "layer_id": kwargs["layer_id"],
+            "enabled": kwargs.get("enabled", True),
+        }
+        for key in ("field_name", "font_size", "color"):
+            if key in kwargs:
+                payload[key] = kwargs[key]
+        return await _send("set_layer_labeling", payload)
+
+    async def layer_duplicate(ctx, kwargs):
+        payload: dict[str, Any] = {"layer_id": kwargs["layer_id"]}
+        if "new_name" in kwargs:
+            payload["new_name"] = kwargs["new_name"]
+        return make_layer_response(await _send("duplicate_layer", payload))
+
+    async def layer_add_web(ctx, kwargs):
+        payload: dict[str, Any] = {"url": kwargs["url"], "service": kwargs["service"]}
+        for key in ("crs", "name"):
+            if kwargs.get(key):
+                payload[key] = kwargs[key]
+        return make_layer_response(await _send("add_web_layer", payload))
+
+    async def layer_export(ctx, kwargs):
+        await ctx.info(f"Exporting layer to {kwargs['output_path']}")
+        return await _send(
+            "export_layer",
+            {
+                "layer_id": kwargs["layer_id"],
+                "output_path": kwargs["output_path"],
+                "target_crs": kwargs.get("target_crs"),
+                "filter_expression": kwargs.get("filter_expression"),
+            },
+            timeout=TIMEOUT_LONG,
+        )
+
+    layer_actions: dict[str, _Action] = {
+        "list": lambda ctx, kwargs: _send(
+            "get_layers",
+            {"limit": kwargs.get("limit", 50), "offset": kwargs.get("offset", 0)},
+        ),
+        "add_vector": layer_add_vector,
+        "add_raster": layer_add_raster,
+        "remove": layer_remove,
+        "find": lambda ctx, kwargs: _send("find_layer", {"name_pattern": kwargs["name_pattern"]}),
+        "create_memory": layer_create_memory,
+        "set_visibility": lambda ctx, kwargs: _send(
+            "set_layer_visibility",
+            {"layer_id": kwargs["layer_id"], "visible": kwargs["visible"]},
+        ),
+        "zoom_to": lambda ctx, kwargs: _send("zoom_to_layer", {"layer_id": kwargs["layer_id"]}),
+        "get_info": lambda ctx, kwargs: _send("get_layer_info", {"layer_id": kwargs["layer_id"]}),
+        "get_schema": lambda ctx, kwargs: _send(
+            "get_layer_schema", {"layer_id": kwargs["layer_id"]}
+        ),
+        "get_extent": lambda ctx, kwargs: _send(
+            "get_layer_extent", {"layer_id": kwargs["layer_id"]}
+        ),
+        "get_raster_info": lambda ctx, kwargs: _send(
+            "get_raster_info", {"layer_id": kwargs["layer_id"]}
+        ),
+        "get_crs": lambda ctx, kwargs: _send("get_layer_crs", {"layer_id": kwargs["layer_id"]}),
+        "set_crs": lambda ctx, kwargs: _send(
+            "set_layer_crs", {"layer_id": kwargs["layer_id"], "crs": kwargs["crs"]}
+        ),
+        "get_labeling": lambda ctx, kwargs: _send(
+            "get_layer_labeling", {"layer_id": kwargs["layer_id"]}
+        ),
+        "set_labeling": layer_set_labeling,
+        "duplicate": layer_duplicate,
+        "set_order": lambda ctx, kwargs: _send(
+            "set_layer_order", {"layer_ids": kwargs["layer_ids"]}
+        ),
+        "add_web": layer_add_web,
+        "export": layer_export,
+        "save_style": lambda ctx, kwargs: _send(
+            "save_style_qml", {"layer_id": kwargs["layer_id"], "path": kwargs["path"]}
+        ),
+        "apply_style": lambda ctx, kwargs: _send(
+            "apply_style_qml", {"layer_id": kwargs["layer_id"], "path": kwargs["path"]}
+        ),
+        "add_join": lambda ctx, kwargs: _send(
+            "add_table_join",
+            {
+                "target_layer_id": kwargs["target_layer_id"],
+                "join_layer_id": kwargs["join_layer_id"],
+                "target_field": kwargs["target_field"],
+                "join_field": kwargs["join_field"],
+                "prefix": kwargs.get("prefix", ""),
+            },
+        ),
+    }
 
     @mcp.tool(
         title="Layer",
@@ -176,139 +329,57 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def layer(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any] | list:
-        kwargs = params or {}
-        if action == "list":
-            return await _send(
-                "get_layers",
-                {
-                    "limit": kwargs.get("limit", 50),
-                    "offset": kwargs.get("offset", 0),
-                },
-            )
-        elif action == "add_vector":
-            params = {"path": kwargs["path"], "provider": kwargs.get("provider", "ogr")}
-            if "name" in kwargs:
-                params["name"] = kwargs["name"]
-            result = await _send("add_vector_layer", params)
-            return make_layer_response(result)
-        elif action == "add_raster":
-            params = {"path": kwargs["path"], "provider": kwargs.get("provider", "gdal")}
-            if "name" in kwargs:
-                params["name"] = kwargs["name"]
-            result = await _send("add_raster_layer", params)
-            return make_layer_response(result)
-        elif action == "remove":
-            layer_id = kwargs["layer_id"]
-            if not await _confirm_destructive(
-                ctx, f"Remove layer {layer_id}? This cannot be undone."
-            ):
-                return {"ok": False, "message": "Cancelled by user"}
-            return await _send("remove_layer", {"layer_id": layer_id})
-        elif action == "find":
-            return await _send("find_layer", {"name_pattern": kwargs["name_pattern"]})
-        elif action == "create_memory":
-            params = {
-                "name": kwargs["name"],
-                "geometry_type": kwargs["geometry_type"],
-                "crs": kwargs.get("crs", "EPSG:4326"),
-            }
-            if "fields" in kwargs:
-                params["fields"] = kwargs["fields"]
-            result = await _send("create_memory_layer", params)
-            return make_layer_response(result, fallback_name=kwargs["name"])
-        elif action == "set_visibility":
-            return await _send(
-                "set_layer_visibility",
-                {
-                    "layer_id": kwargs["layer_id"],
-                    "visible": kwargs["visible"],
-                },
-            )
-        elif action == "zoom_to":
-            return await _send("zoom_to_layer", {"layer_id": kwargs["layer_id"]})
-        elif action == "get_info":
-            return await _send("get_layer_info", {"layer_id": kwargs["layer_id"]})
-        elif action == "get_schema":
-            return await _send("get_layer_schema", {"layer_id": kwargs["layer_id"]})
-        elif action == "get_extent":
-            return await _send("get_layer_extent", {"layer_id": kwargs["layer_id"]})
-        elif action == "get_raster_info":
-            return await _send("get_raster_info", {"layer_id": kwargs["layer_id"]})
-        elif action == "get_crs":
-            return await _send("get_layer_crs", {"layer_id": kwargs["layer_id"]})
-        elif action == "set_crs":
-            return await _send(
-                "set_layer_crs", {"layer_id": kwargs["layer_id"], "crs": kwargs["crs"]}
-            )
-        elif action == "get_labeling":
-            return await _send("get_layer_labeling", {"layer_id": kwargs["layer_id"]})
-        elif action == "set_labeling":
-            params: dict[str, Any] = {
-                "layer_id": kwargs["layer_id"],
-                "enabled": kwargs.get("enabled", True),
-            }
-            if "field_name" in kwargs:
-                params["field_name"] = kwargs["field_name"]
-            if "font_size" in kwargs:
-                params["font_size"] = kwargs["font_size"]
-            if "color" in kwargs:
-                params["color"] = kwargs["color"]
-            return await _send("set_layer_labeling", params)
-        elif action == "duplicate":
-            dup_params: dict[str, Any] = {"layer_id": kwargs["layer_id"]}
-            if "new_name" in kwargs:
-                dup_params["new_name"] = kwargs["new_name"]
-            result = await _send("duplicate_layer", dup_params)
-            return make_layer_response(result)
-        elif action == "set_order":
-            return await _send("set_layer_order", {"layer_ids": kwargs["layer_ids"]})
-        elif action == "add_web":
-            web_params: dict[str, Any] = {
-                "url": kwargs["url"],
-                "service": kwargs["service"],
-            }
-            for key in ("crs", "name"):
-                if kwargs.get(key):
-                    web_params[key] = kwargs[key]
-            result = await _send("add_web_layer", web_params)
-            return make_layer_response(result)
-        elif action == "export":
-            await ctx.info(f"Exporting layer to {kwargs['output_path']}")
-            return await _send(
-                "export_layer",
-                {
-                    "layer_id": kwargs["layer_id"],
-                    "output_path": kwargs["output_path"],
-                    "target_crs": kwargs.get("target_crs"),
-                    "filter_expression": kwargs.get("filter_expression"),
-                },
-                timeout=TIMEOUT_LONG,
-            )
-        elif action == "save_style":
-            return await _send(
-                "save_style_qml", {"layer_id": kwargs["layer_id"], "path": kwargs["path"]}
-            )
-        elif action == "apply_style":
-            return await _send(
-                "apply_style_qml", {"layer_id": kwargs["layer_id"], "path": kwargs["path"]}
-            )
-        elif action == "add_join":
-            return await _send(
-                "add_table_join",
-                {
-                    "target_layer_id": kwargs["target_layer_id"],
-                    "join_layer_id": kwargs["join_layer_id"],
-                    "target_field": kwargs["target_field"],
-                    "join_field": kwargs["join_field"],
-                    "prefix": kwargs.get("prefix", ""),
-                },
-            )
-        else:
-            raise ToolError(f"Unknown layer action: {action}")
+        return await _dispatch("layer", layer_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 4. features
     # ------------------------------------------------------------------
+
+    async def features_get(ctx, kwargs):
+        payload = {
+            "layer_id": kwargs["layer_id"],
+            "limit": min(kwargs.get("limit", 10), 50),
+            "offset": kwargs.get("offset", 0),
+            "include_geometry": kwargs.get("include_geometry", False),
+        }
+        if "expression" in kwargs:
+            payload["expression"] = kwargs["expression"]
+        return await _send("get_layer_features", payload)
+
+    async def features_delete(ctx, kwargs):
+        layer_id = kwargs["layer_id"]
+        fids = kwargs.get("fids")
+        expression = kwargs.get("expression")
+        target = f"fids={fids}" if fids is not None else f"expression='{expression}'"
+        if not await _confirm_destructive(
+            ctx, f"Delete features from layer {layer_id} ({target})?"
+        ):
+            return {"ok": False, "message": "Cancelled by user"}
+        payload: dict[str, Any] = {"layer_id": layer_id}
+        if fids is not None:
+            payload["fids"] = fids
+        if expression:
+            payload["expression"] = expression
+        return await _send("delete_features", payload)
+
+    features_actions: dict[str, _Action] = {
+        "get": features_get,
+        "get_statistics": lambda ctx, kwargs: _send(
+            "get_field_statistics",
+            {"layer_id": kwargs["layer_id"], "field_name": kwargs["field_name"]},
+        ),
+        "add": lambda ctx, kwargs: _send(
+            "add_features", {"layer_id": kwargs["layer_id"], "features": kwargs["features"]}
+        ),
+        "update": lambda ctx, kwargs: _send(
+            "update_features", {"layer_id": kwargs["layer_id"], "updates": kwargs["updates"]}
+        ),
+        "update_geometry": lambda ctx, kwargs: _send(
+            "update_feature_geometry",
+            {"layer_id": kwargs["layer_id"], "updates": kwargs["updates"]},
+        ),
+        "delete": features_delete,
+    }
 
     @mcp.tool(
         title="Features",
@@ -331,71 +402,24 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def features(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        kwargs = params or {}
-        if action == "get":
-            limit = min(kwargs.get("limit", 10), 50)
-            params = {
-                "layer_id": kwargs["layer_id"],
-                "limit": limit,
-                "offset": kwargs.get("offset", 0),
-                "include_geometry": kwargs.get("include_geometry", False),
-            }
-            if "expression" in kwargs:
-                params["expression"] = kwargs["expression"]
-            return await _send("get_layer_features", params)
-        elif action == "get_statistics":
-            return await _send(
-                "get_field_statistics",
-                {
-                    "layer_id": kwargs["layer_id"],
-                    "field_name": kwargs["field_name"],
-                },
-            )
-        elif action == "add":
-            return await _send(
-                "add_features",
-                {
-                    "layer_id": kwargs["layer_id"],
-                    "features": kwargs["features"],
-                },
-            )
-        elif action == "update":
-            return await _send(
-                "update_features",
-                {
-                    "layer_id": kwargs["layer_id"],
-                    "updates": kwargs["updates"],
-                },
-            )
-        elif action == "update_geometry":
-            return await _send(
-                "update_feature_geometry",
-                {
-                    "layer_id": kwargs["layer_id"],
-                    "updates": kwargs["updates"],
-                },
-            )
-        elif action == "delete":
-            layer_id = kwargs["layer_id"]
-            fids = kwargs.get("fids")
-            expression = kwargs.get("expression")
-            target = f"fids={fids}" if fids else f"expression='{expression}'"
-            if not await _confirm_destructive(
-                ctx, f"Delete features from layer {layer_id} ({target})?"
-            ):
-                return {"ok": False, "message": "Cancelled by user"}
-            params: dict[str, Any] = {"layer_id": layer_id}
-            if fids is not None:
-                params["fids"] = fids
-            if expression:
-                params["expression"] = expression
-            return await _send("delete_features", params)
-        else:
-            raise ToolError(f"Unknown features action: {action}")
+        return await _dispatch("features", features_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 5. selection
     # ------------------------------------------------------------------
+
+    async def selection_select(ctx, kwargs):
+        payload: dict[str, Any] = {"layer_id": kwargs["layer_id"]}
+        for key in ("expression", "fids"):
+            if key in kwargs:
+                payload[key] = kwargs[key]
+        return await _send("select_features", payload)
+
+    selection_actions: dict[str, _Action] = {
+        "select": selection_select,
+        "get": lambda ctx, kwargs: _send("get_selection", {"layer_id": kwargs["layer_id"]}),
+        "clear": lambda ctx, kwargs: _send("clear_selection", {"layer_id": kwargs["layer_id"]}),
+    }
 
     @mcp.tool(
         title="Selection",
@@ -412,24 +436,37 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def selection(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        kwargs = params or {}
-        if action == "select":
-            params: dict[str, Any] = {"layer_id": kwargs["layer_id"]}
-            if "expression" in kwargs:
-                params["expression"] = kwargs["expression"]
-            if "fids" in kwargs:
-                params["fids"] = kwargs["fids"]
-            return await _send("select_features", params)
-        elif action == "get":
-            return await _send("get_selection", {"layer_id": kwargs["layer_id"]})
-        elif action == "clear":
-            return await _send("clear_selection", {"layer_id": kwargs["layer_id"]})
-        else:
-            raise ToolError(f"Unknown selection action: {action}")
+        return await _dispatch("selection", selection_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 5b. editing
     # ------------------------------------------------------------------
+
+    async def editing_commit(ctx, kwargs):
+        layer_id = kwargs["layer_id"]
+        await ctx.info(f"Committing edits on layer {layer_id}")
+        return await _send("commit_edits", {"layer_id": layer_id})
+
+    async def editing_rollback(ctx, kwargs):
+        layer_id = kwargs["layer_id"]
+        if not await _confirm_destructive(
+            ctx, f"Discard all uncommitted edits on layer {layer_id}? This cannot be undone."
+        ):
+            return {"ok": False, "message": "Cancelled by user"}
+        return await _send("rollback_edits", {"layer_id": layer_id})
+
+    editing_actions: dict[str, _Action] = {
+        "start": lambda ctx, kwargs: _send("start_editing", {"layer_id": kwargs["layer_id"]}),
+        "commit": editing_commit,
+        "rollback": editing_rollback,
+        "status": lambda ctx, kwargs: _send("get_edit_status", {"layer_id": kwargs["layer_id"]}),
+        "undo": lambda ctx, kwargs: _send(
+            "undo_edits", {"layer_id": kwargs["layer_id"], "steps": kwargs.get("steps", 1)}
+        ),
+        "redo": lambda ctx, kwargs: _send(
+            "redo_edits", {"layer_id": kwargs["layer_id"], "steps": kwargs.get("steps", 1)}
+        ),
+    }
 
     @mcp.tool(
         title="Editing",
@@ -450,35 +487,96 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def editing(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        kwargs = params or {}
-        layer_id = kwargs["layer_id"]
-        if action == "start":
-            return await _send("start_editing", {"layer_id": layer_id})
-        elif action == "commit":
-            await ctx.info(f"Committing edits on layer {layer_id}")
-            return await _send("commit_edits", {"layer_id": layer_id})
-        elif action == "rollback":
-            if not await _confirm_destructive(
-                ctx, f"Discard all uncommitted edits on layer {layer_id}? This cannot be undone."
-            ):
-                return {"ok": False, "message": "Cancelled by user"}
-            return await _send("rollback_edits", {"layer_id": layer_id})
-        elif action == "status":
-            return await _send("get_edit_status", {"layer_id": layer_id})
-        elif action == "undo":
-            return await _send(
-                "undo_edits", {"layer_id": layer_id, "steps": kwargs.get("steps", 1)}
-            )
-        elif action == "redo":
-            return await _send(
-                "redo_edits", {"layer_id": layer_id, "steps": kwargs.get("steps", 1)}
-            )
-        else:
-            raise ToolError(f"Unknown editing action: {action}")
+        return await _dispatch("editing", editing_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 5c. connection
     # ------------------------------------------------------------------
+
+    async def connection_add_layer(ctx, kwargs):
+        result = await _send(
+            "add_layer_from_connection",
+            {
+                "provider": kwargs["provider"],
+                "connection": kwargs["connection"],
+                "table": kwargs.get("table"),
+                "schema": kwargs.get("schema"),
+                "sql": kwargs.get("sql"),
+                "geometry_column": kwargs.get("geometry_column"),
+                "primary_key": kwargs.get("primary_key"),
+                "name": kwargs.get("name"),
+            },
+            timeout=TIMEOUT_LONG,
+        )
+        return make_layer_response(result)
+
+    async def connection_import_layer(ctx, kwargs):
+        overwrite = kwargs.get("overwrite", False)
+        table = kwargs["table"]
+        if overwrite and not await _confirm_destructive(
+            ctx,
+            f"Overwrite table '{table}' in connection '{kwargs['connection']}'? "
+            "This cannot be undone.",
+        ):
+            return {"ok": False, "message": "Cancelled by user"}
+        return await _send(
+            "import_layer_to_connection",
+            {
+                "layer_id": kwargs["layer_id"],
+                "provider": kwargs["provider"],
+                "connection": kwargs["connection"],
+                "table": table,
+                "schema": kwargs.get("schema"),
+                "overwrite": overwrite,
+            },
+            timeout=TIMEOUT_LONG,
+        )
+
+    async def connection_execute_sql(ctx, kwargs):
+        sql = kwargs["sql"]
+        if not await _confirm_destructive(
+            ctx, f"Run SQL on connection '{kwargs['connection']}'?\n\n{sql}"
+        ):
+            return {"ok": False, "message": "Cancelled by user"}
+        return await _send(
+            "execute_connection_sql",
+            {
+                "provider": kwargs["provider"],
+                "connection": kwargs["connection"],
+                "sql": sql,
+                "limit": kwargs.get("limit", 100),
+            },
+            timeout=TIMEOUT_LONG,
+        )
+
+    connection_actions: dict[str, _Action] = {
+        "list": lambda ctx, kwargs: _send("list_connections", {"provider": kwargs.get("provider")}),
+        "create": lambda ctx, kwargs: _send(
+            "create_postgresql_connection",
+            {
+                "name": kwargs["name"],
+                "connection_mode": kwargs["connection_mode"],
+                "host": kwargs.get("host"),
+                "port": kwargs.get("port"),
+                "database": kwargs.get("database"),
+                "auth_config_id": kwargs.get("auth_config_id"),
+                "ssl_mode": kwargs.get("ssl_mode", "prefer"),
+                "service": kwargs.get("service"),
+            },
+            timeout=TIMEOUT_LONG,
+        ),
+        "list_tables": lambda ctx, kwargs: _send(
+            "list_connection_tables",
+            {
+                "provider": kwargs["provider"],
+                "connection": kwargs["connection"],
+                "schema": kwargs.get("schema"),
+            },
+        ),
+        "add_layer": connection_add_layer,
+        "import_layer": connection_import_layer,
+        "execute_sql": connection_execute_sql,
+    }
 
     @mcp.tool(
         title="Connection",
@@ -511,92 +609,48 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def connection(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any] | list:
-        kwargs = params or {}
-        if action == "list":
-            return await _send("list_connections", {"provider": kwargs.get("provider")})
-        elif action == "create":
-            return await _send(
-                "create_postgresql_connection",
-                {
-                    "name": kwargs["name"],
-                    "connection_mode": kwargs["connection_mode"],
-                    "host": kwargs.get("host"),
-                    "port": kwargs.get("port"),
-                    "database": kwargs.get("database"),
-                    "auth_config_id": kwargs.get("auth_config_id"),
-                    "ssl_mode": kwargs.get("ssl_mode", "prefer"),
-                    "service": kwargs.get("service"),
-                },
-                timeout=TIMEOUT_LONG,
-            )
-        elif action == "list_tables":
-            return await _send(
-                "list_connection_tables",
-                {
-                    "provider": kwargs["provider"],
-                    "connection": kwargs["connection"],
-                    "schema": kwargs.get("schema"),
-                },
-            )
-        elif action == "add_layer":
-            result = await _send(
-                "add_layer_from_connection",
-                {
-                    "provider": kwargs["provider"],
-                    "connection": kwargs["connection"],
-                    "table": kwargs.get("table"),
-                    "schema": kwargs.get("schema"),
-                    "sql": kwargs.get("sql"),
-                    "geometry_column": kwargs.get("geometry_column"),
-                    "primary_key": kwargs.get("primary_key"),
-                    "name": kwargs.get("name"),
-                },
-                timeout=TIMEOUT_LONG,
-            )
-            return make_layer_response(result)
-        elif action == "import_layer":
-            overwrite = kwargs.get("overwrite", False)
-            table = kwargs["table"]
-            if overwrite and not await _confirm_destructive(
-                ctx,
-                f"Overwrite table '{table}' in connection '{kwargs['connection']}'? "
-                "This cannot be undone.",
-            ):
-                return {"ok": False, "message": "Cancelled by user"}
-            return await _send(
-                "import_layer_to_connection",
-                {
-                    "layer_id": kwargs["layer_id"],
-                    "provider": kwargs["provider"],
-                    "connection": kwargs["connection"],
-                    "table": table,
-                    "schema": kwargs.get("schema"),
-                    "overwrite": overwrite,
-                },
-                timeout=TIMEOUT_LONG,
-            )
-        elif action == "execute_sql":
-            sql = kwargs["sql"]
-            if not await _confirm_destructive(
-                ctx, f"Run SQL on connection '{kwargs['connection']}'?\n\n{sql}"
-            ):
-                return {"ok": False, "message": "Cancelled by user"}
-            return await _send(
-                "execute_connection_sql",
-                {
-                    "provider": kwargs["provider"],
-                    "connection": kwargs["connection"],
-                    "sql": sql,
-                    "limit": kwargs.get("limit", 100),
-                },
-                timeout=TIMEOUT_LONG,
-            )
-        else:
-            raise ToolError(f"Unknown connection action: {action}")
+        return await _dispatch("connection", connection_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 6. style
     # ------------------------------------------------------------------
+
+    async def style_set(ctx, kwargs):
+        payload = {
+            "layer_id": kwargs["layer_id"],
+            "style_type": kwargs["style_type"],
+            "classes": kwargs.get("classes", 5),
+            "color_ramp": kwargs.get("color_ramp", "Spectral"),
+        }
+        if "field" in kwargs:
+            payload["field"] = kwargs["field"]
+        return await _send("set_layer_style", payload)
+
+    style_actions: dict[str, _Action] = {
+        "set": style_set,
+        "set_raster": lambda ctx, kwargs: _send(
+            "set_raster_style",
+            {
+                "layer_id": kwargs["layer_id"],
+                "style_type": kwargs["style_type"],
+                "band": kwargs.get("band", 1),
+                "color_ramp": kwargs.get("color_ramp", "Viridis"),
+                "classes": kwargs.get("classes", 5),
+                "min_value": kwargs.get("min_value"),
+                "max_value": kwargs.get("max_value"),
+                "classification": kwargs.get("classification", "continuous"),
+                "interpolation": kwargs.get("interpolation", "interpolated"),
+                "gradient": kwargs.get("gradient", "black_to_white"),
+                "contrast": kwargs.get("contrast", "stretch"),
+                "red_band": kwargs.get("red_band", 1),
+                "green_band": kwargs.get("green_band", 2),
+                "blue_band": kwargs.get("blue_band", 3),
+                "azimuth": kwargs.get("azimuth", 315.0),
+                "altitude": kwargs.get("altitude", 45.0),
+                "z_factor": kwargs.get("z_factor", 1.0),
+            },
+        ),
+    }
 
     @mcp.tool(
         title="Style",
@@ -622,44 +676,59 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def style(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        kwargs = params or {}
-        if action == "set":
-            params = {
-                "layer_id": kwargs["layer_id"],
-                "style_type": kwargs["style_type"],
-                "classes": kwargs.get("classes", 5),
-                "color_ramp": kwargs.get("color_ramp", "Spectral"),
-            }
-            if "field" in kwargs:
-                params["field"] = kwargs["field"]
-            return await _send("set_layer_style", params)
-        elif action == "set_raster":
-            params = {
-                "layer_id": kwargs["layer_id"],
-                "style_type": kwargs["style_type"],
-                "band": kwargs.get("band", 1),
-                "color_ramp": kwargs.get("color_ramp", "Viridis"),
-                "classes": kwargs.get("classes", 5),
-                "min_value": kwargs.get("min_value"),
-                "max_value": kwargs.get("max_value"),
-                "classification": kwargs.get("classification", "continuous"),
-                "interpolation": kwargs.get("interpolation", "interpolated"),
-                "gradient": kwargs.get("gradient", "black_to_white"),
-                "contrast": kwargs.get("contrast", "stretch"),
-                "red_band": kwargs.get("red_band", 1),
-                "green_band": kwargs.get("green_band", 2),
-                "blue_band": kwargs.get("blue_band", 3),
-                "azimuth": kwargs.get("azimuth", 315.0),
-                "altitude": kwargs.get("altitude", 45.0),
-                "z_factor": kwargs.get("z_factor", 1.0),
-            }
-            return await _send("set_raster_style", params)
-        else:
-            raise ToolError(f"Unknown style action: {action}")
+        return await _dispatch("style", style_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 7. canvas
     # ------------------------------------------------------------------
+
+    def inline_png(result):
+        return [
+            ImageContent(
+                type="image",
+                data=result["base64_data"],
+                mimeType="image/png",
+                annotations=Annotations(audience=["user", "assistant"], priority=1.0),
+            )
+        ]
+
+    async def canvas_set_extent(ctx, kwargs):
+        payload = {
+            "xmin": kwargs["xmin"],
+            "ymin": kwargs["ymin"],
+            "xmax": kwargs["xmax"],
+            "ymax": kwargs["ymax"],
+        }
+        if "crs" in kwargs:
+            payload["crs"] = kwargs["crs"]
+        return await _send("set_canvas_extent", payload)
+
+    async def canvas_screenshot(ctx, kwargs):
+        return inline_png(await _send("get_canvas_screenshot"))
+
+    async def canvas_screenshot_3d(ctx, kwargs):
+        payload = {
+            key: kwargs[key]
+            for key in ("view_index", "dpi", "pitch", "distance", "heading")
+            if key in kwargs
+        }
+        return inline_png(await _send("get_3d_screenshot", payload))
+
+    async def canvas_set_scale(ctx, kwargs):
+        payload: dict[str, Any] = {}
+        for key in ("scale", "rotation"):
+            if key in kwargs:
+                payload[key] = kwargs[key]
+        return await _send("set_canvas_scale", payload)
+
+    canvas_actions: dict[str, _Action] = {
+        "get_extent": lambda ctx, kwargs: _send("get_canvas_extent"),
+        "set_extent": canvas_set_extent,
+        "screenshot": canvas_screenshot,
+        "screenshot_3d": canvas_screenshot_3d,
+        "get_scale": lambda ctx, kwargs: _send("get_canvas_scale"),
+        "set_scale": canvas_set_scale,
+    }
 
     @mcp.tool(
         title="Canvas",
@@ -682,59 +751,66 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def canvas(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any] | list:
-        kwargs = params or {}
-        if action == "get_extent":
-            return await _send("get_canvas_extent")
-        elif action == "set_extent":
-            params = {
-                "xmin": kwargs["xmin"],
-                "ymin": kwargs["ymin"],
-                "xmax": kwargs["xmax"],
-                "ymax": kwargs["ymax"],
-            }
-            if "crs" in kwargs:
-                params["crs"] = kwargs["crs"]
-            return await _send("set_canvas_extent", params)
-        elif action == "screenshot":
-            result = await _send("get_canvas_screenshot")
-            return [
-                ImageContent(
-                    type="image",
-                    data=result["base64_data"],
-                    mimeType="image/png",
-                    annotations=Annotations(audience=["user", "assistant"], priority=1.0),
-                )
-            ]
-        elif action == "screenshot_3d":
-            params = {
-                k: kwargs[k]
-                for k in ("view_index", "dpi", "pitch", "distance", "heading")
-                if k in kwargs
-            }
-            result = await _send("get_3d_screenshot", params)
-            return [
-                ImageContent(
-                    type="image",
-                    data=result["base64_data"],
-                    mimeType="image/png",
-                    annotations=Annotations(audience=["user", "assistant"], priority=1.0),
-                )
-            ]
-        elif action == "get_scale":
-            return await _send("get_canvas_scale")
-        elif action == "set_scale":
-            params: dict[str, Any] = {}
-            if "scale" in kwargs:
-                params["scale"] = kwargs["scale"]
-            if "rotation" in kwargs:
-                params["rotation"] = kwargs["rotation"]
-            return await _send("set_canvas_scale", params)
-        else:
-            raise ToolError(f"Unknown canvas action: {action}")
+        return await _dispatch("canvas", canvas_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 8. render
     # ------------------------------------------------------------------
+
+    async def render_map(ctx, kwargs):
+        await ctx.info("Rendering map...")
+        await ctx.report_progress(0, 100)
+        payload = {"width": kwargs.get("width", 800), "height": kwargs.get("height", 600)}
+        path = kwargs.get("path")
+        if path:
+            payload["path"] = path
+        result = await _send("render_map_base64", payload, timeout=TIMEOUT_LONG)
+        await ctx.report_progress(100, 100)
+        return make_render_response(result, payload["width"], payload["height"], path)
+
+    async def render_remove_layout(ctx, kwargs):
+        name = kwargs["layout_name"]
+        if not await _confirm_destructive(ctx, f"Remove layout '{name}'?"):
+            return {"ok": False, "message": "Cancelled by user"}
+        return await _send("remove_layout", {"layout_name": name})
+
+    async def render_export_atlas(ctx, kwargs):
+        await ctx.info(f"Exporting atlas '{kwargs['layout_name']}'")
+        return await _send(
+            "export_atlas",
+            {
+                "layout_name": kwargs["layout_name"],
+                "output_path": kwargs["output_path"],
+                "format": kwargs.get("format", "pdf"),
+                "dpi": kwargs.get("dpi", 300),
+            },
+            timeout=TIMEOUT_LONG,
+        )
+
+    render_actions: dict[str, _Action] = {
+        "map": render_map,
+        "list_layouts": lambda ctx, kwargs: _send("list_layouts"),
+        "create_layout": lambda ctx, kwargs: _send("create_layout", {"name": kwargs["name"]}),
+        "get_layout_info": lambda ctx, kwargs: _send(
+            "get_layout_info", {"layout_name": kwargs["layout_name"]}
+        ),
+        "remove_layout": render_remove_layout,
+        "export_layout": lambda ctx, kwargs: _send(
+            "export_layout",
+            {
+                "layout_name": kwargs["layout_name"],
+                "path": kwargs["path"],
+                "format": kwargs.get("format", "pdf"),
+                "dpi": kwargs.get("dpi", 300),
+            },
+        ),
+        "export_atlas": render_export_atlas,
+        # Layout items take the caller's params as-is, so one entry per command.
+        **{
+            item_action: (lambda ctx, kwargs, command=command: _send(command, kwargs))
+            for item_action, command in _LAYOUT_ITEM_COMMANDS.items()
+        },
+    }
 
     @mcp.tool(
         title="Render",
@@ -766,61 +842,86 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def render(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any] | list:
-        kwargs = params or {}
-        if action == "map":
-            await ctx.info("Rendering map...")
-            await ctx.report_progress(0, 100)
-            params = {
-                "width": kwargs.get("width", 800),
-                "height": kwargs.get("height", 600),
-            }
-            path = kwargs.get("path")
-            if path:
-                params["path"] = path
-            result = await _send("render_map_base64", params, timeout=TIMEOUT_LONG)
-            await ctx.report_progress(100, 100)
-            return make_render_response(result, params["width"], params["height"], path)
-        elif action == "list_layouts":
-            return await _send("list_layouts")
-        elif action == "create_layout":
-            return await _send("create_layout", {"name": kwargs["name"]})
-        elif action == "get_layout_info":
-            return await _send("get_layout_info", {"layout_name": kwargs["layout_name"]})
-        elif action == "remove_layout":
-            name = kwargs["layout_name"]
-            if not await _confirm_destructive(ctx, f"Remove layout '{name}'?"):
-                return {"ok": False, "message": "Cancelled by user"}
-            return await _send("remove_layout", {"layout_name": name})
-        elif action in _LAYOUT_ITEM_COMMANDS:
-            return await _send(_LAYOUT_ITEM_COMMANDS[action], kwargs)
-        elif action == "export_layout":
-            return await _send(
-                "export_layout",
-                {
-                    "layout_name": kwargs["layout_name"],
-                    "path": kwargs["path"],
-                    "format": kwargs.get("format", "pdf"),
-                    "dpi": kwargs.get("dpi", 300),
-                },
-            )
-        elif action == "export_atlas":
-            await ctx.info(f"Exporting atlas '{kwargs['layout_name']}'")
-            return await _send(
-                "export_atlas",
-                {
-                    "layout_name": kwargs["layout_name"],
-                    "output_path": kwargs["output_path"],
-                    "format": kwargs.get("format", "pdf"),
-                    "dpi": kwargs.get("dpi", 300),
-                },
-                timeout=TIMEOUT_LONG,
-            )
-        else:
-            raise ToolError(f"Unknown render action: {action}")
+        return await _dispatch("render", render_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 9. processing
     # ------------------------------------------------------------------
+
+    def with_timeout(payload, kwargs):
+        """Copy the caller's timeout onto *payload* and return the socket timeout.
+
+        The socket waits 5s longer than the plugin-side deadline so the plugin
+        fails first, with a real message.
+        """
+        if kwargs.get("timeout") is None:
+            return TIMEOUT_LONG
+        payload["timeout"] = kwargs["timeout"]
+        return int(kwargs["timeout"]) + 5
+
+    async def processing_execute(ctx, kwargs):
+        await ctx.info(f"Running algorithm: {kwargs['algorithm']}")
+        await ctx.report_progress(0, 100)
+        payload = {"algorithm": kwargs["algorithm"], "parameters": kwargs["parameters"]}
+        socket_timeout = with_timeout(payload, kwargs)
+        if kwargs.get("load_results"):
+            payload["load_results"] = True
+        result = await _send("execute_processing", payload, timeout=socket_timeout)
+        await ctx.report_progress(100, 100)
+        return result
+
+    async def processing_execute_batch(ctx, kwargs):
+        runs = kwargs["parameters_list"]
+        await ctx.info(f"Batch processing {kwargs['algorithm']}: {len(runs)} run(s)")
+        payload = {"algorithm": kwargs["algorithm"], "parameters_list": runs}
+        socket_timeout = with_timeout(payload, kwargs)
+        return await _send("execute_processing_batch", payload, timeout=socket_timeout)
+
+    async def processing_list_algorithms(ctx, kwargs):
+        payload = {}
+        for key in ("search", "provider"):
+            if key in kwargs:
+                payload[key] = kwargs[key]
+        return await _send("list_processing_algorithms", payload)
+
+    async def processing_run_model(ctx, kwargs):
+        await ctx.info(f"Running model: {kwargs['model']}")
+        await ctx.report_progress(0, 100)
+        result = await _send(
+            "run_model",
+            {"model": kwargs["model"], "parameters": kwargs.get("parameters") or {}},
+            timeout=TIMEOUT_LONG,
+        )
+        await ctx.report_progress(100, 100)
+        return result
+
+    async def processing_create_model(ctx, kwargs):
+        await ctx.info(
+            f"Building Processing model: {kwargs['name']} ({len(kwargs['steps'])} step(s))"
+        )
+        payload = {
+            "name": kwargs["name"],
+            "steps": kwargs["steps"],
+            "description": kwargs.get("description", ""),
+            "group": kwargs.get("group", "Models"),
+        }
+        for key in ("inputs", "outputs"):
+            if kwargs.get(key) is not None:
+                payload[key] = kwargs[key]
+        return await _send("create_processing_model", payload, timeout=TIMEOUT_LONG)
+
+    processing_actions: dict[str, _Action] = {
+        "execute": processing_execute,
+        "execute_batch": processing_execute_batch,
+        "list_algorithms": processing_list_algorithms,
+        "get_providers": lambda ctx, kwargs: _send("get_processing_providers"),
+        "list_models": lambda ctx, kwargs: _send("list_processing_models"),
+        "run_model": processing_run_model,
+        "get_help": lambda ctx, kwargs: _send(
+            "get_algorithm_help", {"algorithm_id": kwargs["algorithm_id"]}
+        ),
+        "create_model": processing_create_model,
+    }
 
     @mcp.tool(
         title="Processing",
@@ -861,72 +962,26 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def processing(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        kwargs = params or {}
-        if action == "execute":
-            await ctx.info(f"Running algorithm: {kwargs['algorithm']}")
-            await ctx.report_progress(0, 100)
-            params = {"algorithm": kwargs["algorithm"], "parameters": kwargs["parameters"]}
-            socket_timeout = TIMEOUT_LONG
-            if kwargs.get("timeout") is not None:
-                params["timeout"] = kwargs["timeout"]
-                socket_timeout = int(kwargs["timeout"]) + 5
-            if kwargs.get("load_results"):
-                params["load_results"] = True
-            result = await _send("execute_processing", params, timeout=socket_timeout)
-            await ctx.report_progress(100, 100)
-            return result
-        elif action == "execute_batch":
-            runs = kwargs["parameters_list"]
-            await ctx.info(f"Batch processing {kwargs['algorithm']}: {len(runs)} run(s)")
-            params = {"algorithm": kwargs["algorithm"], "parameters_list": runs}
-            socket_timeout = TIMEOUT_LONG
-            if kwargs.get("timeout") is not None:
-                params["timeout"] = kwargs["timeout"]
-                socket_timeout = int(kwargs["timeout"]) + 5
-            return await _send("execute_processing_batch", params, timeout=socket_timeout)
-        elif action == "list_algorithms":
-            params = {}
-            if "search" in kwargs:
-                params["search"] = kwargs["search"]
-            if "provider" in kwargs:
-                params["provider"] = kwargs["provider"]
-            return await _send("list_processing_algorithms", params)
-        elif action == "get_providers":
-            return await _send("get_processing_providers")
-        elif action == "list_models":
-            return await _send("list_processing_models")
-        elif action == "run_model":
-            await ctx.info(f"Running model: {kwargs['model']}")
-            await ctx.report_progress(0, 100)
-            result = await _send(
-                "run_model",
-                {"model": kwargs["model"], "parameters": kwargs.get("parameters") or {}},
-                timeout=TIMEOUT_LONG,
-            )
-            await ctx.report_progress(100, 100)
-            return result
-        elif action == "get_help":
-            return await _send("get_algorithm_help", {"algorithm_id": kwargs["algorithm_id"]})
-        elif action == "create_model":
-            await ctx.info(
-                f"Building Processing model: {kwargs['name']} ({len(kwargs['steps'])} step(s))"
-            )
-            params = {
-                "name": kwargs["name"],
-                "steps": kwargs["steps"],
-                "description": kwargs.get("description", ""),
-                "group": kwargs.get("group", "Models"),
-            }
-            for key in ("inputs", "outputs"):
-                if key in kwargs and kwargs[key] is not None:
-                    params[key] = kwargs[key]
-            return await _send("create_processing_model", params, timeout=TIMEOUT_LONG)
-        else:
-            raise ToolError(f"Unknown processing action: {action}")
+        return await _dispatch("processing", processing_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 10. code
     # ------------------------------------------------------------------
+
+    async def code_execute(ctx, kwargs):
+        if not await _confirm_destructive(
+            ctx, "Execute arbitrary PyQGIS code? This can modify your project and system."
+        ):
+            return {"ok": False, "message": "Cancelled by user"}
+        await ctx.info("Executing PyQGIS code...")
+        await ctx.report_progress(0, 100)
+        payload = {"code": kwargs["code"]}
+        socket_timeout = with_timeout(payload, kwargs)
+        result = await _send("execute_code", payload, timeout=socket_timeout)
+        await ctx.report_progress(100, 100)
+        return result
+
+    code_actions: dict[str, _Action] = {"execute": code_execute}
 
     @mcp.tool(
         title="Code",
@@ -942,28 +997,24 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def code(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        kwargs = params or {}
-        if action == "execute":
-            if not await _confirm_destructive(
-                ctx, "Execute arbitrary PyQGIS code? This can modify your project and system."
-            ):
-                return {"ok": False, "message": "Cancelled by user"}
-            await ctx.info("Executing PyQGIS code...")
-            await ctx.report_progress(0, 100)
-            params = {"code": kwargs["code"]}
-            socket_timeout = TIMEOUT_LONG
-            if kwargs.get("timeout") is not None:
-                params["timeout"] = kwargs["timeout"]
-                socket_timeout = int(kwargs["timeout"]) + 5
-            result = await _send("execute_code", params, timeout=socket_timeout)
-            await ctx.report_progress(100, 100)
-            return result
-        else:
-            raise ToolError(f"Unknown code action: {action}")
+        return await _dispatch("code", code_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 11. batch
     # ------------------------------------------------------------------
+
+    async def batch_execute(ctx, kwargs):
+        commands = kwargs["commands"]
+        for cmd in commands:
+            cmd_type = cmd.get("type", "")
+            if cmd_type in BATCH_BLOCKED_COMMANDS:
+                raise ToolError(
+                    f"Command {cmd_type!r} is not allowed in batch, "
+                    "call it individually so confirmation can be requested"
+                )
+        return await _send("batch", {"commands": commands}, timeout=TIMEOUT_LONG)
+
+    batch_actions: dict[str, _Action] = {"execute": batch_execute}
 
     @mcp.tool(
         title="Batch",
@@ -979,23 +1030,26 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def batch(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any] | list:
-        kwargs = params or {}
-        if action == "execute":
-            commands = kwargs["commands"]
-            for cmd in commands:
-                cmd_type = cmd.get("type", "")
-                if cmd_type in BATCH_BLOCKED_COMMANDS:
-                    raise ToolError(
-                        f"Command {cmd_type!r} is not allowed in batch, "
-                        "call it individually so confirmation can be requested"
-                    )
-            return await _send("batch", {"commands": commands}, timeout=TIMEOUT_LONG)
-        else:
-            raise ToolError(f"Unknown batch action: {action}")
+        return await _dispatch("batch", batch_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 12. layer_tree
     # ------------------------------------------------------------------
+
+    async def layer_tree_create_group(ctx, kwargs):
+        payload = {"name": kwargs["name"]}
+        if "parent" in kwargs:
+            payload["parent"] = kwargs["parent"]
+        return await _send("create_layer_group", payload)
+
+    layer_tree_actions: dict[str, _Action] = {
+        "get": lambda ctx, kwargs: _send("get_layer_tree"),
+        "create_group": layer_tree_create_group,
+        "move_to_group": lambda ctx, kwargs: _send(
+            "move_layer_to_group",
+            {"layer_id": kwargs["layer_id"], "group_name": kwargs["group_name"]},
+        ),
+    }
 
     @mcp.tool(
         title="Layer Tree",
@@ -1011,28 +1065,25 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def layer_tree(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        kwargs = params or {}
-        if action == "get":
-            return await _send("get_layer_tree")
-        elif action == "create_group":
-            params = {"name": kwargs["name"]}
-            if "parent" in kwargs:
-                params["parent"] = kwargs["parent"]
-            return await _send("create_layer_group", params)
-        elif action == "move_to_group":
-            return await _send(
-                "move_layer_to_group",
-                {
-                    "layer_id": kwargs["layer_id"],
-                    "group_name": kwargs["group_name"],
-                },
-            )
-        else:
-            raise ToolError(f"Unknown layer_tree action: {action}")
+        return await _dispatch("layer_tree", layer_tree_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 13. plugins
     # ------------------------------------------------------------------
+
+    async def plugins_reload(ctx, kwargs):
+        await ctx.info(f"Reloading plugin: {kwargs['plugin_name']}")
+        return await _send("reload_plugin", {"plugin_name": kwargs["plugin_name"]})
+
+    plugins_actions: dict[str, _Action] = {
+        "list": lambda ctx, kwargs: _send(
+            "list_plugins", {"enabled_only": kwargs.get("enabled_only", False)}
+        ),
+        "get_info": lambda ctx, kwargs: _send(
+            "get_plugin_info", {"plugin_name": kwargs["plugin_name"]}
+        ),
+        "reload": plugins_reload,
+    }
 
     @mcp.tool(
         title="Plugins",
@@ -1049,25 +1100,18 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def plugins(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        kwargs = params or {}
-        if action == "list":
-            return await _send(
-                "list_plugins",
-                {
-                    "enabled_only": kwargs.get("enabled_only", False),
-                },
-            )
-        elif action == "get_info":
-            return await _send("get_plugin_info", {"plugin_name": kwargs["plugin_name"]})
-        elif action == "reload":
-            await ctx.info(f"Reloading plugin: {kwargs['plugin_name']}")
-            return await _send("reload_plugin", {"plugin_name": kwargs["plugin_name"]})
-        else:
-            raise ToolError(f"Unknown plugins action: {action}")
+        return await _dispatch("plugins", plugins_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 14. variables
     # ------------------------------------------------------------------
+
+    variables_actions: dict[str, _Action] = {
+        "get": lambda ctx, kwargs: _send("get_project_variables"),
+        "set": lambda ctx, kwargs: _send(
+            "set_project_variable", {"key": kwargs["key"], "value": kwargs["value"]}
+        ),
+    }
 
     @mcp.tool(
         title="Variables",
@@ -1080,23 +1124,24 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def variables(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        kwargs = params or {}
-        if action == "get":
-            return await _send("get_project_variables")
-        elif action == "set":
-            return await _send(
-                "set_project_variable",
-                {
-                    "key": kwargs["key"],
-                    "value": kwargs["value"],
-                },
-            )
-        else:
-            raise ToolError(f"Unknown variables action: {action}")
+        return await _dispatch("variables", variables_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 15. settings
     # ------------------------------------------------------------------
+
+    async def settings_set(ctx, kwargs):
+        key = kwargs["key"]
+        if not await _confirm_destructive(
+            ctx, f"Set QGIS setting '{key}'? Incorrect settings can affect behavior."
+        ):
+            return {"ok": False, "message": "Cancelled by user"}
+        return await _send("set_setting", {"key": key, "value": kwargs["value"]})
+
+    settings_actions: dict[str, _Action] = {
+        "get": lambda ctx, kwargs: _send("get_setting", {"key": kwargs["key"]}),
+        "set": settings_set,
+    }
 
     @mcp.tool(
         title="Settings",
@@ -1112,22 +1157,28 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def settings(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        kwargs = params or {}
-        if action == "get":
-            return await _send("get_setting", {"key": kwargs["key"]})
-        elif action == "set":
-            key = kwargs["key"]
-            if not await _confirm_destructive(
-                ctx, f"Set QGIS setting '{key}'? Incorrect settings can affect behavior."
-            ):
-                return {"ok": False, "message": "Cancelled by user"}
-            return await _send("set_setting", {"key": key, "value": kwargs["value"]})
-        else:
-            raise ToolError(f"Unknown settings action: {action}")
+        return await _dispatch("settings", settings_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 16. additional tools that don't fit neatly into groups above
     # ------------------------------------------------------------------
+
+    def picked(kwargs, required, optional):
+        """Payload with *required* keys taken as-is and *optional* ones when present."""
+        payload: dict[str, Any] = {key: kwargs[key] for key in required}
+        for key in optional:
+            if key in kwargs:
+                payload[key] = kwargs[key]
+        return payload
+
+    expression_actions: dict[str, _Action] = {
+        "validate": lambda ctx, kwargs: _send(
+            "validate_expression", picked(kwargs, ("expression",), ("layer_id",))
+        ),
+        "evaluate": lambda ctx, kwargs: _send(
+            "evaluate_expression", picked(kwargs, ("expression",), ("layer_id",))
+        ),
+    }
 
     @mcp.tool(
         title="Expression",
@@ -1144,15 +1195,22 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def expression(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        kwargs = params or {}
-        if action in ("validate", "evaluate"):
-            params = {"expression": kwargs["expression"]}
-            if "layer_id" in kwargs:
-                params["layer_id"] = kwargs["layer_id"]
-            command = "validate_expression" if action == "validate" else "evaluate_expression"
-            return await _send(command, params)
-        else:
-            raise ToolError(f"Unknown expression action: {action}")
+        return await _dispatch("expression", expression_actions, ctx, action, params)
+
+    query_actions: dict[str, _Action] = {
+        "sql": lambda ctx, kwargs: _send(
+            "execute_sql",
+            picked(
+                kwargs,
+                ("query",),
+                ("layers", "as_layer", "layer_name", "geometry_field", "uid_field", "limit"),
+            ),
+            timeout=TIMEOUT_LONG,
+        ),
+        "identify": lambda ctx, kwargs: _send(
+            "identify_features", picked(kwargs, ("point",), ("tolerance", "layer_ids", "limit"))
+        ),
+    }
 
     @mcp.tool(
         title="Query",
@@ -1160,7 +1218,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "Cross-layer query.\n"
             "Actions: sql, identify\n"
             "- sql: query (str), layers (list[str], optional), as_layer (bool, default false), "
-            "layer_name (str), geometry_field (str, optional), uid_field (str, optional)\n"
+            "layer_name (str), geometry_field (str, optional), uid_field (str, optional), limit (int, default 1000, negative for all)\n"
             "- identify: point (list[float] [x,y]), tolerance (float, default 0), "
             "layer_ids (list[str], optional), limit (int, default 10)"
             f"{_PARAMS_NOTE}"
@@ -1170,21 +1228,14 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def query(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        kwargs = params or {}
-        if action == "sql":
-            params: dict[str, Any] = {"query": kwargs["query"]}
-            for key in ("layers", "as_layer", "layer_name", "geometry_field", "uid_field"):
-                if key in kwargs:
-                    params[key] = kwargs[key]
-            return await _send("execute_sql", params, timeout=TIMEOUT_LONG)
-        elif action == "identify":
-            params = {"point": kwargs["point"]}
-            for key in ("tolerance", "layer_ids", "limit"):
-                if key in kwargs:
-                    params[key] = kwargs[key]
-            return await _send("identify_features", params)
-        else:
-            raise ToolError(f"Unknown query action: {action}")
+        return await _dispatch("query", query_actions, ctx, action, params)
+
+    transform_actions: dict[str, _Action] = {
+        "coordinates": lambda ctx, kwargs: _send(
+            "transform_coordinates",
+            picked(kwargs, ("source_crs", "target_crs"), ("point", "points", "bbox")),
+        ),
+    }
 
     @mcp.tool(
         title="Transform",
@@ -1201,21 +1252,16 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def transform(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        kwargs = params or {}
-        if action == "coordinates":
-            params = {
-                "source_crs": kwargs["source_crs"],
-                "target_crs": kwargs["target_crs"],
-            }
-            if "point" in kwargs:
-                params["point"] = kwargs["point"]
-            if "points" in kwargs:
-                params["points"] = kwargs["points"]
-            if "bbox" in kwargs:
-                params["bbox"] = kwargs["bbox"]
-            return await _send("transform_coordinates", params)
-        else:
-            raise ToolError(f"Unknown transform action: {action}")
+        return await _dispatch("transform", transform_actions, ctx, action, params)
+
+    async def message_log_get(ctx, kwargs):
+        payload: dict[str, Any] = {"limit": kwargs.get("limit", 100)}
+        for key in ("level", "tag"):
+            if key in kwargs:
+                payload[key] = kwargs[key]
+        return await _send("get_message_log", payload)
+
+    message_log_actions: dict[str, _Action] = {"get": message_log_get}
 
     @mcp.tool(
         title="Message Log",
@@ -1232,16 +1278,18 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def message_log(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        kwargs = params or {}
-        if action == "get":
-            params: dict[str, Any] = {"limit": kwargs.get("limit", 100)}
-            if "level" in kwargs:
-                params["level"] = kwargs["level"]
-            if "tag" in kwargs:
-                params["tag"] = kwargs["tag"]
-            return await _send("get_message_log", params)
-        else:
-            raise ToolError(f"Unknown message_log action: {action}")
+        return await _dispatch("message_log", message_log_actions, ctx, action, params)
+
+    layer_property_actions: dict[str, _Action] = {
+        "set": lambda ctx, kwargs: _send(
+            "set_layer_property",
+            {
+                "layer_id": kwargs["layer_id"],
+                "property": kwargs["property"],
+                "value": kwargs["value"],
+            },
+        ),
+    }
 
     @mcp.tool(
         title="Layer Property",
@@ -1257,22 +1305,63 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def layer_property(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        kwargs = params or {}
-        if action == "set":
-            return await _send(
-                "set_layer_property",
-                {
-                    "layer_id": kwargs["layer_id"],
-                    "property": kwargs["property"],
-                    "value": kwargs["value"],
-                },
-            )
-        else:
-            raise ToolError(f"Unknown layer_property action: {action}")
+        return await _dispatch("layer_property", layer_property_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 19b. field - schema and attribute editing
     # ------------------------------------------------------------------
+
+    async def field_add(ctx, kwargs):
+        payload = {
+            "layer_id": kwargs["layer_id"],
+            "field_name": kwargs["field_name"],
+            "field_type": kwargs["field_type"],
+        }
+        for key in ("length", "precision"):
+            if kwargs.get(key) is not None:
+                payload[key] = kwargs[key]
+        return await _send("add_field", payload)
+
+    async def field_delete(ctx, kwargs):
+        field_name = kwargs["field_name"]
+        layer_id = kwargs["layer_id"]
+        if not await _confirm_destructive(
+            ctx, f"Delete field '{field_name}' from layer {layer_id}?"
+        ):
+            return {"ok": False, "message": "Cancelled by user"}
+        return await _send("delete_field", {"layer_id": layer_id, "field_name": field_name})
+
+    field_actions: dict[str, _Action] = {
+        "add": field_add,
+        "delete": field_delete,
+        "rename": lambda ctx, kwargs: _send(
+            "rename_field",
+            {
+                "layer_id": kwargs["layer_id"],
+                "old_name": kwargs["old_name"],
+                "new_name": kwargs["new_name"],
+            },
+        ),
+        "calculate": lambda ctx, kwargs: _send(
+            "field_calculator",
+            {
+                "layer_id": kwargs["layer_id"],
+                "field_name": kwargs["field_name"],
+                "expression": kwargs["expression"],
+                "field_type": kwargs.get("field_type", "double"),
+                "length": kwargs.get("length", 0),
+                "precision": kwargs.get("precision", 0),
+            },
+        ),
+        "unique_values": lambda ctx, kwargs: _send(
+            "get_unique_values",
+            {
+                "layer_id": kwargs["layer_id"],
+                "field": kwargs["field"],
+                "limit": kwargs.get("limit", 1000),
+            },
+        ),
+    }
 
     @mcp.tool(
         title="Field",
@@ -1295,61 +1384,68 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def field(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        kwargs = params or {}
-        if action == "add":
-            params = {
-                "layer_id": kwargs["layer_id"],
-                "field_name": kwargs["field_name"],
-                "field_type": kwargs["field_type"],
-            }
-            for key in ("length", "precision"):
-                if kwargs.get(key) is not None:
-                    params[key] = kwargs[key]
-            return await _send("add_field", params)
-        elif action == "delete":
-            field_name = kwargs["field_name"]
-            layer_id = kwargs["layer_id"]
-            if not await _confirm_destructive(
-                ctx, f"Delete field '{field_name}' from layer {layer_id}?"
-            ):
-                return {"ok": False, "message": "Cancelled by user"}
-            return await _send("delete_field", {"layer_id": layer_id, "field_name": field_name})
-        elif action == "rename":
-            return await _send(
-                "rename_field",
-                {
-                    "layer_id": kwargs["layer_id"],
-                    "old_name": kwargs["old_name"],
-                    "new_name": kwargs["new_name"],
-                },
-            )
-        elif action == "calculate":
-            return await _send(
-                "field_calculator",
-                {
-                    "layer_id": kwargs["layer_id"],
-                    "field_name": kwargs["field_name"],
-                    "expression": kwargs["expression"],
-                    "field_type": kwargs.get("field_type", "double"),
-                    "length": kwargs.get("length", 0),
-                    "precision": kwargs.get("precision", 0),
-                },
-            )
-        elif action == "unique_values":
-            return await _send(
-                "get_unique_values",
-                {
-                    "layer_id": kwargs["layer_id"],
-                    "field": kwargs["field"],
-                    "limit": kwargs.get("limit", 1000),
-                },
-            )
-        else:
-            raise ToolError(f"Unknown field action: {action}")
+        return await _dispatch("field", field_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 19c. analysis - vector/raster analysis operations
     # ------------------------------------------------------------------
+
+    async def analysis_spatial_join(ctx, kwargs):
+        await ctx.info("Joining attributes by location...")
+        return await _send(
+            "spatial_join",
+            {
+                "target_layer": kwargs["target_layer"],
+                "join_layer": kwargs["join_layer"],
+                "predicates": kwargs.get("predicates"),
+                "join_fields": kwargs.get("join_fields"),
+                "method": kwargs.get("method", 1),
+                "prefix": kwargs.get("prefix", ""),
+                "output_path": kwargs.get("output_path"),
+            },
+            timeout=TIMEOUT_LONG,
+        )
+
+    async def analysis_zonal_statistics(ctx, kwargs):
+        await ctx.info("Computing zonal statistics...")
+        return await _send(
+            "zonal_statistics",
+            {
+                "polygon_layer": kwargs["polygon_layer"],
+                "raster_layer": kwargs["raster_layer"],
+                "band": kwargs.get("band", 1),
+                "prefix": kwargs.get("prefix", "_"),
+                "stats": kwargs.get("stats"),
+                "output_path": kwargs.get("output_path"),
+            },
+            timeout=TIMEOUT_LONG,
+        )
+
+    async def analysis_raster_calculator(ctx, kwargs):
+        await ctx.info("Computing raster expression...")
+        return await _send(
+            "raster_calculator",
+            {
+                "expression": kwargs["expression"],
+                "output_path": kwargs["output_path"],
+                "reference_layer": kwargs.get("reference_layer"),
+            },
+            timeout=TIMEOUT_LONG,
+        )
+
+    analysis_actions: dict[str, _Action] = {
+        "spatial_join": analysis_spatial_join,
+        "zonal_statistics": analysis_zonal_statistics,
+        "raster_calculator": analysis_raster_calculator,
+        "sample_raster": lambda ctx, kwargs: _send(
+            "sample_raster_values",
+            {
+                "raster_layer": kwargs["raster_layer"],
+                "points": kwargs["points"],
+                "band": kwargs.get("band"),
+            },
+        ),
+    }
 
     @mcp.tool(
         title="Analysis",
@@ -1375,62 +1471,30 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def analysis(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        kwargs = params or {}
-        if action == "spatial_join":
-            await ctx.info("Joining attributes by location...")
-            return await _send(
-                "spatial_join",
-                {
-                    "target_layer": kwargs["target_layer"],
-                    "join_layer": kwargs["join_layer"],
-                    "predicates": kwargs.get("predicates"),
-                    "join_fields": kwargs.get("join_fields"),
-                    "method": kwargs.get("method", 1),
-                    "prefix": kwargs.get("prefix", ""),
-                    "output_path": kwargs.get("output_path"),
-                },
-                timeout=TIMEOUT_LONG,
-            )
-        elif action == "zonal_statistics":
-            await ctx.info("Computing zonal statistics...")
-            return await _send(
-                "zonal_statistics",
-                {
-                    "polygon_layer": kwargs["polygon_layer"],
-                    "raster_layer": kwargs["raster_layer"],
-                    "band": kwargs.get("band", 1),
-                    "prefix": kwargs.get("prefix", "_"),
-                    "stats": kwargs.get("stats"),
-                    "output_path": kwargs.get("output_path"),
-                },
-                timeout=TIMEOUT_LONG,
-            )
-        elif action == "raster_calculator":
-            await ctx.info("Computing raster expression...")
-            return await _send(
-                "raster_calculator",
-                {
-                    "expression": kwargs["expression"],
-                    "output_path": kwargs["output_path"],
-                    "reference_layer": kwargs.get("reference_layer"),
-                },
-                timeout=TIMEOUT_LONG,
-            )
-        elif action == "sample_raster":
-            return await _send(
-                "sample_raster_values",
-                {
-                    "raster_layer": kwargs["raster_layer"],
-                    "points": kwargs["points"],
-                    "band": kwargs.get("band"),
-                },
-            )
-        else:
-            raise ToolError(f"Unknown analysis action: {action}")
+        return await _dispatch("analysis", analysis_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 20. bookmarks
     # ------------------------------------------------------------------
+
+    bookmarks_actions: dict[str, _Action] = {
+        "list": lambda ctx, kwargs: _send("get_bookmarks"),
+        "add": lambda ctx, kwargs: _send(
+            "add_bookmark",
+            {
+                "name": kwargs["name"],
+                "xmin": kwargs["xmin"],
+                "ymin": kwargs["ymin"],
+                "xmax": kwargs["xmax"],
+                "ymax": kwargs["ymax"],
+                "crs": kwargs.get("crs", "EPSG:4326"),
+                "group": kwargs.get("group", ""),
+            },
+        ),
+        "remove": lambda ctx, kwargs: _send(
+            "remove_bookmark", {"bookmark_id": kwargs["bookmark_id"]}
+        ),
+    }
 
     @mcp.tool(
         title="Bookmarks",
@@ -1448,30 +1512,18 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def bookmarks(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        kwargs = params or {}
-        if action == "list":
-            return await _send("get_bookmarks")
-        elif action == "add":
-            return await _send(
-                "add_bookmark",
-                {
-                    "name": kwargs["name"],
-                    "xmin": kwargs["xmin"],
-                    "ymin": kwargs["ymin"],
-                    "xmax": kwargs["xmax"],
-                    "ymax": kwargs["ymax"],
-                    "crs": kwargs.get("crs", "EPSG:4326"),
-                    "group": kwargs.get("group", ""),
-                },
-            )
-        elif action == "remove":
-            return await _send("remove_bookmark", {"bookmark_id": kwargs["bookmark_id"]})
-        else:
-            raise ToolError(f"Unknown bookmarks action: {action}")
+        return await _dispatch("bookmarks", bookmarks_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 21. map_themes
     # ------------------------------------------------------------------
+
+    map_themes_actions: dict[str, _Action] = {
+        "list": lambda ctx, kwargs: _send("get_map_themes"),
+        "add": lambda ctx, kwargs: _send("add_map_theme", {"name": kwargs["name"]}),
+        "remove": lambda ctx, kwargs: _send("remove_map_theme", {"name": kwargs["name"]}),
+        "apply": lambda ctx, kwargs: _send("apply_map_theme", {"name": kwargs["name"]}),
+    }
 
     @mcp.tool(
         title="Map Themes",
@@ -1489,21 +1541,16 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def map_themes(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        kwargs = params or {}
-        if action == "list":
-            return await _send("get_map_themes")
-        elif action == "add":
-            return await _send("add_map_theme", {"name": kwargs["name"]})
-        elif action == "remove":
-            return await _send("remove_map_theme", {"name": kwargs["name"]})
-        elif action == "apply":
-            return await _send("apply_map_theme", {"name": kwargs["name"]})
-        else:
-            raise ToolError(f"Unknown map_themes action: {action}")
+        return await _dispatch("map_themes", map_themes_actions, ctx, action, params)
 
     # ------------------------------------------------------------------
     # 22. active_layer
     # ------------------------------------------------------------------
+
+    active_layer_actions: dict[str, _Action] = {
+        "get": lambda ctx, kwargs: _send("get_active_layer"),
+        "set": lambda ctx, kwargs: _send("set_active_layer", {"layer_id": kwargs["layer_id"]}),
+    }
 
     @mcp.tool(
         title="Active Layer",
@@ -1519,10 +1566,4 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
     async def active_layer(
         ctx: Context, action: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        kwargs = params or {}
-        if action == "get":
-            return await _send("get_active_layer")
-        elif action == "set":
-            return await _send("set_active_layer", {"layer_id": kwargs["layer_id"]})
-        else:
-            raise ToolError(f"Unknown active_layer action: {action}")
+        return await _dispatch("active_layer", active_layer_actions, ctx, action, params)

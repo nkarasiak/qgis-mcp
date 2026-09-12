@@ -15,6 +15,7 @@ from qgis_mcp.protocol import (
     DEFAULT_HOST,
     DEFAULT_PORT,
     HEADER_STRUCT,
+    MAX_MESSAGE_SIZE,
     RECV_CHUNK_SIZE,
     TIMEOUT_DEFAULT,
     TIMEOUT_LONG,
@@ -74,7 +75,9 @@ class QgisMCPClient:
             self.socket = None
             self._current_timeout = None
 
-    _MAX_RESPONSE_SIZE = 100 * 1024 * 1024  # 100 MB
+    # The plugin refuses to frame anything larger, so a bigger cap here would
+    # only describe messages that cannot arrive.
+    _MAX_RESPONSE_SIZE = MAX_MESSAGE_SIZE
 
     def _recv_exact(self, n):
         """Read exactly n bytes from the socket.
