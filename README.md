@@ -1,13 +1,13 @@
 # QGIS MCP
 
-Connect [QGIS](https://qgis.org/) to [Claude AI](https://claude.ai/) through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), enabling Claude to directly control QGIS - manage layers, edit features, run processing algorithms, render maps, and more.
+Connect [QGIS](https://qgis.org/) to any AI agent that speaks the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), so the agent drives QGIS directly: manage layers, edit features, run processing algorithms, render maps, and more.
 
-118 MCP tools covering layer management, feature editing, processing, rendering, styling, layout & atlas authoring, cross-layer SQL, plugin development, and system management. Compatible with QGIS 3.28–4.x. Works with Claude Code, Codex CLI, Gemini CLI, Qwen Code, Kimi Code CLI, GitHub Copilot CLI, opencode, LM Studio, Claude Desktop, Cursor, VS Code, Windsurf, Zed, and more.
+118 MCP tools covering layer management, feature editing, processing, rendering, styling, layout & atlas authoring, cross-layer SQL, plugin development, and system management. Compatible with QGIS 3.28–4.x. Model and client agnostic: any MCP client works, among them Claude Code, Codex CLI, Gemini CLI, Qwen Code, Kimi Code CLI, GitHub Copilot CLI, opencode, LM Studio, Claude Desktop, Cursor, VS Code, Windsurf, Zed, and more.
 
 ## Architecture
 
 ```
-Claude ←→ MCP Server (FastMCP) ←→ TCP socket ←→ QGIS Plugin (QTimer) ←→ PyQGIS API
+AI agent ←→ MCP Server (FastMCP) ←→ TCP socket ←→ QGIS Plugin (QTimer) ←→ PyQGIS API
 ```
 
 1. **QGIS Plugin** (`qgis_mcp_plugin/`) - Runs inside QGIS. Non-blocking TCP socket server that processes JSON commands within QGIS's event loop.
@@ -288,7 +288,7 @@ Add to your client's MCP config file:
 ## Usage
 
 1. **Start the plugin** - In QGIS, click the MCP toolbar button (or `Plugins` > `QGIS MCP`) and click "Start Server"
-2. **Talk to Claude** - The MCP tools will appear automatically. Ask Claude to work with your QGIS project.
+2. **Talk to your agent** - The MCP tools appear automatically. Ask the agent to work with your QGIS project.
 
 ### Example prompt
 
@@ -337,7 +337,7 @@ After updating the plugin, click **Stop / Start** in the QGIS MCP dock widget (o
 | **Plugins** | `list_plugins`, `get_plugin_info`, `reload_plugin` |
 | **System** | `ping`, `diagnose`, `list_qgis_instances`, `get_qgis_info`, `get_raster_info`, `get_message_log`, `execute_code`, `batch_commands`, `validate_expression`, `get_project_variables`, `set_project_variable`, `get_setting`, `set_setting`, `transform_coordinates` |
 
-All tools are async with human-readable titles and annotations (`readOnly`, `destructive`, `idempotent`). Destructive tools ask for confirmation via MCP elicitation when supported; clients without elicitation proceed normally (fail-open) since tools are already gated by `ToolAnnotations`. Long-running tools report progress via MCP logging.
+All tools are async with human-readable titles and annotations (`readOnly`, `destructive`, `idempotent`). Destructive tools rely on your client's own confirmation gate, which reads the `destructive` annotation; set `QGIS_MCP_AUTO_CONFIRM=0` to have the server elicit a second confirmation as well. Long-running tools report progress via MCP logging.
 
 ### Compound tool mode
 
