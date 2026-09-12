@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from conftest import SOCKET_BACKED_RESOURCES, make_ctx
-from mcp_compat import schema
+from mcp_compat import schema, uri_template
 
 import qgis_mcp.client as client_module
 import qgis_mcp.server as srv
@@ -332,7 +332,9 @@ async def test_resource_descriptions_name_the_implicit_instance():
     # Templated URIs (qgis://layers/{layer_id}/...) are reported separately from
     # the static ones, and every one of them reads through _send_sync.
     static = [(str(r.uri), r.description) for r in await srv.mcp.list_resources()]
-    templates = [(t.uriTemplate, t.description) for t in await srv.mcp.list_resource_templates()]
+    templates = [
+        (uri_template(t), t.description) for t in await srv.mcp.list_resource_templates()
+    ]
     routed = [
         (uri, description)
         for uri, description in static + templates
