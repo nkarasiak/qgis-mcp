@@ -109,6 +109,45 @@ def test_would_block_leaves_remainder_queued_then_resumes():
     assert bytes(sock.sent) == payload
 
 
+def test_appends_after_a_partial_send_resume_from_the_read_offset():
+    """Bytes queued while a frame is half-written must land after it, exactly once."""
+    buf = OutboundBuffer()
+    buf.append(frame(b"one"))
+    sock = FakeSocket(capacity=5)
+    assert buf.flush(sock) is False
+    assert len(buf) == len(frame(b"one")) - 5, "len() reports what is still unsent"
+
+    buf.append(frame(b"two"))
+    sock.capacity = None
+    assert buf.flush(sock) is True
+    assert bytes(sock.sent) == frame(b"one") + frame(b"two")
+    assert buf.pending is False
+
+
+def test_compaction_does_not_lose_the_unsent_remainder():
+    """The written prefix is dropped once it passes half the buffer."""
+    buf = OutboundBuffer()
+    payload = frame(b"z" * 100)
+    buf.append(payload)
+    sock = FakeSocket(capacity=len(payload) - 10)  # well past half
+
+    assert buf.flush(sock) is False
+    assert len(buf) == 10
+    assert len(buf._buf) == 10, "the written prefix is not still held"
+
+    sock.capacity = None
+    assert buf.flush(sock) is True
+    assert bytes(sock.sent) == payload
+
+
+def test_overflow_counts_only_unsent_bytes():
+    buf = OutboundBuffer(max_bytes=100)
+    buf.append(b"z" * 100)
+    buf.flush(FakeSocket())  # drained, so the cap is free again
+    buf.append(b"z" * 100)
+    assert len(buf) == 100
+
+
 def test_zero_return_is_treated_as_would_block():
     buf = OutboundBuffer()
     buf.append(b"data")

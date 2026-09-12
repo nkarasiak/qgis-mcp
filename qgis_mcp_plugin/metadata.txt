@@ -12,7 +12,7 @@ about=Socket server plugin that exposes QGIS operations to LLMs through the
     See https://github.com/nkarasiak/qgis-mcp for installation instructions.
 
     Features:
-    - 100+ MCP tools for layers, features, processing, rendering, layouts
+    - 118 MCP tools for layers, features, processing, rendering, layouts
     - Diagnose tool for full stack health checks
     - Plugin development tools: message log, plugin reload, layer tree
     - Expression validation, project variables, settings access

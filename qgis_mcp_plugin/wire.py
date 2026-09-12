@@ -17,6 +17,8 @@ MAX_MESSAGE_SIZE = 10 * 1024 * 1024  # 10 MB - inbound frame/buffer limit
 # Cap on bytes queued for one client that has stopped reading. Renders and
 # screenshots are base64 and can legitimately reach several MB, so this sits
 # well above a single large response but still bounds a stalled peer.
+# Per client: MAX_CLIENTS (10) stalled peers would hold 640 MB in the worst
+# case, which is why the connection count is capped too.
 MAX_OUTBOUND_BYTES = 64 * 1024 * 1024  # 64 MB
 
 # Commands refused inside a `batch`. Mirrors qgis_mcp.protocol's frozenset of
@@ -82,22 +84,27 @@ class OutboundBuffer:
 
     def __init__(self, max_bytes: int = MAX_OUTBOUND_BYTES) -> None:
         self._buf = bytearray()
+        # How much of _buf has already been written. Dropping the written
+        # prefix after every partial send would copy the whole remainder each
+        # time, which is quadratic on exactly the payloads that need several
+        # sends (multi-MB renders through a small kernel buffer).
+        self._start = 0
         self._max_bytes = max_bytes
 
     def __len__(self) -> int:
-        return len(self._buf)
+        return len(self._buf) - self._start
 
     @property
     def pending(self) -> bool:
         """True when bytes are still waiting to be written."""
-        return bool(self._buf)
+        return len(self._buf) > self._start
 
     def append(self, data: bytes) -> None:
         """Queue *data*, raising :class:`OutboundOverflow` past the cap."""
-        if len(self._buf) + len(data) > self._max_bytes:
+        if len(self) + len(data) > self._max_bytes:
             raise OutboundOverflow(
                 f"outbound backlog would exceed {self._max_bytes} bytes "
-                f"({len(self._buf)} queued, {len(data)} more) - client is not reading"
+                f"({len(self)} queued, {len(data)} more) - client is not reading"
             )
         self._buf.extend(data)
 
@@ -107,18 +114,26 @@ class OutboundBuffer:
         Partial writes and would-block conditions leave the remainder queued
         for the next call. Real socket errors propagate.
         """
-        while self._buf:
+        while self._start < len(self._buf):
+            start = self._start
             try:
-                sent = sock.send(memoryview(self._buf))
+                sent = sock.send(memoryview(self._buf)[start:])
             except BlockingIOError:
-                return False
+                sent = 0
             except OSError as exc:
-                if exc.errno in _WOULD_BLOCK:
-                    return False
-                raise
+                if exc.errno not in _WOULD_BLOCK:
+                    raise
+                sent = 0
             if sent <= 0:
-                # A non-blocking send returning 0 means no progress is possible
-                # right now; treat it as would-block rather than spinning.
+                # No progress is possible right now (would-block, or a
+                # non-blocking send returning 0): stop rather than spin.
+                # Reclaim the written prefix once it is half the buffer, so a
+                # peer that reads slowly does not hold the sent bytes as well.
+                if self._start > len(self._buf) // 2:
+                    del self._buf[: self._start]
+                    self._start = 0
                 return False
-            del self._buf[:sent]
+            self._start += sent
+        del self._buf[:]  # fully drained
+        self._start = 0
         return True

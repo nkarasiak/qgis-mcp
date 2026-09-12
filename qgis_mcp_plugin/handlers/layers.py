@@ -30,18 +30,19 @@ from ..wire import zip_strict
 class LayerHandlers:
     """Adding, removing, inspecting and configuring map layers."""
 
-    @command
-    def add_vector_layer(self, path, name=None, provider="ogr", **kwargs):
-        if not name:
-            name = os.path.basename(path)
-
-        layer = QgsVectorLayer(path, name, provider)
+    def _add_layer(self, path, name, provider, layer_class, kind):
+        """Load *path* with *layer_class*, add it to the project and log it."""
+        layer = layer_class(path, name or os.path.basename(path), provider)
         if not layer.isValid():
             raise CommandError(f"Layer is not valid: {path}")
 
         QgsProject.instance().addMapLayer(layer)
-        QgsMessageLog.logMessage(f"Vector layer added: {name}", self.LOG_TAG, MSG_INFO)
+        QgsMessageLog.logMessage(f"{kind} layer added: {layer.name()}", self.LOG_TAG, MSG_INFO)
+        return layer
 
+    @command
+    def add_vector_layer(self, path, name=None, provider="ogr", **kwargs):
+        layer = self._add_layer(path, name, provider, QgsVectorLayer, "Vector")
         return {
             "id": layer.id(),
             "name": layer.name(),
@@ -51,16 +52,7 @@ class LayerHandlers:
 
     @command
     def add_raster_layer(self, path, name=None, provider="gdal", **kwargs):
-        if not name:
-            name = os.path.basename(path)
-
-        layer = QgsRasterLayer(path, name, provider)
-        if not layer.isValid():
-            raise CommandError(f"Layer is not valid: {path}")
-
-        QgsProject.instance().addMapLayer(layer)
-        QgsMessageLog.logMessage(f"Raster layer added: {name}", self.LOG_TAG, MSG_INFO)
-
+        layer = self._add_layer(path, name, provider, QgsRasterLayer, "Raster")
         return {
             "id": layer.id(),
             "name": layer.name(),

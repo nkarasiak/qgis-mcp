@@ -59,8 +59,14 @@ class FeatureHandlers:
         feature_count = layer.featureCount()
 
         request = QgsFeatureRequest()
+        matched = feature_count
         if expression:
             request.setFilterExpression(expression)
+            # featureCount() is the whole layer. Report what the expression
+            # selects too, since that is what limit and offset page through.
+            counter = QgsFeatureRequest().setFilterExpression(expression)
+            counter.setNoAttributes()
+            matched = sum(1 for _ in layer.getFeatures(counter))
 
         features = []
         skipped = 0
@@ -109,7 +115,10 @@ class FeatureHandlers:
 
         # Phase 1B: Stripped layer_id, layer_name, geometry_included
         return {
+            # Features in the layer, whether or not the expression selects them.
             "feature_count": feature_count,
+            # Features the expression selects (the layer total when there is none).
+            "matched": matched,
             "fields": field_names,
             "features": features,
         }
@@ -146,7 +155,9 @@ class FeatureHandlers:
                 stats["count"] = count_val
             distinct_val, ok = layer.aggregate(AGG_ARRAY, field_name)
             if ok and isinstance(distinct_val, list):
-                unique = list(set(str(v) for v in distinct_val if v is not None))
+                # Sorted before the slice: a set has no order, so the same call
+                # returned a different 50 values each time.
+                unique = sorted(set(str(v) for v in distinct_val if v is not None))
                 stats["distinct_count"] = len(unique)
                 stats["distinct_values"] = unique[:50]
 
@@ -227,10 +238,14 @@ class FeatureHandlers:
 
         if attr_map:
             if layer.isEditable():
-                for fid, field_map in attr_map.items():
+                for applied, (fid, field_map) in enumerate(attr_map.items()):
                     for idx, value in field_map.items():
                         if not layer.changeAttributeValue(fid, idx, value):
-                            raise CommandError(f"Failed to update fid {fid} in the edit buffer")
+                            raise CommandError(
+                                f"Failed to update fid {fid} in the edit buffer; "
+                                f"{applied} of {len(attr_map)} features applied, "
+                                "rollback_edits to discard"
+                            )
             elif not dp.changeAttributeValues(attr_map):
                 raise CommandError("Failed to update features")
         return {"updated": len(attr_map), "buffered": layer.isEditable()}
@@ -249,6 +264,7 @@ class FeatureHandlers:
         else:
             raise CommandError("Either fids or expression must be provided")
 
+        before = layer.featureCount()
         if layer.isEditable():
             ok = layer.deleteFeatures(target_fids)
         else:
@@ -256,7 +272,12 @@ class FeatureHandlers:
         if not ok:
             raise CommandError("Failed to delete features")
         layer.updateExtents()
-        return {"deleted": len(target_fids), "buffered": layer.isEditable()}
+        return {
+            "requested": len(target_fids),
+            # Measured, not assumed: a fid that matched nothing deletes nothing.
+            "deleted": before - layer.featureCount(),
+            "buffered": layer.isEditable(),
+        }
 
     # --- Edit sessions -----------------------------------------------------
 
@@ -368,9 +389,12 @@ class FeatureHandlers:
 
         if geom_map:
             if layer.isEditable():
-                for fid, geom in geom_map.items():
+                for applied, (fid, geom) in enumerate(geom_map.items()):
                     if not layer.changeGeometry(fid, geom):
-                        raise CommandError(f"Failed to update geometry for fid {fid}")
+                        raise CommandError(
+                            f"Failed to update geometry for fid {fid}; "
+                            f"{applied} of {len(geom_map)} applied, rollback_edits to discard"
+                        )
             elif not layer.dataProvider().changeGeometryValues(geom_map):
                 raise CommandError("Failed to update geometries")
             layer.updateExtents()
@@ -570,6 +594,7 @@ class FeatureHandlers:
         layer_name="sql_result",
         geometry_field=None,
         uid_field=None,
+        limit=1000,
         **kwargs,
     ):
         """Run SQL across loaded layers via a virtual layer. Reference layers by name."""
@@ -615,12 +640,15 @@ class FeatureHandlers:
                 "feature_count": vlayer.featureCount(),
             }
         fields = [f.name() for f in vlayer.fields()]
+        limit = int(limit)
         rows = []
-        for i, feat in enumerate(vlayer.getFeatures()):
-            if i >= 1000:
+        truncated = False
+        for feat in vlayer.getFeatures():
+            if limit >= 0 and len(rows) >= limit:
+                truncated = True
                 break
             rows.append({fn: self._convert_attribute(feat[fn]) for fn in fields})
-        return {"fields": fields, "rows": rows, "count": len(rows)}
+        return {"fields": fields, "rows": rows, "count": len(rows), "truncated": truncated}
 
     @command
     def identify_features(self, point, tolerance=0.0, layer_ids=None, limit=10, **kwargs):
@@ -629,7 +657,7 @@ class FeatureHandlers:
         x, y = float(point[0]), float(point[1])
         pt_geom = QgsGeometry.fromPointXY(QgsPointXY(x, y))
         if layer_ids:
-            targets = [project.mapLayer(lid) for lid in layer_ids]
+            targets = [self._layer(lid) for lid in layer_ids]
         else:
             targets = [n.layer() for n in project.layerTreeRoot().findLayers() if n.isVisible()]
         prefilter = QgsRectangle(x - tolerance, y - tolerance, x + tolerance, y + tolerance)

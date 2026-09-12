@@ -46,7 +46,7 @@ from .configurator import (
     _remove_refresh_from_entry,
     write_json_atomic,
 )
-from .constants import DEFAULT_PORT, SETTINGS_PREFIX
+from .constants import DEFAULT_PORT, PLUGIN_DIR, SETTINGS_PREFIX
 from .server import QgisMCPServer
 
 
@@ -65,7 +65,7 @@ class QgisMCPPlugin:
 
     def _logo_icon(self):
         """Load the MCP logo from the plugin directory."""
-        icon_path = os.path.join(os.path.dirname(__file__), "icons", "icon.png")
+        icon_path = os.path.join(PLUGIN_DIR, "icons", "icon.png")
         return QIcon(icon_path)
 
     def initGui(self):
@@ -216,7 +216,7 @@ class QgisMCPPlugin:
 
     def _green_logo_icon(self):
         """Load the green MCP logo for active state."""
-        icon_path = os.path.join(os.path.dirname(__file__), "icons", "icon_active.png")
+        icon_path = os.path.join(PLUGIN_DIR, "icons", "icon_active.png")
         return QIcon(icon_path)
 
     def _badge_icon(self, count):

@@ -122,13 +122,58 @@ class ConnectionHandlers:
                 entries.append(entry)
         return {"connections": entries, "count": len(entries)}
 
-    # connection_mode -> the parameters that mode requires. `name` is always required and
-    # the service modes take `database` as an optional override of the service file's dbname.
+    # connection_mode -> (URI builder, the parameters that mode requires). `name` is always
+    # required and the service modes take `database` as an optional override of the service
+    # file's dbname. Builders are stored by name and resolved with getattr, like the tables
+    # in the other handlers: a staticmethod object is not callable on Python 3.9.
     _POSTGRESQL_MODES: ClassVar[dict] = {
-        "endpoint_using_auth_manager": ("host", "port", "database", "auth_config_id"),
-        "service_using_auth_manager": ("service", "auth_config_id"),
-        "service_only": ("service",),
+        "endpoint_using_auth_manager": (
+            "_pg_endpoint_uri",
+            ("host", "port", "database", "auth_config_id"),
+        ),
+        "service_using_auth_manager": ("_pg_service_uri", ("service", "auth_config_id")),
+        "service_only": ("_pg_service_uri", ("service",)),
     }
+
+    @staticmethod
+    def _pg_endpoint_uri(uri, given, ssl_value):
+        """Host and port endpoint, credentials from the Authentication Manager."""
+        uri.setConnection(
+            given["host"],
+            given["port"],
+            given["database"],
+            "",
+            "",
+            ssl_value,
+            given["auth_config_id"],
+        )
+        return f"{given['host']}:{given['port']}/{given['database']}"
+
+    @staticmethod
+    def _pg_service_uri(uri, given, ssl_value):
+        """libpq service entry, optionally with an Authentication Manager config."""
+        uri.setConnection(
+            given["service"], given["database"], "", "", ssl_value, given["auth_config_id"]
+        )
+        return f"service {given['service']!r}"
+
+    @staticmethod
+    def _probe_connection(metadata, uri, target):
+        """Open the connection *uri* and run one statement over it, or raise."""
+        # QgsPostgresConn asks QgsCredentials for a username and password whenever libpq
+        # refuses the connection. In the GUI that is a modal dialog, which stalls the event
+        # loop this server runs on until someone clicks Cancel (#37): answer "no" instead.
+        previous = QgsCredentials.instance()
+        quiet = _QuietCredentials()
+        quiet.setInstance(quiet)
+        try:
+            connection = metadata.createConnection(uri.uri(False), {})
+            connection.executeSql("SELECT 1")
+        except Exception as exc:
+            raise CommandError(f"Failed to connect to PostgreSQL ({target}): {exc}") from exc
+        finally:
+            quiet.setInstance(previous)
+        return connection
 
     @command
     def create_postgresql_connection(
@@ -150,7 +195,7 @@ class ConnectionHandlers:
         `connection_mode` selects which parameters are required (`_POSTGRESQL_MODES`) and
         anything else that was passed is rejected rather than silently ignored.
         """
-        required = self._pick(self._POSTGRESQL_MODES, connection_mode, "connection mode")
+        builder, required = self._pick(self._POSTGRESQL_MODES, connection_mode, "connection mode")
         given = {
             "name": name,
             "host": host,
@@ -167,8 +212,7 @@ class ConnectionHandlers:
         for key, value in given.items():
             if value and key not in allowed:
                 raise CommandError(f"{key} is not used by connection_mode {connection_mode!r}")
-        name, host, database = given["name"], given["host"], given["database"]
-        auth_config_id, service = given["auth_config_id"], given["service"]
+        name, auth_config_id = given["name"], given["auth_config_id"]
         port_error = "PostgreSQL port must be an integer from 1 to 65535"
         if "port" in required:
             try:
@@ -177,6 +221,7 @@ class ConnectionHandlers:
                 raise CommandError(port_error) from exc
             if not 1 <= port <= 65535:
                 raise CommandError(port_error)
+            given["port"] = str(port)
 
         normalized_ssl_mode = str(ssl_mode).strip().lower().replace("_", "-")
         ssl_value = self._pick(self._POSTGRESQL_SSL_MODES, normalized_ssl_mode, "SSL mode")
@@ -195,27 +240,13 @@ class ConnectionHandlers:
             raise CommandError(f"A saved PostgreSQL connection named {name!r} already exists")
 
         uri = QgsDataSourceUri()
-        if service:
-            uri.setConnection(service, database, "", "", ssl_value, auth_config_id)
-            target = f"service {service!r}"
-        else:
-            uri.setConnection(host, str(port), database, "", "", ssl_value, auth_config_id)
-            target = f"{host}:{port}/{database}"
-        # QgsPostgresConn asks QgsCredentials for a username and password whenever libpq
-        # refuses the connection. In the GUI that is a modal dialog, which stalls the event
-        # loop this server runs on until someone clicks Cancel (#37): answer "no" instead.
-        previous = QgsCredentials.instance()
-        quiet = _QuietCredentials()
-        quiet.setInstance(quiet)
-        try:
-            connection = metadata.createConnection(uri.uri(False), {})
-            connection.executeSql("SELECT 1")
-        except Exception as exc:
-            raise CommandError(f"Failed to connect to PostgreSQL ({target}): {exc}") from exc
-        finally:
-            quiet.setInstance(previous)
+        target = getattr(self, builder)(uri, given, ssl_value)
+        connection = self._probe_connection(metadata, uri, target)
 
-        metadata.saveConnection(connection, name)
+        try:
+            metadata.saveConnection(connection, name)
+        except Exception as exc:
+            raise CommandError(f"Failed to save connection {name!r}: {exc}") from exc
         details = {
             key: given[key]
             for key in ("host", "database", "auth_config_id", "service")

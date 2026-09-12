@@ -47,7 +47,7 @@ class ProjectHandlers:
         if not path and not project.fileName():
             raise CommandError("No project path specified and no current project path")
 
-        save_path = path if path else project.fileName()
+        save_path = path or project.fileName()
         if project.write(save_path):
             QgsMessageLog.logMessage(f"Project saved: {save_path}", self.LOG_TAG, MSG_INFO)
             return {"saved": save_path}

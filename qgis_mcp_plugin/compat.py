@@ -23,6 +23,7 @@ from qgis.core import (
     QgsDataSourceUri,
     QgsLayoutExporter,
     QgsMapLayer,
+    QgsMessageLog,
     QgsProcessingParameterDefinition,
     QgsProcessingParameterFile,
     QgsProcessingParameterNumber,
@@ -46,6 +47,11 @@ def _enum(*candidates):
     Paths are followed with ``getattr`` so no deprecated-but-valid enum
     spelling appears as a literal in the source (which the QGIS4/Qt6 upload
     checker would flag); resolution happens on the running QGIS version.
+
+    A name no candidate resolves yields None and one log line, rather than an
+    exception: every constant here is resolved at import, so raising would take
+    the whole plugin down over one enum a future QGIS renamed. The commands
+    that use that constant then fail; everything else keeps working.
     """
     for root, path in candidates:
         obj = root
@@ -56,7 +62,15 @@ def _enum(*candidates):
         else:
             return obj
     tried = ", ".join(f"{getattr(r, '__name__', r)}.{p}" for r, p in candidates)
-    raise AttributeError(f"None of the enum spellings resolved: {tried}")
+    # No level argument: it defaults to Warning, and naming one here would mean
+    # a literal enum spelling in the source - the thing this module exists to
+    # keep out (and MSG_WARNING is itself still being resolved below).
+    QgsMessageLog.logMessage(
+        f"None of the enum spellings resolved: {tried}. Commands using it will fail; "
+        "please report this with your QGIS version.",
+        "MCP",
+    )
+    return None
 
 
 # ── Layer types ──────────────────────────────────────────────────────

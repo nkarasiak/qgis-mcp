@@ -47,11 +47,7 @@ class LayoutHandlers:
 
     @command
     def export_layout(self, layout_name, path, format="pdf", dpi=300, **kwargs):
-        manager = QgsProject.instance().layoutManager()
-        layout = manager.layoutByName(layout_name)
-        if not layout:
-            raise CommandError(f"Layout not found: {layout_name}")
-
+        layout = self._get_layout(layout_name)
         exporter = QgsLayoutExporter(layout)
         settings_name, method = self._pick(self._LAYOUT_EXPORTS, format.lower(), "format")
         settings = getattr(QgsLayoutExporter, settings_name)()
@@ -76,11 +72,7 @@ class LayoutHandlers:
     @command
     def add_layout_map(self, layout_name, x, y, width, height, **kwargs):
         """Add a map item to a print layout."""
-        manager = QgsProject.instance().layoutManager()
-        layout = manager.layoutByName(layout_name)
-        if not layout:
-            raise CommandError(f"Layout not found: {layout_name}")
-
+        layout = self._get_layout(layout_name)
         map_item = QgsLayoutItemMap(layout)
         map_item.attemptMove(QgsLayoutPoint(x, y))
         map_item.attemptResize(QgsLayoutSize(width, height))
@@ -342,9 +334,6 @@ class LayoutHandlers:
     @command
     def remove_layout(self, layout_name, **kwargs):
         """Remove a print layout from the project."""
-        manager = QgsProject.instance().layoutManager()
-        layout = manager.layoutByName(layout_name)
-        if not layout:
-            raise CommandError(f"Layout not found: {layout_name}")
-        manager.removeLayout(layout)
+        layout = self._get_layout(layout_name)
+        QgsProject.instance().layoutManager().removeLayout(layout)
         return {"ok": True, "removed": layout_name}

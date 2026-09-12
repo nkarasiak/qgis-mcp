@@ -122,13 +122,14 @@ class CanvasHandlers:
 
             img = render.renderedImage()
 
-            if path:
-                img.save(path)
+            if path and not img.save(path):
+                raise CommandError(f"Failed to write image to {path}")
 
             ba = QByteArray()
             buf = QBuffer(ba)
             buf.open(IODEVICE_WRITEONLY)
-            img.save(buf, "PNG")
+            if not img.save(buf, "PNG"):
+                raise CommandError("Failed to encode the rendered map as PNG")
             buf.close()
             b64 = base64.b64encode(bytes(ba)).decode("utf-8")
 
@@ -147,7 +148,8 @@ class CanvasHandlers:
         ba = QByteArray()
         buf = QBuffer(ba)
         buf.open(IODEVICE_WRITEONLY)
-        pixmap.save(buf, "PNG")
+        if not pixmap.save(buf, "PNG"):
+            raise CommandError("Failed to encode the canvas grab as PNG")
         buf.close()
         b64 = base64.b64encode(ba.data()).decode("ascii")
         return {

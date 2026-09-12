@@ -496,6 +496,108 @@ class ProcessingHandlers:
                 param.setFlags(param.flags() | PROCESSING_OPTIONAL)
         return param
 
+    def _resolve_model_steps(self, steps, registry):
+        """Validate each step spec and pair it with its resolved algorithm id.
+
+        Done up front, before anything is built, so a bad step never leaves a
+        half-written model file behind.
+        """
+        resolved = []  # (step_spec, resolved_alg_id)
+        seen_ids = set()
+        for idx, step in enumerate(steps):
+            if not isinstance(step, dict):
+                raise CommandError(f"Step #{idx} must be a dict")
+            for required in ("id", "algorithm"):
+                if required not in step:
+                    raise CommandError(f"Step #{idx} missing required key '{required}'")
+            if step["id"] in seen_ids:
+                raise CommandError(f"Duplicate step id '{step['id']}'")
+            seen_ids.add(step["id"])
+            try:
+                alg_id = self._resolve_algorithm_id(step["algorithm"], registry)
+            except Exception as e:
+                raise CommandError(f"Step '{step['id']}': {e}") from e
+            alg = registry.algorithmById(alg_id)
+            valid_params = {p.name() for p in alg.parameterDefinitions()}
+            for pname in step.get("parameters") or {}:
+                if pname not in valid_params:
+                    raise CommandError(
+                        f"Step '{step['id']}' (algorithm '{alg_id}'): unknown parameter "
+                        f"'{pname}'. Valid parameters: {sorted(valid_params)}"
+                    )
+            resolved.append((step, alg_id))
+        return resolved
+
+    def _model_outputs_by_step(self, outputs, resolved, registry):
+        """Validate the declared final outputs and group them by step id."""
+        outputs_by_step = {}
+        step_id_to_alg = {step["id"]: alg_id for step, alg_id in resolved}
+        for out_idx, out_spec in enumerate(outputs or []):
+            if not isinstance(out_spec, dict):
+                raise CommandError(f"Output #{out_idx} must be a dict")
+            for required in ("name", "from_step", "from_output"):
+                if required not in out_spec:
+                    raise CommandError(f"Output #{out_idx} missing required key '{required}'")
+            from_step = out_spec["from_step"]
+            if from_step not in step_id_to_alg:
+                raise CommandError(
+                    f"Output '{out_spec['name']}': from_step '{from_step}' is not a defined step"
+                )
+            from_alg = registry.algorithmById(step_id_to_alg[from_step])
+            valid_outputs = {o.name() for o in from_alg.outputDefinitions()}
+            if out_spec["from_output"] not in valid_outputs:
+                raise CommandError(
+                    f"Output '{out_spec['name']}': '{out_spec['from_output']}' is not an output "
+                    f"of step '{from_step}' (algorithm '{step_id_to_alg[from_step]}'). "
+                    f"Valid outputs: {sorted(valid_outputs)}"
+                )
+            outputs_by_step.setdefault(from_step, {})[out_spec["name"]] = out_spec
+        return outputs_by_step
+
+    def _expose_last_output(self, model, registry, last_step_id):
+        """Publish the last step's OUTPUT under a default name.
+
+        Called when the caller declared no outputs, so that the model still
+        produces something they can save.
+        """
+        last_child = model.childAlgorithm(last_step_id)
+        last_alg = registry.algorithmById(last_child.algorithmId())
+        output_names = [o.name() for o in last_alg.outputDefinitions()] if last_alg else []
+        if not output_names:
+            return
+        preferred = "OUTPUT" if "OUTPUT" in output_names else output_names[0]
+        mo = QgsProcessingModelOutput("Result")
+        mo.setChildId(last_step_id)
+        mo.setChildOutputName(preferred)
+        mo.setDescription("Result")
+        last_child.setModelOutputs({"Result": mo})
+
+    def _model_target_path(self, name, provider):
+        """The models folder plus a free ``<name>.model3`` path inside it.
+
+        Returns ``(final_name, target_path)``: *final_name* carries a ``_2``,
+        ``_3`` ... suffix when the file for *name* is already there.
+        """
+        models_dir = None
+        if provider is not None and hasattr(provider, "modelsFolder"):
+            with contextlib.suppress(Exception):
+                models_dir = provider.modelsFolder()
+        if models_dir is None:
+            models_dir = os.path.join(QgsApplication.qgisSettingsDirPath(), "processing", "models")
+        os.makedirs(models_dir, exist_ok=True)
+
+        target_path = os.path.join(models_dir, f"{name}.model3")
+        if not os.path.exists(target_path):
+            return name, target_path
+        for suffix in range(2, 1001):
+            candidate = f"{name}_{suffix}"
+            candidate_path = os.path.join(models_dir, f"{candidate}.model3")
+            if not os.path.exists(candidate_path):
+                return candidate, candidate_path
+        raise CommandError(
+            f"Could not find a unique name for '{name}' in {models_dir} (tried up to _1000)"
+        )
+
     @command
     def create_processing_model(
         self,
@@ -525,30 +627,7 @@ class ProcessingHandlers:
 
         # ---- Resolve models folder & pick a unique file name up front ----
         provider = registry.providerById("model")
-        models_dir = None
-        if provider is not None and hasattr(provider, "modelsFolder"):
-            try:
-                models_dir = provider.modelsFolder()
-            except Exception:
-                models_dir = None
-        if models_dir is None:
-            models_dir = os.path.join(QgsApplication.qgisSettingsDirPath(), "processing", "models")
-        os.makedirs(models_dir, exist_ok=True)
-
-        final_name = name
-        target_path = os.path.join(models_dir, f"{final_name}.model3")
-        if os.path.exists(target_path):
-            for suffix in range(2, 1001):
-                candidate = f"{name}_{suffix}"
-                candidate_path = os.path.join(models_dir, f"{candidate}.model3")
-                if not os.path.exists(candidate_path):
-                    final_name = candidate
-                    target_path = candidate_path
-                    break
-            else:
-                raise CommandError(
-                    f"Could not find a unique name for '{name}' in {models_dir} (tried up to _1000)"
-                )
+        final_name, target_path = self._model_target_path(name, provider)
 
         # ---- Build model skeleton ----
         model = QgsProcessingModelAlgorithm()
@@ -571,58 +650,11 @@ class ProcessingHandlers:
             defined_inputs.add(spec["name"])
 
         # ---- Steps ----
-        # Validate shape & resolve algorithm hints up front so we never write
-        # a half-built file. Each step entry is normalized to a fully-qualified
-        # algorithm id stored under '_resolved_algorithm'.
-        defined_steps: list[str] = []
-        resolved: list[tuple[dict, str]] = []  # (step_spec, resolved_alg_id)
-        seen_ids: set[str] = set()
-        for idx, step in enumerate(steps):
-            if not isinstance(step, dict):
-                raise CommandError(f"Step #{idx} must be a dict")
-            for required in ("id", "algorithm"):
-                if required not in step:
-                    raise CommandError(f"Step #{idx} missing required key '{required}'")
-            if step["id"] in seen_ids:
-                raise CommandError(f"Duplicate step id '{step['id']}'")
-            seen_ids.add(step["id"])
-            try:
-                alg_id = self._resolve_algorithm_id(step["algorithm"], registry)
-            except Exception as e:
-                raise CommandError(f"Step '{step['id']}': {e}") from e
-            alg = registry.algorithmById(alg_id)
-            valid_params = {p.name() for p in alg.parameterDefinitions()}
-            for pname in step.get("parameters") or {}:
-                if pname not in valid_params:
-                    raise CommandError(
-                        f"Step '{step['id']}' (algorithm '{alg_id}'): unknown parameter "
-                        f"'{pname}'. Valid parameters: {sorted(valid_params)}"
-                    )
-            resolved.append((step, alg_id))
+        defined_steps = []
+        resolved = self._resolve_model_steps(steps, registry)
 
         # Outputs may be marked on a per-step basis; collect them by step id
-        outputs_by_step: dict[str, dict[str, dict]] = {}
-        step_id_to_alg: dict[str, str] = {step["id"]: alg_id for step, alg_id in resolved}
-        for out_idx, out_spec in enumerate(outputs or []):
-            if not isinstance(out_spec, dict):
-                raise CommandError(f"Output #{out_idx} must be a dict")
-            for required in ("name", "from_step", "from_output"):
-                if required not in out_spec:
-                    raise CommandError(f"Output #{out_idx} missing required key '{required}'")
-            from_step = out_spec["from_step"]
-            if from_step not in step_id_to_alg:
-                raise CommandError(
-                    f"Output '{out_spec['name']}': from_step '{from_step}' is not a defined step"
-                )
-            from_alg = registry.algorithmById(step_id_to_alg[from_step])
-            valid_outputs = {o.name() for o in from_alg.outputDefinitions()}
-            if out_spec["from_output"] not in valid_outputs:
-                raise CommandError(
-                    f"Output '{out_spec['name']}': '{out_spec['from_output']}' is not an output "
-                    f"of step '{from_step}' (algorithm '{step_id_to_alg[from_step]}'). "
-                    f"Valid outputs: {sorted(valid_outputs)}"
-                )
-            outputs_by_step.setdefault(from_step, {})[out_spec["name"]] = out_spec
+        outputs_by_step = self._model_outputs_by_step(outputs, resolved, registry)
 
         for step_idx, (step, alg_id) in enumerate(resolved):
             child = QgsProcessingModelChildAlgorithm(alg_id)
@@ -652,24 +684,8 @@ class ProcessingHandlers:
             model.addChildAlgorithm(child)
             defined_steps.append(step["id"])
 
-        # If the user did not declare any outputs, expose the last step's OUTPUT
-        # under a default name so the model produces something the user can save.
         if not outputs and defined_steps:
-            last_step_id = defined_steps[-1]
-            last_child = model.childAlgorithm(last_step_id)
-            last_alg = registry.algorithmById(last_child.algorithmId())
-            output_names = [o.name() for o in last_alg.outputDefinitions()] if last_alg else []
-            preferred = (
-                "OUTPUT"
-                if "OUTPUT" in output_names
-                else (output_names[0] if output_names else None)
-            )
-            if preferred:
-                mo = QgsProcessingModelOutput("Result")
-                mo.setChildId(last_step_id)
-                mo.setChildOutputName(preferred)
-                mo.setDescription("Result")
-                last_child.setModelOutputs({"Result": mo})
+            self._expose_last_output(model, registry, defined_steps[-1])
 
         # ---- Write the .model3 file directly into the models folder ----
         if not model.toFile(target_path):

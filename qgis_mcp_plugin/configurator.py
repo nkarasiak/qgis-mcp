@@ -26,7 +26,7 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from .compat import MSG_CRITICAL, MSG_INFO, TEXT_SELECTABLE_BY_MOUSE
-from .constants import SETTINGS_PREFIX, plugin_version
+from .constants import PLUGIN_DIR, SETTINGS_PREFIX, plugin_version
 
 # Fallback for a drifted MCP server too old to announce its own update command.
 # Assumes the recommended uvx install, where clearing the cache is what makes
@@ -46,6 +46,11 @@ def write_json_atomic(path, data):
         json.dump(data, f, indent=2)
         f.write("\n")
     os.replace(tmp, path)
+
+
+def _is_dev_checkout(repo_dir):
+    """True when the plugin runs from a git clone rather than a Plugin Manager install."""
+    return (repo_dir / ".git").exists()
 
 
 def _client_config_registry(repo_dir):
@@ -72,7 +77,15 @@ def _client_config_registry(repo_dir):
     cursor_cfg = home / ".cursor" / "mcp.json"
     # Windsurf reads ~/.codeium/windsurf/mcp_config.json on every platform.
     windsurf_cfg = home / ".codeium" / "windsurf" / "mcp_config.json"
-    vscode_cfg = repo_dir / ".vscode" / "mcp.json"
+    # VS Code reads .vscode/mcp.json from the workspace the user has open, which
+    # this plugin cannot know. repo_dir is the right guess only on a dev
+    # checkout; on a Plugin Manager install it is the QGIS plugins directory, so
+    # writing there would report success and configure nothing. Print instead.
+    vscode = (
+        {"path": repo_dir / ".vscode" / "mcp.json", "key": "mcpServers"}
+        if _is_dev_checkout(repo_dir)
+        else {"print_only": True, "hint": "Add this to .vscode/mcp.json in your project."}
+    )
 
     if sys.platform == "win32":
         zed_cfg = appdata / "Zed" / "settings.json"
@@ -94,11 +107,11 @@ def _client_config_registry(repo_dir):
     return {
         "claude-desktop": {"path": claude_cfg, "key": "mcpServers"},
         "cursor": {"path": cursor_cfg, "key": "mcpServers"},
-        "vscode": {"path": vscode_cfg, "key": "mcpServers", "project_local": True},
+        "vscode": vscode,
         "windsurf": {"path": windsurf_cfg, "key": "mcpServers"},
         "zed": {"path": zed_cfg, "key": "context_servers"},
         "opencode": {"path": opencode_cfg, "key": "mcp"},
-        "claude-code": {"print_only": True},
+        "claude-code": {"print_only": True, "entry_format": "claude_cli"},
         "hermes": {"print_only": True, "entry_format": "hermes", "hermes_cfg": hermes_cfg},
         "kimi": {"path": kimi_cfg, "key": "mcpServers"},
         "gemini": {"path": gemini_cfg, "key": "mcpServers"},
@@ -125,19 +138,22 @@ def _qgis_entry_has_refresh(entry):
 
 
 def _remove_refresh_from_entry(entry):
-    """Remove '--refresh-package qgis-mcp' from a uvx 'qgis' entry."""
-    cmd = entry.get("command")
-    args = cmd.get("args", []) if isinstance(cmd, dict) else entry.get("args", [])
+    """Remove '--refresh-package qgis-mcp' from a uvx 'qgis' entry.
+
+    Only the flat command/args shape exists here - it is what
+    ``_qgis_entry_has_refresh`` matched before this is called. Anything else in
+    the user's config file is left alone rather than raising in the timer slot
+    that calls this.
+    """
+    args = entry.get("args")
+    if not isinstance(args, list):
+        return entry
     try:
         idx = args.index("--refresh-package")
-        end = idx + 2  # the flag and its value
-        del args[idx:end]
     except ValueError:
-        pass
-    if isinstance(cmd, dict):
-        cmd["args"] = args
-    else:
-        entry["args"] = args
+        return entry
+    end = idx + 2  # the flag and its value
+    del args[idx:end]
     return entry
 
 
@@ -189,7 +205,7 @@ class MCPConfiguratorDialog(QDialog):
         header = QHBoxLayout()
         header.setSpacing(10)
         logo = QLabel()
-        icon_path = os.path.join(os.path.dirname(__file__), "icons", "icon.png")
+        icon_path = os.path.join(PLUGIN_DIR, "icons", "icon.png")
         logo.setPixmap(QIcon(icon_path).pixmap(QSize(44, 44)))
         header.addWidget(logo)
         title_col = QVBoxLayout()
@@ -347,7 +363,7 @@ class MCPConfiguratorDialog(QDialog):
 
     def _is_dev_install(self):
         """True when the plugin is running from a git-cloned repository."""
-        return (self.repo_dir / ".git").exists()
+        return _is_dev_checkout(self.repo_dir)
 
     def _save_autostart(self, checked):
         """Persist the auto-start preference, and start the server if it is off.
@@ -509,7 +525,7 @@ class MCPConfiguratorDialog(QDialog):
             self.preview_edit.setPlainText(self._hermes_preview_text(remote))
             return
 
-        if info.get("print_only"):
+        if info.get("entry_format") == "claude_cli":
             if remote:
                 refresh_flag = "--refresh-package qgis-mcp " if refresh else ""
                 cmd = f'claude mcp add qgis -- uvx {refresh_flag}--from "{self.github_url}" qgis-mcp-server'
@@ -594,7 +610,7 @@ class MCPConfiguratorDialog(QDialog):
             return
 
         if info.get("print_only"):
-            self.status_label.setText("Run the command above in your terminal.")
+            self.status_label.setText(info.get("hint", "Run the command above in your terminal."))
             self.status_label.setStyleSheet("color: gray;")
             self.apply_btn.setEnabled(False)
             self.update_preview()

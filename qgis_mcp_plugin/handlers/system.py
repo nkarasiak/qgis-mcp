@@ -78,26 +78,42 @@ class SystemHandlers:
         checks = []
         overall = "healthy"
 
-        # 1. QGIS info
-        try:
+        def check(name, detail_of, fail_status="error", fail_overall="degraded"):
+            """Append one check, degrading the overall status when it raises."""
+            nonlocal overall
+            try:
+                checks.append({"name": name, "status": "ok", "detail": detail_of()})
+            except Exception as e:
+                checks.append({"name": name, "status": fail_status, "detail": str(e)})
+                if overall != "error":
+                    overall = fail_overall
+
+        def qgis_info():
             from qgis.PyQt.QtCore import QT_VERSION_STR as qt_ver
 
-            info = {
+            return {
                 "qgis_version": Qgis.version(),
                 "python_version": sys.version.split()[0],
                 "qt_version": qt_ver,
             }
-            checks.append({"name": "qgis", "status": "ok", "detail": info})
-        except Exception as e:
-            checks.append({"name": "qgis", "status": "error", "detail": str(e)})
-            overall = "error"
+
+        def active_providers():
+            registry = QgsApplication.processingRegistry()
+            return [p.id() for p in registry.providers() if p.isActive()]
+
+        def project_info():
+            project = QgsProject.instance()
+            return {
+                "loaded": bool(project.fileName()),
+                "path": project.fileName() or None,
+                "layer_count": len(project.mapLayers()),
+            }
+
+        # 1. QGIS info. Its failure is fatal; every other check only degrades.
+        check("qgis", qgis_info, fail_overall="error")
 
         # 2. Plugin version
-        try:
-            checks.append({"name": "plugin_version", "status": "ok", "detail": plugin_version()})
-        except Exception as e:
-            checks.append({"name": "plugin_version", "status": "error", "detail": str(e)})
-            overall = "degraded" if overall == "healthy" else overall
+        check("plugin_version", plugin_version)
 
         # 3. Connected clients
         client_count = len(self.clients)
@@ -124,31 +140,10 @@ class SystemHandlers:
         )
 
         # 4. Processing providers
-        try:
-            registry = QgsApplication.processingRegistry()
-            providers = [p.id() for p in registry.providers() if p.isActive()]
-            checks.append({"name": "processing_providers", "status": "ok", "detail": providers})
-        except Exception as e:
-            checks.append({"name": "processing_providers", "status": "degraded", "detail": str(e)})
-            overall = "degraded" if overall == "healthy" else overall
+        check("processing_providers", active_providers, fail_status="degraded")
 
         # 5. Project status
-        try:
-            project = QgsProject.instance()
-            checks.append(
-                {
-                    "name": "project",
-                    "status": "ok",
-                    "detail": {
-                        "loaded": bool(project.fileName()),
-                        "path": project.fileName() or None,
-                        "layer_count": len(project.mapLayers()),
-                    },
-                }
-            )
-        except Exception as e:
-            checks.append({"name": "project", "status": "error", "detail": str(e)})
-            overall = "degraded" if overall == "healthy" else overall
+        check("project", project_info)
 
         return {"status": overall, "checks": checks}
 
@@ -252,17 +247,16 @@ class SystemHandlers:
 
     @command
     def list_plugins(self, enabled_only=False, **kwargs):
-        result = []
-        names = list(active_plugins) if enabled_only else list(available_plugins)
-        for name in sorted(names):
-            result.append(
-                {
-                    "name": name,
-                    "enabled": name in active_plugins,
-                    "version": pluginMetadata(name, "version") or "",
-                    "path": pluginMetadata(name, "path") or "",
-                }
-            )
+        names = active_plugins if enabled_only else available_plugins
+        result = [
+            {
+                "name": name,
+                "enabled": name in active_plugins,
+                "version": pluginMetadata(name, "version") or "",
+                "path": pluginMetadata(name, "path") or "",
+            }
+            for name in sorted(names)
+        ]
         return {"plugins": result, "count": len(result)}
 
     @command

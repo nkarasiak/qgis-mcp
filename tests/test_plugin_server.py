@@ -34,7 +34,7 @@ def peer(server):
     ours, theirs = socket.socketpair()
     ours.setblocking(False)
     theirs.settimeout(1)
-    server.clients[ours] = b""
+    server.clients[ours] = bytearray()
     yield theirs
     ours.close()
     theirs.close()
@@ -94,6 +94,41 @@ def test_unserializable_result_is_answered_not_dropped(server, peer):
     assert reply["status"] == "error" and reply["internal"] is True
     assert "serializable" in reply["message"]
     assert ours in server.clients
+
+
+def test_misspelled_parameter_is_rejected_not_silently_ignored(server):
+    """Nearly every handler ends in **kwargs, which swallows a typo otherwise."""
+    response = server._dispatch({"type": "get_layers", "params": {"limits": 5}})
+
+    assert response["status"] == "error"
+    assert "limits" in response["message"]
+    assert "limit, offset" in response["message"], "the accepted names are the hint"
+    assert "internal" not in response, "a caller mistake, not a plugin defect"
+
+
+def test_known_parameters_still_reach_the_handler(server):
+    assert server._dispatch({"type": "ping", "params": {}}) == {
+        "status": "success",
+        "result": {"pong": True},
+    }
+    assert server._dispatch({"type": "ping"})["status"] == "success"
+
+
+def test_frames_split_across_recv_chunks_are_reassembled(server, peer):
+    """One request arriving in pieces must be answered once, not dropped."""
+    (ours,) = server.clients
+    payload = _frame({"type": "ping"})
+    peer.sendall(payload[:3])
+
+    server.process_server()
+    assert bytes(server.clients[ours]) == payload[:3], "held until the frame completes"
+
+    peer.sendall(payload[3:] + _frame({"type": "ping"}))
+    server.process_server()
+
+    assert _read_frame(peer)["result"] == {"pong": True}
+    assert _read_frame(peer)["result"] == {"pong": True}
+    assert bytes(server.clients[ours]) == b"", "consumed bytes are dropped"
 
 
 def test_convert_attribute_turns_qt_dates_into_iso_strings(server):

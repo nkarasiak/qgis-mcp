@@ -129,10 +129,13 @@ class QgisMCPServer(
         # the client knows whether it was launched by uvx or from a checkout, so
         # this is the only way the plugin can name the right command.
         self.client_fixes = {}
-        self._signatures = {}  # cmd_type -> inspect.Signature, filled on first use
+        # cmd_type -> (inspect.Signature, accepted names), filled on first use
+        self._signatures = {}
         self.running = False
         self.socket = None
-        self.clients: dict[socket.socket, bytes] = {}
+        # Per client: the bytes received so far that do not yet form a whole
+        # frame. A bytearray so _read_frames can extend it in place.
+        self.clients: dict[socket.socket, bytearray] = {}
         # Unsent response bytes per client. Sockets are non-blocking, so a large
         # response may not fit the kernel buffer in one call; the remainder is
         # queued here and drained on later timer ticks.
@@ -387,6 +390,66 @@ class QgisMCPServer(
             except Exception as e:
                 self._disconnect_client(client_sock, f"Error writing to client: {e!s}", MSG_WARNING)
 
+    def _read_frames(self, client_sock, data):
+        """Yield each complete message payload in this client's buffer.
+
+        Consumes through an offset and trims once, rather than reslicing the
+        buffer per message: a 10 MB request arriving in 64 KB chunks would
+        otherwise copy everything received so far on every chunk.
+        """
+        buf = self.clients[client_sock]
+        buf.extend(data)
+        if len(buf) > MAX_MESSAGE_SIZE:
+            raise ValueError("Buffer exceeded 10 MB limit")
+        start = 0
+        try:
+            while len(buf) - start >= 4:
+                msg_len = HEADER_STRUCT.unpack_from(buf, start)[0]
+                if msg_len > MAX_MESSAGE_SIZE:
+                    raise ValueError(f"Message too large: {msg_len} bytes")
+                body = start + 4
+                msg_end = body + msg_len
+                if len(buf) < msg_end:
+                    break  # Incomplete message
+                yield bytes(buf[body:msg_end])
+                start = msg_end
+        finally:
+            # Also on the caller's break (auth lockout) and on the raises
+            # above, so a consumed message is never dispatched twice.
+            del buf[:start]
+
+    def _handle_request(self, client_sock, msg_bytes):
+        """Dispatch one framed request and queue its response.
+
+        Returns False when the client was disconnected and its remaining
+        frames must not be processed.
+        """
+        try:
+            request = json.loads(msg_bytes.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            QgsMessageLog.logMessage(f"Malformed request: {e!s}", self.LOG_TAG, MSG_WARNING)
+            self._send_response(client_sock, {"status": "error", "message": f"Invalid JSON: {e!s}"})
+            return True
+
+        self._in_dispatch = True
+        try:
+            response = self.execute_command(request)
+        finally:
+            self._in_dispatch = False
+
+        if response.get("message") == AUTH_FAILED_MESSAGE:
+            failures = self._auth_failures.get(client_sock, 0) + 1
+            self._auth_failures[client_sock] = failures
+            if failures >= self.MAX_AUTH_FAILURES:
+                self._disconnect_client(
+                    client_sock, "Too many authentication failures", MSG_WARNING
+                )
+                return False
+        else:
+            self._auth_failures.pop(client_sock, None)
+        self._send_response(client_sock, response)
+        return True
+
     def process_server(self):
         """Process server operations (called by timer)"""
         if not self.running:
@@ -409,7 +472,7 @@ class QgisMCPServer(
                     try:
                         client_sock, address = self.socket.accept()
                         client_sock.setblocking(False)
-                        self.clients[client_sock] = b""
+                        self.clients[client_sock] = bytearray()
                         QgsMessageLog.logMessage(
                             f"Connected to client: {address} ({len(self.clients)} active)",
                             self.LOG_TAG,
@@ -429,50 +492,9 @@ class QgisMCPServer(
                 try:
                     data = client_sock.recv(RECV_CHUNK_SIZE)
                     if data:
-                        buf = self.clients[client_sock] + data
-                        if len(buf) > MAX_MESSAGE_SIZE:
-                            raise ValueError("Buffer exceeded 10 MB limit")
-                        # Process complete length-prefixed messages
-                        while len(buf) >= 4:
-                            msg_len = HEADER_STRUCT.unpack(buf[:4])[0]
-                            if msg_len > MAX_MESSAGE_SIZE:
-                                raise ValueError(f"Message too large: {msg_len} bytes")
-                            msg_end = 4 + msg_len
-                            if len(buf) < msg_end:
-                                break  # Incomplete message
-                            msg_bytes = buf[4:msg_end]
-                            buf = buf[msg_end:]
-                            try:
-                                command = json.loads(msg_bytes.decode("utf-8"))
-                            except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                                QgsMessageLog.logMessage(
-                                    f"Malformed request: {e!s}", self.LOG_TAG, MSG_WARNING
-                                )
-                                self._send_response(
-                                    client_sock,
-                                    {"status": "error", "message": f"Invalid JSON: {e!s}"},
-                                )
-                                continue
-                            self._in_dispatch = True
-                            try:
-                                response = self.execute_command(command)
-                            finally:
-                                self._in_dispatch = False
-                            if response.get("message") == AUTH_FAILED_MESSAGE:
-                                failures = self._auth_failures.get(client_sock, 0) + 1
-                                self._auth_failures[client_sock] = failures
-                                if failures >= self.MAX_AUTH_FAILURES:
-                                    self._disconnect_client(
-                                        client_sock,
-                                        "Too many authentication failures",
-                                        MSG_WARNING,
-                                    )
-                                    break
-                            else:
-                                self._auth_failures.pop(client_sock, None)
-                            self._send_response(client_sock, response)
-                        if client_sock in self.clients:
-                            self.clients[client_sock] = buf
+                        for msg_bytes in self._read_frames(client_sock, data):
+                            if not self._handle_request(client_sock, msg_bytes):
+                                break
                     else:
                         self._disconnect_client(client_sock)
                 except BlockingIOError:
@@ -525,16 +547,28 @@ class QgisMCPServer(
         return self._dispatch(command)
 
     def _signature(self, cmd_type, handler):
-        """Cached signature of a handler, for validating a caller's parameters.
+        """Cached (signature, accepted names) of a handler, for validation.
+
+        ``accepted`` is the handler's named parameters, or None when it has no
+        ``**kwargs`` - ``bind()`` already rejects unknown names in that case.
 
         Cached because `batch` can dispatch many commands in one message and
         inspect.signature() is not free.
         """
-        signature = self._signatures.get(cmd_type)
-        if signature is None:
+        entry = self._signatures.get(cmd_type)
+        if entry is None:
             signature = inspect.signature(handler)
-            self._signatures[cmd_type] = signature
-        return signature
+            kinds = [p.kind for p in signature.parameters.values()]
+            accepted = None
+            if inspect.Parameter.VAR_KEYWORD in kinds:
+                accepted = frozenset(
+                    name
+                    for name, p in signature.parameters.items()
+                    if p.kind not in (p.VAR_KEYWORD, p.VAR_POSITIONAL)
+                )
+            entry = (signature, accepted)
+            self._signatures[cmd_type] = entry
+        return entry
 
     def _dispatch(self, command):
         """Dispatch an already-authenticated command to its handler."""
@@ -558,12 +592,32 @@ class QgisMCPServer(
             # TypeError raised by the call itself lands in the generic handler
             # below and dumps a CRITICAL traceback in the user's QGIS log for
             # what is really just a missing argument.
+            signature, accepted = self._signature(cmd_type, handler)
             try:
-                self._signature(cmd_type, handler).bind(**params)
+                signature.bind(**params)
             except TypeError as exc:
                 message = f"{cmd_type}: {exc}"
                 QgsMessageLog.logMessage(f"Bad parameters: {message}", self.LOG_TAG, MSG_WARNING)
                 return {"status": "error", "message": message}
+
+            # Almost every handler ends in **kwargs, so bind() accepts a
+            # misspelled name and the command then runs with the default for
+            # the parameter the caller meant - silently doing the wrong thing.
+            # Name what was not recognised instead. A newer client sending a
+            # parameter this plugin predates is refused here too, which is the
+            # point: ignoring it would return a result that does not match
+            # what was asked for.
+            if accepted is not None:
+                unknown = sorted(set(params) - accepted)
+                if unknown:
+                    message = (
+                        f"{cmd_type}: unexpected parameter(s) {', '.join(unknown)}. "
+                        f"Accepted: {', '.join(sorted(accepted)) or 'none'}"
+                    )
+                    QgsMessageLog.logMessage(
+                        f"Bad parameters: {message}", self.LOG_TAG, MSG_WARNING
+                    )
+                    return {"status": "error", "message": message}
 
             try:
                 QgsMessageLog.logMessage(f"Executing: {cmd_type}", self.LOG_TAG, MSG_INFO)
