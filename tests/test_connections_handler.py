@@ -12,17 +12,25 @@ import pytest
 
 @pytest.fixture(scope="module")
 def handlers(plugin_handlers):
-    connections = plugin_handlers.connections
+    return plugin_handlers.connections
 
-    class Server(connections.ConnectionHandlers, plugin_handlers.base.HandlerBase):
+
+@pytest.fixture(scope="module")
+def server_class(handlers, plugin_handlers):
+    """The connections mixin combined with HandlerBase, for these tests only.
+
+    Kept local: assigning it onto the shared handlers module, as this fixture
+    used to, leaks a test-only class into every module that imports it.
+    """
+
+    class Server(handlers.ConnectionHandlers, plugin_handlers.base.HandlerBase):
         pass
 
-    connections.Server = Server
-    return connections
+    return Server
 
 
 @pytest.fixture
-def qgis(handlers):
+def qgis(handlers, server_class):
     handlers.QgsApplication.authManager.return_value.configIds.return_value = ["authcfg1"]
     metadata = MagicMock()
     metadata.connections.return_value = {"taken": object()}
@@ -30,7 +38,7 @@ def qgis(handlers):
     uri = handlers.QgsDataSourceUri.return_value
     uri.reset_mock()
     return types.SimpleNamespace(
-        server=handlers.Server(), metadata=metadata, uri=uri, error=handlers.CommandError
+        server=server_class(), metadata=metadata, uri=uri, error=handlers.CommandError
     )
 
 
@@ -163,6 +171,6 @@ def test_connection_test_never_opens_the_credentials_dialog(handlers, qgis):
         ("host=db pwd=secret", "host=db pwd=***"),
     ],
 )
-def test_redact_uri_leaves_no_secret_behind(handlers, uri, expected):
+def test_redact_uri_leaves_no_secret_behind(server_class, uri, expected):
     """An escaped quote once ended the match early and leaked the tail of the value."""
-    assert handlers.Server._redact_uri(uri) == expected
+    assert server_class._redact_uri(uri) == expected

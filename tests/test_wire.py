@@ -212,7 +212,10 @@ def _serve_once(listener, payload_sizes, ready):
     """Mimic the plugin's non-blocking accept/read/dispatch/write loop.
 
     Mirrors QgisMCPServer.process_server: non-blocking sockets throughout,
-    responses queued through OutboundBuffer and drained across iterations.
+    responses queued through OutboundBuffer and drained across iterations. It is
+    a stand-in, not the subject: these two tests check the real client's framing
+    against a server that writes the way the plugin does. test_plugin_server.py
+    is what drives the real QgisMCPServer.process_server.
     """
     import json
     import select

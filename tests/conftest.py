@@ -1,17 +1,17 @@
 """Shared fixtures: integration tests (running QGIS plugin) and the stubbed-qgis handler tests."""
 
-import os
 import sys
 import types
 import uuid
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from mcp_compat import make_mcp_error
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
+import qgis_mcp.server as srv
 from qgis_mcp.client import QgisMCPClient
+from qgis_mcp.server import _ConfirmSchema
 
 PLUGIN_DIR = Path(__file__).resolve().parents[1] / "qgis_mcp_plugin"
 # Every module the handler package imports at module level from outside the plugin.
@@ -255,3 +255,106 @@ def cities_layer(client, test_project):
     yield layer_id
 
     client.send_command("remove_layer", {"layer_id": layer_id})
+
+
+# ---------------------------------------------------------------------------
+# MCP server fixtures (mocked socket, no QGIS)
+# ---------------------------------------------------------------------------
+
+# The registry is the source of truth; test_plugin_structure pins the plugin
+# side of the parity, so these two numbers only move on a deliberate change.
+TOOL_COUNT = 118
+COMPOUND_TOOL_COUNT = 27
+
+# The resources that read through _send_sync, and therefore land on the
+# implicit instance. Both the coroutine guard and the multi-instance
+# documentation check count them.
+SOCKET_BACKED_RESOURCES = (
+    "qgis_info_resource",
+    "project_info_resource",
+    "layers_resource",
+    "layer_info_resource",
+    "layer_features_resource",
+    "layer_schema_resource",
+)
+
+
+@pytest.fixture
+def mock_connection():
+    """A mocked QgisMCPClient standing in for the pooled connection.
+
+    ``client.returns(payload)`` wraps *payload* in the success envelope the
+    plugin really sends, which is otherwise hand-rolled in every test.
+    """
+    client = MagicMock(spec=QgisMCPClient)
+    client.socket = MagicMock()
+    client.socket.getpeername.return_value = ("localhost", 9876)
+
+    def returns(result):
+        client.send_command.return_value = {"status": "success", "result": result}
+
+    client.returns = returns
+    with patch("qgis_mcp.server.get_qgis_connection", return_value=client):
+        yield client
+
+
+def make_ctx(*, elicitation="confirm"):
+    """Create a mock Context with async methods.
+
+    elicitation: "confirm" (default) - user confirms destructive ops.
+                 "decline" - user refuses.
+                 "unsupported" - client doesn't support elicitation (raises McpError).
+
+    The responses mirror the real SDK: `data` is a model instance (not a dict),
+    and an unsupported client raises McpError - mocking a bare Exception with a
+    dict payload is what let #27 hide.
+    """
+    ctx = MagicMock()
+    for name in ("info", "warning", "error", "report_progress"):
+        setattr(ctx, name, AsyncMock())
+    if elicitation == "unsupported":
+        ctx.elicit = AsyncMock(side_effect=make_mcp_error())
+    else:
+        elicit_response = MagicMock()
+        elicit_response.action = "accept" if elicitation == "confirm" else "decline"
+        elicit_response.data = _ConfirmSchema(confirm=elicitation == "confirm")
+        ctx.elicit = AsyncMock(return_value=elicit_response)
+    return ctx
+
+
+@pytest.fixture
+def connected():
+    """Mark instances as already connected, so _send_sync uses the short schedule.
+
+    Yields a callable taking instance names; whatever it added is removed again
+    on teardown, leaving instances that were already there alone.
+    """
+    added = set()
+
+    def mark(*names):
+        new = set(names) - srv._first_connected
+        srv._first_connected.update(new)
+        added.update(new)
+
+    yield mark
+    srv._first_connected.difference_update(added)
+
+
+@pytest.fixture
+def cold_start():
+    """Nothing has connected yet, so _send_sync takes the patient first-connect schedule."""
+    previously = set(srv._first_connected)
+    srv._first_connected.clear()
+    yield
+    srv._first_connected.update(previously)
+
+
+@pytest.fixture
+def clean_pool():
+    """Run with an empty connection pool and leave it empty (and closed) afterwards."""
+    srv._qgis_connections.clear()
+    srv._connection_validated_at.clear()
+    yield srv
+    for name in list(srv._qgis_connections):
+        srv._invalidate_connection(name)
+    srv._connection_validated_at.clear()

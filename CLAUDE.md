@@ -27,8 +27,8 @@ uv run --no-sync src/qgis_mcp/server.py
 # Run the multi-client installer (plugin symlink + MCP client config)
 python install.py
 
-# Run unit tests (no QGIS needed - mocked socket)
-uv run --no-sync pytest tests/test_mcp_tools.py -v
+# Run unit tests (no QGIS needed - mocked socket; live files skip when nothing listens on 9876)
+uv run --no-sync pytest tests/ --ignore=tests/test_qgis_live.py --ignore=tests/test_stress.py --ignore=tests/test_tdd.py -v
 
 # Run integration tests (requires QGIS plugin server running on localhost:9876)
 uv run --no-sync pytest tests/test_qgis_live.py -v

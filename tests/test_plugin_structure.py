@@ -38,13 +38,20 @@ def _command_sources():
     yield "server.py", _read(os.path.join(PLUGIN_DIR, "server.py"))
 
 
+def _is_command_decorator(node):
+    """True for `@command` and for an attribute access ending in `.command`."""
+    return (getattr(node, "id", None) or getattr(node, "attr", None)) == "command"
+
+
 def _registered_commands():
     commands = {}
     for name, src in _command_sources():
         for node in ast.walk(ast.parse(src)):
             if not isinstance(node, ast.FunctionDef):
                 continue
-            if any(isinstance(d, ast.Name) and d.id == "command" for d in node.decorator_list):
+            # Bare `@command` today; `@registry.command` would be an Attribute,
+            # and matching only the Name form would silently pass on every module.
+            if any(_is_command_decorator(d) for d in node.decorator_list):
                 commands.setdefault(node.name, []).append(name)
     return commands
 
