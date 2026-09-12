@@ -85,7 +85,7 @@ class ProjectHandlers:
         scope = QgsExpressionContextUtils.projectScope(QgsProject.instance())
         variables = {}
         for name in scope.variableNames():
-            variables[name] = self._to_json_safe(scope.variable(name))
+            variables[name] = self._convert_attribute(scope.variable(name))
         return {"variables": variables}
 
     @command

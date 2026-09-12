@@ -380,7 +380,7 @@ class ConnectionHandlers:
         if truncated:
             rows = rows[:limit]
         return {
-            "rows": [[self._to_json_safe(v) for v in row] for row in rows],
+            "rows": [[self._convert_attribute(v) for v in row] for row in rows],
             "count": len(rows),
             "truncated": truncated,
         }

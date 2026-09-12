@@ -43,6 +43,17 @@ class FakeQObject:
         return lambda *args, **kwargs: None
 
 
+class _AnyClassAttr(type):
+    """Metaclass: unknown class attributes resolve to mocks, so compat._enum finds its members."""
+
+    def __getattr__(cls, name):
+        return MagicMock()
+
+
+class FakeQVariant(FakeQObject, metaclass=_AnyClassAttr):
+    """A real class so isinstance(value, QVariant) works in handler converters."""
+
+
 class FakeCredentials(FakeQObject):
     current = "gui-dialog"
 
@@ -63,6 +74,7 @@ def plugin_handlers():
     sys.modules["qgis.core"].QgsCredentials = FakeCredentials
     sys.modules["qgis.core"].QgsProcessingFeedback = FakeQObject
     sys.modules["qgis.PyQt.QtCore"].QObject = FakeQObject  # QgisMCPServer subclasses it
+    sys.modules["qgis.PyQt.QtCore"].QVariant = FakeQVariant
     # A bare package: the real __init__ imports plugin.py, which needs a live QGIS.
     package = types.ModuleType("qgis_mcp_plugin")
     package.__path__ = [str(PLUGIN_DIR)]

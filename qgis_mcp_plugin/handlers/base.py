@@ -69,52 +69,26 @@ class HandlerBase:
         else:
             return str(layer.type())
 
-    def _convert_to_python_type(self, qvariant):
-        if qvariant.isNull():
-            return None
-        value = qvariant.value()
-        # Tuple form, not `int | float | ...`: PEP 604 unions in isinstance need
-        # Python 3.10, and QGIS ships 3.9 well past 3.28 (3.42 still does). The
-        # union form raises TypeError there, which broke every feature read.
-        if isinstance(value, (int, float, str, bool, type(None))):
-            return value
-        elif hasattr(value, "toPyDate"):
-            return value.toPyDate().isoformat()
-        elif hasattr(value, "toPyDateTime"):
-            return value.toPyDateTime().isoformat()
-        else:
-            try:
-                return str(value)
-            except Exception:
-                return None
-
     def _convert_attribute(self, value):
-        """Convert a feature attribute value to a JSON-serializable type."""
+        """Convert a QVariant / Qt / Python attribute value to a JSON-serializable type.
+
+        PyQGIS hands back Qt date types unwrapped, so the date branch has to run on
+        the bare value, not only inside the QVariant case. A value that reaches
+        str() unconverted comes out as a PyQt repr, not a date.
+        """
         if isinstance(value, QVariant):
-            return self._convert_to_python_type(value)
+            if value.isNull():
+                return None
+            value = value.value()
         # Tuple form, not `int | float | ...`: PEP 604 unions in isinstance need
         # Python 3.10, and QGIS ships 3.9 well past 3.28 (3.42 still does). The
         # union form raises TypeError there, which broke every feature read.
         if isinstance(value, (int, float, str, bool, type(None))):
             return value
-        try:
-            return str(value)
-        except Exception:
-            return None
-
-    @staticmethod
-    def _to_json_safe(val):
-        """Convert a QVariant / Qt value to a JSON-serializable Python type."""
-        if isinstance(val, QVariant):
-            if val.isNull():
-                return None
-            val = val.value()
-        # Qt date/time types → ISO string
-        if hasattr(val, "toString"):
-            try:
-                return val.toString(1)  # Qt.ISODate == 1
-            except Exception:
-                return str(val)
-        if isinstance(val, (str, int, float, bool, type(None))):
-            return val
-        return str(val)
+        for to_py in ("toPyDateTime", "toPyDate", "toPyTime"):
+            if hasattr(value, to_py):
+                value = getattr(value, to_py)()
+                break
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        return str(value)

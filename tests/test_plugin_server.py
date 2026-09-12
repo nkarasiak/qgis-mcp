@@ -9,6 +9,7 @@ import json
 import socket
 
 import pytest
+from conftest import FakeQVariant
 
 from qgis_mcp.protocol import HEADER_STRUCT
 
@@ -93,3 +94,25 @@ def test_unserializable_result_is_answered_not_dropped(server, peer):
     assert reply["status"] == "error" and reply["internal"] is True
     assert "serializable" in reply["message"]
     assert ours in server.clients
+
+
+def test_convert_attribute_turns_qt_dates_into_iso_strings(server):
+    import datetime
+
+    class FakeQDate:
+        def toPyDate(self):
+            return datetime.date(2020, 1, 2)
+
+    class FakeQDateTime:
+        def toPyDateTime(self):
+            return datetime.datetime(2021, 3, 4, 5, 6, 7)
+
+    class NullVariant(FakeQVariant):
+        def isNull(self):
+            return True
+
+    assert server._convert_attribute(NullVariant()) is None
+    assert server._convert_attribute(FakeQDate()) == "2020-01-02"
+    assert server._convert_attribute(FakeQDateTime()) == "2021-03-04T05:06:07"
+    assert server._convert_attribute(datetime.date(2020, 1, 2)) == "2020-01-02"
+    assert server._convert_attribute(3.5) == 3.5
