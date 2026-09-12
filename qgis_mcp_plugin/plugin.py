@@ -44,6 +44,7 @@ from .configurator import (
     _client_config_registry,
     _qgis_entry_has_refresh,
     _remove_refresh_from_entry,
+    write_json_atomic,
 )
 from .constants import DEFAULT_PORT, SETTINGS_PREFIX
 from .server import QgisMCPServer
@@ -340,9 +341,7 @@ class QgisMCPPlugin:
         for client, path, key, data in affected:
             _remove_refresh_from_entry(data[key]["qgis"])
             try:
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2)
-                    f.write("\n")
+                write_json_atomic(path, data)
                 updated.append(client)
             except OSError as e:
                 QgsMessageLog.logMessage(

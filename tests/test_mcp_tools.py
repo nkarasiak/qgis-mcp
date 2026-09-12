@@ -3151,6 +3151,47 @@ def test_confirmation_gated_commands_blocked_in_batch():
     } <= BATCH_BLOCKED_COMMANDS
 
 
+@pytest.mark.asyncio
+async def test_blocked_command_in_batch_is_refused(mock_connection):
+    """The guard must fire, and as ToolError: mcp >= 2.1 shows no other message."""
+    from qgis_mcp.server import batch_commands
+
+    with pytest.raises(ToolError, match="rollback_edits"):
+        await batch_commands(_make_ctx(), [{"type": "rollback_edits"}])
+    mock_connection.send_command.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_compound_unknown_action_is_refused():
+    """A mistyped action must come back naming itself, not as a masked tool error."""
+    from qgis_mcp.compound_tools import FastMCP, register_compound_tools
+
+    mcp = FastMCP("compound-unknown-action-test")
+    register_compound_tools(
+        mcp, _send=AsyncMock(return_value={}), _confirm_destructive=AsyncMock(return_value=True)
+    )
+    with pytest.raises(ToolError, match="Unknown system action: nope"):
+        await mcp._tool_manager.get_tool("system").fn(ctx=None, action="nope")
+
+
+def test_socket_backed_resources_are_coroutines():
+    """FunctionResource.read only awaits coroutines, so a sync handler would
+    block the event loop for the whole socket round trip."""
+    import inspect
+
+    import qgis_mcp.server as srv
+
+    for name in (
+        "qgis_info_resource",
+        "project_info_resource",
+        "layers_resource",
+        "layer_info_resource",
+        "layer_features_resource",
+        "layer_schema_resource",
+    ):
+        assert inspect.iscoroutinefunction(getattr(srv, name)), name
+
+
 # ---------------------------------------------------------------------------
 # Version drift between the plugin and the MCP server
 # ---------------------------------------------------------------------------

@@ -581,7 +581,7 @@ def _cache_as_resource(data: Any, name_hint: str = "cache") -> str:
 def cached_resource(cache_id: str) -> str:
     """Register an MCP resource handler for cached data."""
     if cache_id not in _resource_cache:
-        raise ValueError(f"Cache ID not found: {cache_id}")
+        raise ToolError(f"Cache ID not found: {cache_id}")
     return _resource_cache[cache_id]
 
 
@@ -2003,8 +2003,8 @@ async def set_project_crs(ctx: Context, crs: str, instance: str | None = None) -
     title="Batch Commands",
     description="Execute multiple commands in a single round-trip. Each command is "
     '{"type": "<command_name>", "params": {...}}. Destructive commands '
-    "(execute_code, remove_layer, delete_features, set_setting, reload_plugin) "
-    "are not allowed in batch - use them individually.",
+    f"({', '.join(sorted(BATCH_BLOCKED_COMMANDS))}) "
+    "are not allowed in batch, call them individually.",
 )
 async def batch_commands(
     ctx: Context, commands: list[dict], instance: str | None = None
@@ -2012,8 +2012,8 @@ async def batch_commands(
     for cmd in commands:
         cmd_type = cmd.get("type", "")
         if cmd_type in BATCH_BLOCKED_COMMANDS:
-            raise ValueError(
-                f"Command {cmd_type!r} is not allowed in batch - "
+            raise ToolError(
+                f"Command {cmd_type!r} is not allowed in batch, "
                 "call it individually so confirmation can be requested"
             )
     return await _send("batch", {"commands": commands}, timeout=TIMEOUT_LONG, instance=instance)
@@ -3138,8 +3138,8 @@ _IMPLICIT = " (implicit instance - use the equivalent tool with instance= for an
     name="qgis_info",
     description="QGIS version, profile, and plugin count" + _IMPLICIT,
 )
-def qgis_info_resource() -> str:
-    return json.dumps(_send_sync("get_qgis_info"))
+async def qgis_info_resource() -> str:
+    return json.dumps(await _send("get_qgis_info"))
 
 
 @mcp.resource(
@@ -3147,8 +3147,8 @@ def qgis_info_resource() -> str:
     name="project_info",
     description="Current project metadata, CRS, layer count, layer summary" + _IMPLICIT,
 )
-def project_info_resource() -> str:
-    return json.dumps(_send_sync("get_project_info"))
+async def project_info_resource() -> str:
+    return json.dumps(await _send("get_project_info"))
 
 
 @mcp.resource(
@@ -3156,8 +3156,8 @@ def project_info_resource() -> str:
     name="layer_list",
     description="All layers with IDs, names, types, visibility" + _IMPLICIT,
 )
-def layers_resource() -> str:
-    return json.dumps(_send_sync("get_layers"))
+async def layers_resource() -> str:
+    return json.dumps(await _send("get_layers"))
 
 
 @mcp.resource(
@@ -3166,8 +3166,8 @@ def layers_resource() -> str:
     description="Detailed layer info: CRS, extent, fields, feature count, source, provider"
     + _IMPLICIT,
 )
-def layer_info_resource(layer_id: str) -> str:
-    return json.dumps(_send_sync("get_layer_info", {"layer_id": layer_id}))
+async def layer_info_resource(layer_id: str) -> str:
+    return json.dumps(await _send("get_layer_info", {"layer_id": layer_id}))
 
 
 @mcp.resource(
@@ -3175,8 +3175,8 @@ def layer_info_resource(layer_id: str) -> str:
     name="layer_features",
     description="Sample features (first 10) from a vector layer" + _IMPLICIT,
 )
-def layer_features_resource(layer_id: str) -> str:
-    return json.dumps(_send_sync("get_layer_features", {"layer_id": layer_id, "limit": 10}))
+async def layer_features_resource(layer_id: str) -> str:
+    return json.dumps(await _send("get_layer_features", {"layer_id": layer_id, "limit": 10}))
 
 
 @mcp.resource(
@@ -3184,8 +3184,8 @@ def layer_features_resource(layer_id: str) -> str:
     name="layer_schema",
     description="Field names, types, and lengths for a vector layer" + _IMPLICIT,
 )
-def layer_schema_resource(layer_id: str) -> str:
-    return json.dumps(_send_sync("get_layer_schema", {"layer_id": layer_id}))
+async def layer_schema_resource(layer_id: str) -> str:
+    return json.dumps(await _send("get_layer_schema", {"layer_id": layer_id}))
 
 
 @mcp.resource(

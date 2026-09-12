@@ -151,3 +151,18 @@ def test_connection_test_never_opens_the_credentials_dialog(handlers, qgis):
             name="fresh", connection_mode="service_only", service="s"
         )
     assert handlers.QgsCredentials.instance() == "gui-dialog"
+
+
+@pytest.mark.parametrize(
+    ("uri", "expected"),
+    [
+        ("dbname='gis' password='secret' host=db", "dbname='gis' password=*** host=db"),
+        (r"dbname='gis' password='se\'cret' host=db", "dbname='gis' password=*** host=db"),
+        ('dbname="gis" password="se\\"cret"', 'dbname="gis" password=***'),
+        ("host=db sslpassword=secret port=5432", "host=db sslpassword=*** port=5432"),
+        ("host=db pwd=secret", "host=db pwd=***"),
+    ],
+)
+def test_redact_uri_leaves_no_secret_behind(handlers, uri, expected):
+    """An escaped quote once ended the match early and leaked the tail of the value."""
+    assert handlers.Server._redact_uri(uri) == expected

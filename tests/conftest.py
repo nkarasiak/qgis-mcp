@@ -62,6 +62,7 @@ def plugin_handlers():
         sys.modules[name] = MagicMock()
     sys.modules["qgis.core"].QgsCredentials = FakeCredentials
     sys.modules["qgis.core"].QgsProcessingFeedback = FakeQObject
+    sys.modules["qgis.PyQt.QtCore"].QObject = FakeQObject  # QgisMCPServer subclasses it
     # A bare package: the real __init__ imports plugin.py, which needs a live QGIS.
     package = types.ModuleType("qgis_mcp_plugin")
     package.__path__ = [str(PLUGIN_DIR)]
@@ -187,7 +188,8 @@ CITIES = [
 def make_client():
     """Create and connect a fresh QgisMCPClient."""
     c = QgisMCPClient()
-    assert c.connect(), "Failed to connect to QGIS MCP plugin"
+    if not c.connect():
+        pytest.skip("QGIS MCP Server is not running on localhost:9876")
     return c
 
 

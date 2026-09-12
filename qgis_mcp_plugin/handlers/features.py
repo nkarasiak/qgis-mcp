@@ -619,7 +619,7 @@ class FeatureHandlers:
         for i, feat in enumerate(vlayer.getFeatures()):
             if i >= 1000:
                 break
-            rows.append({fn: feat[fn] for fn in fields})
+            rows.append({fn: self._convert_attribute(feat[fn]) for fn in fields})
         return {"fields": fields, "rows": rows, "count": len(rows)}
 
     @command
@@ -648,7 +648,7 @@ class FeatureHandlers:
                         continue
                 elif not geom.intersects(pt_geom):
                     continue
-                attrs = {f.name(): feat[f.name()] for f in layer.fields()}
+                attrs = {f.name(): self._convert_attribute(feat[f.name()]) for f in layer.fields()}
                 attrs["_fid"] = feat.id()
                 feats.append(attrs)
                 if len(feats) >= limit:

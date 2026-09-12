@@ -34,6 +34,20 @@ from .constants import SETTINGS_PREFIX, plugin_version
 DEFAULT_VERSION_FIX = "uv cache clean qgis-mcp"
 
 
+def write_json_atomic(path, data):
+    """Write JSON to ``path`` through a temporary file, then rename it into place.
+
+    These are the user's own MCP client configs. A write that dies partway (full
+    disk, QGIS killed) would otherwise leave one truncated and unparseable, and
+    the client would start with no servers at all.
+    """
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, path)
+
+
 def _client_config_registry(repo_dir):
     """Map client name -> {path, key} (or {print_only}) for MCP config files.
 
@@ -634,9 +648,7 @@ class MCPConfiguratorDialog(QDialog):
             data.setdefault(key, {})
             data[key]["qgis"] = entry
 
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-                f.write("\n")
+            write_json_atomic(path, data)
 
             self.refresh_status()
             QgsMessageLog.logMessage(f"Configured {client} at {path}", "MCP", MSG_INFO)

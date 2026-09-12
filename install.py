@@ -293,25 +293,33 @@ def _hermes_instructions(remote: bool) -> None:
 # ── Plugin installation ────────────────────────────────────────────────────
 
 
-def _remove_target(target: Path) -> None:
+def _remove_target(target: Path, force: bool = False) -> None:
     """Remove a plugin target - handles files, symlinks, Windows junctions, and dirs.
 
     Path.is_symlink() returns False for Windows directory junctions (created via
     `mklink /J`), so we also check os.path.islink() and fall back to rmdir() for
     junctions before resorting to shutil.rmtree() on real directories.
+
+    A real directory is a Plugin Manager install, not something this script put
+    there, so deleting it asks first unless `force` is set.
     """
     if target.is_symlink() or os.path.islink(target) or target.is_file():
         target.unlink()
-    elif sys.platform == "win32":
+        return
+    if sys.platform == "win32":
         try:
             target.rmdir()  # cleanly removes a junction without touching the target
+            return
         except OSError:
-            shutil.rmtree(target)
-    else:
-        shutil.rmtree(target)
+            pass
+    if not force:
+        answer = input(f"  {target} is a real directory, not a link. Delete it? [y/N] ")
+        if answer.strip().lower() not in ("y", "yes"):
+            sys.exit("Aborted: existing plugin directory left in place.")
+    shutil.rmtree(target)
 
 
-def install_plugin(profile: str, version: str = "auto") -> Path:
+def install_plugin(profile: str, version: str = "auto", force: bool = False) -> Path:
     plugins_dir = qgis_plugins_dir(profile, version)
     target = plugins_dir / "qgis_mcp_plugin"
 
@@ -320,7 +328,7 @@ def install_plugin(profile: str, version: str = "auto") -> Path:
             print(f"  Plugin already linked: {target}")
             return target
         print(f"  Removing existing: {target}")
-        _remove_target(target)
+        _remove_target(target, force)
 
     plugins_dir.mkdir(parents=True, exist_ok=True)
 
@@ -340,10 +348,10 @@ def install_plugin(profile: str, version: str = "auto") -> Path:
     return target
 
 
-def uninstall_plugin(profile: str, version: str = "auto") -> None:
+def uninstall_plugin(profile: str, version: str = "auto", force: bool = False) -> None:
     target = qgis_plugins_dir(profile, version) / "qgis_mcp_plugin"
     if target.is_symlink() or target.exists() or os.path.islink(target):
-        _remove_target(target)
+        _remove_target(target, force)
         print(f"  Removed: {target}")
     else:
         print(f"  Not installed: {target}")
@@ -352,22 +360,22 @@ def uninstall_plugin(profile: str, version: str = "auto") -> None:
 # ── Client configuration ───────────────────────────────────────────────────
 
 
-def _jsonc_to_json(text) -> str:
-    """Convert potential JSONC json file to valid JSON
+def _jsonc_to_json(text: str) -> str:
+    """Convert potential JSONC json file to valid JSON.
 
-    Cases:
-        - A: JSONC with multi-line comments
-        - B: JSONC with single-line comment
-        - C: URLs with `http://`, `https://` preserved
-        - D: // inside string values preserved
-        - E: Trailing commas in objects and arrays
+    One pass, with the string-literal branch first so anything quoted is kept
+    verbatim: URLs (`https://`), a `//` or a `/*` inside a value. Block and line
+    comments outside strings are dropped, then trailing commas in objects and
+    arrays. `[^\\n]` in the line-comment branch because DOTALL is on for the
+    block comment branch and `.` would otherwise swallow the rest of the file.
     """
-    caseA = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
-    casesBCD = re.sub(
-        r'("(?:\\.|[^"\\])*")|//.*', lambda m: m.group(1) or "", caseA, flags=re.MULTILINE
+    stripped = re.sub(
+        r'("(?:\\.|[^"\\])*")|/\*.*?\*/|//[^\n]*',
+        lambda m: m.group(1) or "",
+        text,
+        flags=re.DOTALL,
     )
-    caseE = re.sub(r",\s*([}\]])", r"\1", casesBCD)
-    return caseE
+    return re.sub(r",\s*([}\]])", r"\1", stripped)
 
 
 def _read_json(path: Path) -> dict:
@@ -381,7 +389,9 @@ def _read_json(path: Path) -> dict:
 
     try:
         cleaned = _jsonc_to_json(text)
-        return json.loads(cleaned)
+        config = json.loads(cleaned)
+        print(f"  Note: {path} has comments; they are not preserved when it is rewritten.")
+        return config
     except json.JSONDecodeError as e:
         raise ValueError(f"Failed to parse {path}: not valid JSON or JSONC. Error: {e}") from e
 
@@ -395,7 +405,11 @@ def _backup(path: Path) -> None:
 
 def _write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    # Serialize into a sibling temp file first: an open(path, "w") truncates the
+    # existing config before json.dumps runs, so a failure there loses it.
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def configure_client(client_name: str, remote: bool) -> None:
@@ -595,8 +609,21 @@ def main() -> None:
         "--remote", action="store_true", help="Use uvx from GitHub instead of local uv run"
     )
     parser.add_argument("--uninstall", action="store_true", help="Remove plugin and client configs")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Delete an existing real plugin directory without asking",
+    )
     args = parser.parse_args()
 
+    # Validate before anything is touched, so a typo does not cost a symlink or a venv.
+    clients = [c.strip() for c in args.clients.split(",")] if args.clients else []
+    valid = set(_client_registry())
+    invalid = [c for c in clients if c not in valid]
+    if invalid:
+        sys.exit(f"Unknown clients: {', '.join(invalid)}.  Valid: {', '.join(sorted(valid))}")
+
+    force = args.force or args.non_interactive
     qgis_ver = args.qgis_version
     if qgis_ver == "auto":
         qgis_ver = _detect_qgis_version()
@@ -610,10 +637,10 @@ def main() -> None:
     # ── Plugin ──
     if args.uninstall:
         print("[1/3] Removing QGIS plugin...")
-        uninstall_plugin(args.profile, qgis_ver)
+        uninstall_plugin(args.profile, qgis_ver, force)
     else:
         print("[1/3] Installing QGIS plugin...")
-        install_plugin(args.profile, qgis_ver)
+        install_plugin(args.profile, qgis_ver, force)
 
     # ── Dependencies (skip for uninstall and remote mode) ──
     if not args.uninstall and not args.remote:
@@ -621,17 +648,16 @@ def main() -> None:
         setup_venv()
 
     # ── Clients ──
-    if args.non_interactive:
-        clients = [c.strip() for c in args.clients.split(",")] if args.clients else []
-        remote = args.remote
-    else:
+    # --clients is honoured with or without --non-interactive; only ask when it is absent.
+    if not clients and not args.non_interactive:
         clients = interactive_menu()
-        remote = interactive_mode_choice() if clients and not args.uninstall else args.remote
-
-    valid = set(_client_registry())
-    invalid = [c for c in clients if c not in valid]
-    if invalid:
-        sys.exit(f"Unknown clients: {', '.join(invalid)}.  Valid: {', '.join(sorted(valid))}")
+    # --remote wins outright: prompting would let Enter flip it back to local after
+    # the venv step was already skipped, leaving the config pointing at nothing.
+    remote = args.remote or (
+        interactive_mode_choice()
+        if clients and not args.uninstall and not args.non_interactive
+        else False
+    )
 
     if clients:
         print(f"\n[3/3] {'Removing' if args.uninstall else 'Configuring'} MCP clients...")

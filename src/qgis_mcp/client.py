@@ -134,14 +134,19 @@ class QgisMCPClient:
         try:
             data = json.dumps(command).encode("utf-8")
             header = HEADER_STRUCT.pack(len(data))
+            # Arm the timeout before the sends, not only before the reads: a
+            # peer that stops draining its receive buffer (a QGIS busy in a long
+            # render) stalls sendall in blocking mode forever, so the deadline
+            # the caller asked for would cover only half the round trip. A
+            # timeout raised here lands in the same TimeoutError handler below,
+            # which closes the half written frame's socket.
+            self._set_timeout(timeout)
             # Two separate sendall() calls avoid allocating a header+data copy.
             # Benchmarks show this is ~2x faster for 1MB payloads (159us vs 312us)
             # and slightly faster even for small payloads. TCP_NODELAY ensures the
             # header isn't delayed waiting for the data send.
             self.socket.sendall(header)
             self.socket.sendall(data)
-
-            self._set_timeout(timeout)
 
             resp_header = self._recv_exact(4)
             resp_len = HEADER_STRUCT.unpack(resp_header)[0]

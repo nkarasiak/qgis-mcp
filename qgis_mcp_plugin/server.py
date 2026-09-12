@@ -55,6 +55,11 @@ from .wire import (
     frame,
 )
 
+# Returned by execute_command on a rejected token, and matched in
+# process_server, which is where the client socket is in scope to count
+# failures against it.
+AUTH_FAILED_MESSAGE = "Authentication failed: missing or invalid token"
+
 
 def _json_safe(value):
     """Replace non-finite floats with None so responses stay valid JSON.
@@ -99,6 +104,10 @@ class QgisMCPServer(
     # without bound, nor produce a warning per string.
     MAX_TRACKED_VERSIONS: ClassVar[int] = 10
 
+    # Consecutive rejected tokens tolerated on one connection before it is
+    # dropped, so a guessing peer has to pay for a new connection each time.
+    MAX_AUTH_FAILURES: ClassVar[int] = 5
+
     def __init__(
         self,
         host=DEFAULT_HOST,
@@ -128,6 +137,8 @@ class QgisMCPServer(
         # response may not fit the kernel buffer in one call; the remainder is
         # queued here and drained on later timer ticks.
         self.outbound: dict[socket.socket, OutboundBuffer] = {}
+        # Consecutive auth failures per client, reset by any accepted command.
+        self._auth_failures: dict[socket.socket, int] = {}
         self.timer = None
         self._message_log = deque(maxlen=1000)
         self.start_error = None  # why start() failed, for the UI to report
@@ -218,7 +229,8 @@ class QgisMCPServer(
             message += f" To match them, run: {fix} (then restart your MCP client)."
         QgsMessageLog.logMessage(message, self.LOG_TAG, MSG_WARNING)
 
-    _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", ""})
+    # "" is deliberately absent: binding it means INADDR_ANY, every interface.
+    _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
     def start(self):
         """Start the server"""
@@ -316,6 +328,7 @@ class QgisMCPServer(
                 client_sock.close()
         self.clients.clear()
         self.outbound.clear()
+        self._auth_failures.clear()
         self._notify_clients_changed()
 
         self.socket = None
@@ -327,6 +340,7 @@ class QgisMCPServer(
             client_sock.close()
         self.clients.pop(client_sock, None)
         self.outbound.pop(client_sock, None)
+        self._auth_failures.pop(client_sock, None)
         QgsMessageLog.logMessage(f"{message} ({len(self.clients)} active)", self.LOG_TAG, level)
         self._notify_clients_changed()
 
@@ -340,7 +354,23 @@ class QgisMCPServer(
         subsequent message. Anything not accepted now stays queued and is
         flushed by :meth:`_flush_outbound` on the next tick.
         """
-        resp_bytes = json.dumps(_json_safe(response)).encode("utf-8")
+        try:
+            payload = json.dumps(_json_safe(response))
+        except (TypeError, ValueError) as e:
+            # A handler returned something json cannot encode. This runs outside
+            # _dispatch's try, so letting it propagate would drop the connection
+            # instead of answering. The fallback dict is always encodable.
+            QgsMessageLog.logMessage(
+                f"Response is not JSON serializable: {e!s}", self.LOG_TAG, MSG_CRITICAL
+            )
+            payload = json.dumps(
+                {
+                    "status": "error",
+                    "message": f"Response is not JSON serializable: {e!s}",
+                    "internal": True,
+                }
+            )
+        resp_bytes = payload.encode("utf-8")
         buf = self.outbound.setdefault(client_sock, OutboundBuffer())
         buf.append(frame(resp_bytes))
         if buf.flush(client_sock):
@@ -428,8 +458,21 @@ class QgisMCPServer(
                                 response = self.execute_command(command)
                             finally:
                                 self._in_dispatch = False
+                            if response.get("message") == AUTH_FAILED_MESSAGE:
+                                failures = self._auth_failures.get(client_sock, 0) + 1
+                                self._auth_failures[client_sock] = failures
+                                if failures >= self.MAX_AUTH_FAILURES:
+                                    self._disconnect_client(
+                                        client_sock,
+                                        "Too many authentication failures",
+                                        MSG_WARNING,
+                                    )
+                                    break
+                            else:
+                                self._auth_failures.pop(client_sock, None)
                             self._send_response(client_sock, response)
-                        self.clients[client_sock] = buf
+                        if client_sock in self.clients:
+                            self.clients[client_sock] = buf
                     else:
                         self._disconnect_client(client_sock)
                 except BlockingIOError:
@@ -469,7 +512,7 @@ class QgisMCPServer(
                 )
                 return {
                     "status": "error",
-                    "message": "Authentication failed: missing or invalid token",
+                    "message": AUTH_FAILED_MESSAGE,
                 }
 
         # Authenticated from here on, so the announced version can be trusted
@@ -559,8 +602,13 @@ class QgisMCPServer(
         on the client side is advisory. Rejecting one command does not abort the
         batch - the refusal is reported in that command's slot.
         """
+        if not isinstance(commands, list):
+            raise CommandError("commands must be a list")
         results = []
         for cmd in commands:
+            if not isinstance(cmd, dict):
+                results.append({"status": "error", "message": "Batch entry must be an object"})
+                continue
             cmd_type = cmd.get("type")
             if cmd_type in BATCH_BLOCKED_COMMANDS:
                 QgsMessageLog.logMessage(

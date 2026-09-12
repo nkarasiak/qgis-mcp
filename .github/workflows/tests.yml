@@ -44,8 +44,8 @@ jobs:
         # Pinned: an unpinned linter turns CI red on untouched code.
         # flake8 mirrors the plugin uploader (W503 on, see .flake8).
         run: |
-          uvx ruff@0.16.0 check qgis_mcp_plugin/ src/ tests/
+          uvx ruff@0.16.0 check qgis_mcp_plugin/ src/ tests/ install.py
           uvx flake8@7.3.0 qgis_mcp_plugin/
 
       - name: Unit tests (mocked socket, no QGIS)
-        run: uv run --no-sync pytest tests/test_mcp_tools.py -v
+        run: uv run --no-sync pytest tests/ -v

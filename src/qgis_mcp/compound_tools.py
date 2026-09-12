@@ -15,6 +15,10 @@ try:
 except ModuleNotFoundError:  # mcp >= 2.0 renamed fastmcp -> mcpserver
     from mcp.server.mcpserver import Context
     from mcp.server.mcpserver import MCPServer as FastMCP
+try:
+    from mcp.server.fastmcp.exceptions import ToolError
+except ImportError:  # mcp >= 2.0; only ToolError text reaches the client on mcp >= 2.1
+    from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import Annotations, ImageContent, ToolAnnotations
 
 from qgis_mcp.helpers import (
@@ -78,7 +82,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
         elif action == "get_qgis_info":
             return await _send("get_qgis_info")
         else:
-            raise ValueError(f"Unknown system action: {action}")
+            raise ToolError(f"Unknown system action: {action}")
 
     # ------------------------------------------------------------------
     # 2. project
@@ -121,7 +125,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             result = await _send("set_project_crs", {"crs": kwargs["crs"]})
             return make_project_response(result)
         else:
-            raise ValueError(f"Unknown project action: {action}")
+            raise ToolError(f"Unknown project action: {action}")
 
     # ------------------------------------------------------------------
     # 3. layer
@@ -300,7 +304,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                 },
             )
         else:
-            raise ValueError(f"Unknown layer action: {action}")
+            raise ToolError(f"Unknown layer action: {action}")
 
     # ------------------------------------------------------------------
     # 4. features
@@ -387,7 +391,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                 params["expression"] = expression
             return await _send("delete_features", params)
         else:
-            raise ValueError(f"Unknown features action: {action}")
+            raise ToolError(f"Unknown features action: {action}")
 
     # ------------------------------------------------------------------
     # 5. selection
@@ -421,7 +425,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
         elif action == "clear":
             return await _send("clear_selection", {"layer_id": kwargs["layer_id"]})
         else:
-            raise ValueError(f"Unknown selection action: {action}")
+            raise ToolError(f"Unknown selection action: {action}")
 
     # ------------------------------------------------------------------
     # 5b. editing
@@ -470,7 +474,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                 "redo_edits", {"layer_id": layer_id, "steps": kwargs.get("steps", 1)}
             )
         else:
-            raise ValueError(f"Unknown editing action: {action}")
+            raise ToolError(f"Unknown editing action: {action}")
 
     # ------------------------------------------------------------------
     # 5c. connection
@@ -588,7 +592,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                 timeout=TIMEOUT_LONG,
             )
         else:
-            raise ValueError(f"Unknown connection action: {action}")
+            raise ToolError(f"Unknown connection action: {action}")
 
     # ------------------------------------------------------------------
     # 6. style
@@ -651,7 +655,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             }
             return await _send("set_raster_style", params)
         else:
-            raise ValueError(f"Unknown style action: {action}")
+            raise ToolError(f"Unknown style action: {action}")
 
     # ------------------------------------------------------------------
     # 7. canvas
@@ -726,7 +730,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                 params["rotation"] = kwargs["rotation"]
             return await _send("set_canvas_scale", params)
         else:
-            raise ValueError(f"Unknown canvas action: {action}")
+            raise ToolError(f"Unknown canvas action: {action}")
 
     # ------------------------------------------------------------------
     # 8. render
@@ -812,7 +816,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                 timeout=TIMEOUT_LONG,
             )
         else:
-            raise ValueError(f"Unknown render action: {action}")
+            raise ToolError(f"Unknown render action: {action}")
 
     # ------------------------------------------------------------------
     # 9. processing
@@ -918,7 +922,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                     params[key] = kwargs[key]
             return await _send("create_processing_model", params, timeout=TIMEOUT_LONG)
         else:
-            raise ValueError(f"Unknown processing action: {action}")
+            raise ToolError(f"Unknown processing action: {action}")
 
     # ------------------------------------------------------------------
     # 10. code
@@ -955,7 +959,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             await ctx.report_progress(100, 100)
             return result
         else:
-            raise ValueError(f"Unknown code action: {action}")
+            raise ToolError(f"Unknown code action: {action}")
 
     # ------------------------------------------------------------------
     # 11. batch
@@ -967,8 +971,8 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             "Execute multiple commands in a single round-trip.\n"
             "Actions: execute\n"
             "- execute: commands (list[dict]) - each {'type': '<command>', 'params': {...}}. "
-            "Destructive commands (execute_code, remove_layer, delete_features, set_setting, "
-            "reload_plugin) are not allowed in batch."
+            f"Destructive commands ({', '.join(sorted(BATCH_BLOCKED_COMMANDS))}) "
+            "are not allowed in batch."
             f"{_PARAMS_NOTE}"
         ),
     )
@@ -981,13 +985,13 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             for cmd in commands:
                 cmd_type = cmd.get("type", "")
                 if cmd_type in BATCH_BLOCKED_COMMANDS:
-                    raise ValueError(
-                        f"Command {cmd_type!r} is not allowed in batch - "
+                    raise ToolError(
+                        f"Command {cmd_type!r} is not allowed in batch, "
                         "call it individually so confirmation can be requested"
                     )
             return await _send("batch", {"commands": commands}, timeout=TIMEOUT_LONG)
         else:
-            raise ValueError(f"Unknown batch action: {action}")
+            raise ToolError(f"Unknown batch action: {action}")
 
     # ------------------------------------------------------------------
     # 12. layer_tree
@@ -1024,7 +1028,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                 },
             )
         else:
-            raise ValueError(f"Unknown layer_tree action: {action}")
+            raise ToolError(f"Unknown layer_tree action: {action}")
 
     # ------------------------------------------------------------------
     # 13. plugins
@@ -1059,7 +1063,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             await ctx.info(f"Reloading plugin: {kwargs['plugin_name']}")
             return await _send("reload_plugin", {"plugin_name": kwargs["plugin_name"]})
         else:
-            raise ValueError(f"Unknown plugins action: {action}")
+            raise ToolError(f"Unknown plugins action: {action}")
 
     # ------------------------------------------------------------------
     # 14. variables
@@ -1088,7 +1092,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                 },
             )
         else:
-            raise ValueError(f"Unknown variables action: {action}")
+            raise ToolError(f"Unknown variables action: {action}")
 
     # ------------------------------------------------------------------
     # 15. settings
@@ -1119,7 +1123,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                 return {"ok": False, "message": "Cancelled by user"}
             return await _send("set_setting", {"key": key, "value": kwargs["value"]})
         else:
-            raise ValueError(f"Unknown settings action: {action}")
+            raise ToolError(f"Unknown settings action: {action}")
 
     # ------------------------------------------------------------------
     # 16. additional tools that don't fit neatly into groups above
@@ -1148,7 +1152,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
             command = "validate_expression" if action == "validate" else "evaluate_expression"
             return await _send(command, params)
         else:
-            raise ValueError(f"Unknown expression action: {action}")
+            raise ToolError(f"Unknown expression action: {action}")
 
     @mcp.tool(
         title="Query",
@@ -1180,7 +1184,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                     params[key] = kwargs[key]
             return await _send("identify_features", params)
         else:
-            raise ValueError(f"Unknown query action: {action}")
+            raise ToolError(f"Unknown query action: {action}")
 
     @mcp.tool(
         title="Transform",
@@ -1211,7 +1215,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                 params["bbox"] = kwargs["bbox"]
             return await _send("transform_coordinates", params)
         else:
-            raise ValueError(f"Unknown transform action: {action}")
+            raise ToolError(f"Unknown transform action: {action}")
 
     @mcp.tool(
         title="Message Log",
@@ -1237,7 +1241,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                 params["tag"] = kwargs["tag"]
             return await _send("get_message_log", params)
         else:
-            raise ValueError(f"Unknown message_log action: {action}")
+            raise ToolError(f"Unknown message_log action: {action}")
 
     @mcp.tool(
         title="Layer Property",
@@ -1264,7 +1268,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                 },
             )
         else:
-            raise ValueError(f"Unknown layer_property action: {action}")
+            raise ToolError(f"Unknown layer_property action: {action}")
 
     # ------------------------------------------------------------------
     # 19b. field - schema and attribute editing
@@ -1341,7 +1345,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                 },
             )
         else:
-            raise ValueError(f"Unknown field action: {action}")
+            raise ToolError(f"Unknown field action: {action}")
 
     # ------------------------------------------------------------------
     # 19c. analysis - vector/raster analysis operations
@@ -1422,7 +1426,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
                 },
             )
         else:
-            raise ValueError(f"Unknown analysis action: {action}")
+            raise ToolError(f"Unknown analysis action: {action}")
 
     # ------------------------------------------------------------------
     # 20. bookmarks
@@ -1463,7 +1467,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
         elif action == "remove":
             return await _send("remove_bookmark", {"bookmark_id": kwargs["bookmark_id"]})
         else:
-            raise ValueError(f"Unknown bookmarks action: {action}")
+            raise ToolError(f"Unknown bookmarks action: {action}")
 
     # ------------------------------------------------------------------
     # 21. map_themes
@@ -1495,7 +1499,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
         elif action == "apply":
             return await _send("apply_map_theme", {"name": kwargs["name"]})
         else:
-            raise ValueError(f"Unknown map_themes action: {action}")
+            raise ToolError(f"Unknown map_themes action: {action}")
 
     # ------------------------------------------------------------------
     # 22. active_layer
@@ -1521,4 +1525,4 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):
         elif action == "set":
             return await _send("set_active_layer", {"layer_id": kwargs["layer_id"]})
         else:
-            raise ValueError(f"Unknown active_layer action: {action}")
+            raise ToolError(f"Unknown active_layer action: {action}")

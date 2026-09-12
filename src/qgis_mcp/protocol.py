@@ -24,6 +24,7 @@ HEADER_STRUCT = struct.Struct(">I")  # 4-byte big-endian uint32 length prefix
 
 BATCH_BLOCKED_COMMANDS = frozenset(
     {
+        "batch",
         "execute_code",
         "remove_layer",
         "delete_features",

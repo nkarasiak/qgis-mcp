@@ -54,7 +54,14 @@ class ConnectionHandlers:
     """Saved data source connections - the Browser panel entries."""
 
     # Connection URIs carry saved credentials; never hand those to a client.
-    _URI_SECRET_RE = re.compile(r"\b(password|pass|pwd)=('[^']*'|\"[^\"]*\"|\S*)", re.IGNORECASE)
+    # A quoted value may contain a backslash-escaped quote, so the quoted branches
+    # consume escape pairs rather than stopping at the first inner quote. libpq
+    # `sslpassword` is spelled out because \b never falls inside a longer word.
+    _URI_SECRET_RE = re.compile(
+        r"\b(sslpassword|password|pass|pwd)="
+        r"('(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|\S*)",
+        re.IGNORECASE,
+    )
 
     _CONN_TABLE_FLAG_NAMES: ClassVar[tuple] = (
         ("vector", CONN_TABLE_VECTOR),

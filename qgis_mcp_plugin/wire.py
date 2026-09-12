@@ -23,8 +23,10 @@ MAX_OUTBOUND_BYTES = 64 * 1024 * 1024  # 64 MB
 # the same name; tests assert the two stay identical. Enforced here (plugin
 # side) as well as in the MCP server so a direct socket client cannot slip a
 # destructive command past the confirmation flow by wrapping it in a batch.
+# `batch` itself is listed: nesting is refused, so no depth to bound.
 BATCH_BLOCKED_COMMANDS = frozenset(
     {
+        "batch",
         "execute_code",
         "remove_layer",
         "delete_features",
