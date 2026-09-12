@@ -18,6 +18,3 @@ extend-select = W503
 # D: flake8-docstrings nags - not part of the QGIS uploader check
 extend-ignore = E501,D
 exclude = .venv,build,dist,__pycache__
-# tests insert src/ into sys.path before importing the client
-per-file-ignores =
-    tests/*: E402

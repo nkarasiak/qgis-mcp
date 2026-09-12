@@ -11,3 +11,7 @@ wheels/
 .venv
 data/
 logs/
+
+# Editor / installer leftovers
+.vscode/
+*.bak*

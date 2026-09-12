@@ -22,6 +22,7 @@ import re
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 REPO_DIR = Path(__file__).resolve().parent
@@ -125,7 +126,13 @@ def _client_registry() -> dict[str, ClientInfo]:
         "claude-code": {"print_only": True, "cli": "claude"},
         "codex": {"print_only": True, "cli": "codex"},
         "opencode": {"path": opencode_cfg, "key": "mcp", "entry_format": "opencode"},
-        "hermes": {"print_only": True, "entry_format": "hermes", "hermes_cfg": hermes_cfg},
+        # Windows only: the steps it prints name %APPDATA% paths that do not
+        # exist elsewhere, so offering it on Linux/macOS only misleads.
+        **(
+            {"hermes": {"print_only": True, "entry_format": "hermes", "hermes_cfg": hermes_cfg}}
+            if sys.platform == "win32"
+            else {}
+        ),
         "kimi": {"path": kimi_cfg, "key": "mcpServers"},
         "gemini": {"path": gemini_cfg, "key": "mcpServers"},
         "qwen": {"path": qwen_cfg, "key": "mcpServers"},
@@ -206,10 +213,6 @@ def _remote_entry() -> dict:
         "command": "uvx",
         "args": ["--from", GITHUB_URL, "qgis-mcp-server"],
     }
-
-
-def _server_entry(client: str, remote: bool) -> dict:
-    return _remote_entry() if remote else _local_entry()
 
 
 def _opencode_server_entry(remote: bool) -> dict:
@@ -397,10 +400,21 @@ def _read_json(path: Path) -> dict:
 
 
 def _backup(path: Path) -> None:
-    if path.exists():
-        bak = path.with_suffix(path.suffix + ".bak")
-        shutil.copy2(path, bak)
-        print(f"  Backup: {bak}")
+    """Copy a config aside under a timestamped `.bak-` suffix.
+
+    Timestamped rather than a fixed `.bak`: a second run would otherwise
+    overwrite the only untouched copy with the one the first run wrote.
+    """
+    if not path.exists():
+        return
+    stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    bak = path.with_suffix(f"{path.suffix}.bak-{stamp}")
+    n = 0
+    while bak.exists():  # two runs inside the same second
+        n += 1
+        bak = path.with_suffix(f"{path.suffix}.bak-{stamp}-{n}")
+    shutil.copy2(path, bak)
+    print(f"  Backup: {bak}")
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -479,13 +493,16 @@ def configure_client(client_name: str, remote: bool) -> None:
     if info.get("entry_format") == "opencode":
         entry = _opencode_server_entry(remote)
     else:
-        entry = _server_entry(client_name, remote)
+        entry = _remote_entry() if remote else _local_entry()
 
     config = _read_json(path)
     if path.exists():
         _backup(path)
 
-    config.setdefault(key, {})
+    # Not setdefault: an existing key holding a list or a string would make the
+    # assignment below raise instead of being replaced.
+    if not isinstance(config.get(key), dict):
+        config[key] = {}
     config[key]["qgis"] = entry
     _write_json(path, config)
     print(f"  Wrote: {path}")
@@ -549,7 +566,7 @@ ALL_CLIENTS = [
     "claude-code",
     "codex",
     "opencode",
-    "hermes",
+    *(["hermes"] if sys.platform == "win32" else []),
     "kimi",
     "gemini",
     "qwen",
@@ -590,7 +607,7 @@ def interactive_mode_choice() -> bool:
 # ── Main ────────────────────────────────────────────────────────────────────
 
 
-def main() -> None:
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Install QGIS MCP plugin and configure MCP clients.",
     )
@@ -614,7 +631,55 @@ def main() -> None:
         action="store_true",
         help="Delete an existing real plugin directory without asking",
     )
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+def _do_plugin(args: argparse.Namespace, qgis_ver: str, force: bool) -> None:
+    if args.uninstall:
+        print("[1/3] Removing QGIS plugin...")
+        uninstall_plugin(args.profile, qgis_ver, force)
+    else:
+        print("[1/3] Installing QGIS plugin...")
+        install_plugin(args.profile, qgis_ver, force)
+
+
+def _do_deps(args: argparse.Namespace) -> None:
+    """Set up the venv, which an uninstall and remote (uvx) mode do not need."""
+    if args.uninstall or args.remote:
+        return
+    print("\n[2/3] Setting up dependencies...")
+    setup_venv()
+
+
+def _do_clients(args: argparse.Namespace, clients: list[str]) -> None:
+    # --clients is honoured with or without --non-interactive; only ask when it is absent.
+    if not clients and not args.non_interactive:
+        clients = interactive_menu()
+    if not clients:
+        return
+
+    # --remote wins outright: prompting would let Enter flip it back to local after
+    # the venv step was already skipped, leaving the config pointing at nothing.
+    remote = args.remote or (
+        interactive_mode_choice() if not args.uninstall and not args.non_interactive else False
+    )
+
+    print(f"\n[3/3] {'Removing' if args.uninstall else 'Configuring'} MCP clients...")
+    for client in clients:
+        print(f"\n  -- {client} --")
+        try:
+            if args.uninstall:
+                unconfigure_client(client)
+            else:
+                configure_client(client, remote)
+        except (ValueError, OSError) as exc:
+            # One unreadable or malformed config must not cost the user every
+            # other client they asked for.
+            print(f"  Skipped {client}: {exc}")
+
+
+def main() -> None:
+    args = _parse_args()
 
     # Validate before anything is touched, so a typo does not cost a symlink or a venv.
     clients = [c.strip() for c in args.clients.split(",")] if args.clients else []
@@ -634,41 +699,10 @@ def main() -> None:
     print(f"QGIS version: {qgis_ver}")
     print()
 
-    # ── Plugin ──
-    if args.uninstall:
-        print("[1/3] Removing QGIS plugin...")
-        uninstall_plugin(args.profile, qgis_ver, force)
-    else:
-        print("[1/3] Installing QGIS plugin...")
-        install_plugin(args.profile, qgis_ver, force)
+    _do_plugin(args, qgis_ver, force)
+    _do_deps(args)
+    _do_clients(args, clients)
 
-    # ── Dependencies (skip for uninstall and remote mode) ──
-    if not args.uninstall and not args.remote:
-        print("\n[2/3] Setting up dependencies...")
-        setup_venv()
-
-    # ── Clients ──
-    # --clients is honoured with or without --non-interactive; only ask when it is absent.
-    if not clients and not args.non_interactive:
-        clients = interactive_menu()
-    # --remote wins outright: prompting would let Enter flip it back to local after
-    # the venv step was already skipped, leaving the config pointing at nothing.
-    remote = args.remote or (
-        interactive_mode_choice()
-        if clients and not args.uninstall and not args.non_interactive
-        else False
-    )
-
-    if clients:
-        print(f"\n[3/3] {'Removing' if args.uninstall else 'Configuring'} MCP clients...")
-        for client in clients:
-            print(f"\n  -- {client} --")
-            if args.uninstall:
-                unconfigure_client(client)
-            else:
-                configure_client(client, remote)
-
-    # ── Summary ──
     print("\n" + "=" * 50)
     if args.uninstall:
         print("Uninstall complete.")

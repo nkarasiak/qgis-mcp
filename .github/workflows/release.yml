@@ -14,6 +14,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The tag is the only source of the release version, so a forgotten bump
+      # would ship a plugin whose metadata.txt disagrees with its own tag.
+      - name: Check the tag matches the declared version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          grep -qxF "version=${VERSION}" qgis_mcp_plugin/metadata.txt \
+            || { echo "::error::qgis_mcp_plugin/metadata.txt is not version=${VERSION}"; exit 1; }
+          grep -qxF "version = \"${VERSION}\"" pyproject.toml \
+            || { echo "::error::pyproject.toml is not version = \"${VERSION}\""; exit 1; }
+
       - name: Build plugin ZIP
         run: |
           VERSION="${GITHUB_REF_NAME#v}"

@@ -1,5 +1,6 @@
 """Unit tests for install.py: JSONC stripping, atomic config writes, config merge."""
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -68,7 +69,7 @@ def test_configure_client_merges_into_existing_config(tmp_path, monkeypatch):
     assert config["other"] == 1
     assert config["mcpServers"]["keepme"] == {"command": "x"}
     assert config["mcpServers"]["qgis"] == install._remote_entry()
-    assert (tmp_path / "cursor.json.bak").exists()
+    assert list(tmp_path.glob("cursor.json.bak-*")), "no backup written"
 
 
 def test_unconfigure_client_drops_empty_key(tmp_path, monkeypatch):
@@ -107,3 +108,54 @@ def test_remove_target_never_asks_for_a_symlink(tmp_path):
     link.symlink_to(tmp_path)
     install._remove_target(link)  # input() would raise OSError under pytest
     assert not link.is_symlink()
+
+
+def test_configure_client_replaces_a_non_dict_key(tmp_path, monkeypatch):
+    path = tmp_path / "zed.json"
+    path.write_text(json.dumps({"context_servers": ["oops"]}), encoding="utf-8")
+    monkeypatch.setattr(
+        install, "_client_registry", lambda: {"zed": {"path": path, "key": "context_servers"}}
+    )
+
+    install.configure_client("zed", remote=True)
+
+    config = json.loads(path.read_text(encoding="utf-8"))
+    assert config["context_servers"] == {"qgis": install._remote_entry()}
+
+
+def test_backup_does_not_overwrite_an_earlier_backup(tmp_path):
+    path = tmp_path / "mcp.json"
+    path.write_text("first", encoding="utf-8")
+    install._backup(path)
+    path.write_text("second", encoding="utf-8")
+    install._backup(path)
+
+    saved = sorted(b.read_text(encoding="utf-8") for b in tmp_path.glob("mcp.json.bak*"))
+    assert saved == ["first", "second"]
+
+
+def test_hermes_is_offered_on_windows_only():
+    expected = sys.platform == "win32"
+    assert ("hermes" in install.ALL_CLIENTS) is expected
+    assert ("hermes" in install._client_registry()) is expected
+
+
+def test_one_malformed_config_does_not_stop_the_next_client(tmp_path, monkeypatch, capsys):
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json at all", encoding="utf-8")
+    good = tmp_path / "good.json"
+    monkeypatch.setattr(
+        install,
+        "_client_registry",
+        lambda: {
+            "broken": {"path": broken, "key": "mcpServers"},
+            "good": {"path": good, "key": "mcpServers"},
+        },
+    )
+    args = argparse.Namespace(uninstall=False, non_interactive=True, remote=True)
+
+    install._do_clients(args, ["broken", "good"])
+
+    config = json.loads(good.read_text(encoding="utf-8"))
+    assert config["mcpServers"]["qgis"] == install._remote_entry()
+    assert "Skipped broken" in capsys.readouterr().out
