@@ -444,3 +444,4 @@ This project is dual-licensed. Each component is distributed under its own licen
 
 - **QGIS Plugin** (`qgis_mcp_plugin/`) - [GNU GPL v2 or later](qgis_mcp_plugin/LICENSE)
 - **MCP Server** (`src/qgis_mcp/`) - [MIT](src/qgis_mcp/LICENSE)
+- claude mcp add qgis -- uvx --refresh-package qgis-mcp --from "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip" qgis-mcp-server
