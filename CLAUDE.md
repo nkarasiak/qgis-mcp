@@ -46,6 +46,8 @@ uv run --no-sync pytest tests/ -v
 | `QGIS_MCP_INSTANCES` | _(unset)_ | Comma-separated `name=port` / `name=host:port` list of QGIS instances addressable from one server (e.g. `default=9876,b=9877`). Unset = a single instance named `default` from `QGIS_MCP_HOST`/`QGIS_MCP_PORT`. Names match `[A-Za-z0-9_-]+`. |
 | `QGIS_MCP_TOKEN` | _(unset)_ | Optional shared secret. When set, the plugin requires a matching `token` on every command (constant-time compare); the client attaches it automatically. Unset = no auth (default, backward-compatible). Required when the plugin binds a non-loopback address - the plugin refuses to start otherwise. |
 | `QGIS_MCP_TRANSPORT` | `stdio` | MCP transport: `stdio` or `streamable-http` |
+| `QGIS_MCP_HTTP_HOST` | `0.0.0.0` | Bind host for the `streamable-http` listener |
+| `QGIS_MCP_HTTP_PORT` | `8000` | Bind port for the `streamable-http` listener |
 | `QGIS_MCP_LOG_FILE` | `~/.local/share/qgis-mcp/server.log` | Log file path (empty to disable file logging) |
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `QGIS_MCP_TOOL_MODE` | `granular` | Tool registration mode: `granular` (118 tools) or `compound` (27 grouped tools) |

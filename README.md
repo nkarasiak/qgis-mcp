@@ -364,6 +364,8 @@ Groups: `system`, `project`, `layer`, `features`, `selection`, `style`, `canvas`
 | `QGIS_MCP_INSTANCES` | _(unset)_ | Address several running QGIS windows from one server. See [Multiple QGIS instances](#multiple-qgis-instances). |
 | `QGIS_MCP_TOKEN` | _(unset)_ | Optional shared secret. When set, the plugin rejects any command without a matching token. See [Authentication](#authentication). |
 | `QGIS_MCP_TRANSPORT` | `stdio` | MCP transport: `stdio` or `streamable-http` |
+| `QGIS_MCP_HTTP_HOST` | `0.0.0.0` | Bind host for the `streamable-http` listener |
+| `QGIS_MCP_HTTP_PORT` | `8000` | Bind port for the `streamable-http` listener |
 | `QGIS_MCP_LOG_FILE` | `~/.local/share/qgis-mcp/server.log` | Log file path (empty to disable) |
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level |
 | `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (118 tools) or `compound` (27 grouped) |
@@ -391,6 +393,23 @@ By default the socket has **no authentication** - it binds to `localhost` only, 
 The token is compared in constant time. When `QGIS_MCP_TOKEN` is unset (the default), behaviour is unchanged. This raises the bar against other local users/processes; a process running as the same user can still read the token from your config, so it is not a sandbox.
 
 One exception: binding the plugin to a **non-loopback address** requires a token. Exposing arbitrary PyQGIS execution to the network without authentication is not a state you should be able to reach by accident, so the plugin refuses to start on such an address until `QGIS_MCP_TOKEN` is set (in QGIS and in the MCP server).
+
+### Streamable HTTP
+
+Run the MCP server on a specific interface and port with environment variables:
+
+```bash
+QGIS_MCP_TRANSPORT=streamable-http \
+QGIS_MCP_HTTP_HOST=0.0.0.0 \
+QGIS_MCP_HTTP_PORT=8000 \
+QGIS_MCP_TOKEN='your-long-random-secret' \
+uv run --no-sync src/qgis_mcp/server.py
+```
+
+`QGIS_MCP_HOST` and `QGIS_MCP_PORT` still refer to the QGIS plugin socket. They do
+not control the HTTP listener. Use `QGIS_MCP_HTTP_HOST=127.0.0.1` when HTTP must
+remain local, or bind to a private interface such as `192.168.1.20` instead of
+`0.0.0.0` when only one network should expose it.
 
 ### Multiple QGIS instances
 

@@ -3283,6 +3283,8 @@ currently reachable - a name that is not configured is rejected with the valid n
 instances (default: unset = a single instance named "default" from QGIS_MCP_HOST/PORT)
 - QGIS_MCP_TOKEN - optional shared secret; when set, must match the plugin's value (default: unset = no auth)
 - QGIS_MCP_TRANSPORT - "stdio" (default) or "streamable-http"
+- QGIS_MCP_HTTP_HOST - HTTP bind host for streamable-http (default: 0.0.0.0)
+- QGIS_MCP_HTTP_PORT - HTTP bind port for streamable-http (default: 8000)
 - QGIS_MCP_TOOL_MODE - "granular" (default, 118 tools) or "compound" (27 grouped tools)
 - QGIS_MCP_LOG_FILE - log file path (default: ~/.local/share/qgis-mcp/server.log)
 - QGIS_MCP_LOG_LEVEL - file log level (default: INFO)
@@ -3385,6 +3387,12 @@ def style_map_prompt(layer_id: str, field: str) -> list[UserMessage]:
 def main():
     transport = os.environ.get("QGIS_MCP_TRANSPORT", "stdio")
     if transport == "streamable-http":
+        http_host = os.environ.get("QGIS_MCP_HTTP_HOST", "0.0.0.0")
+        http_port = _parse_port(
+            os.environ.get("QGIS_MCP_HTTP_PORT", "8000"), "QGIS_MCP_HTTP_PORT"
+        )
+        mcp.settings.host = http_host
+        mcp.settings.port = http_port
         mcp.run(transport="streamable-http")
     else:
         mcp.run()
