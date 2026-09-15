@@ -103,6 +103,7 @@ existing file and leaving a `.bak` beside it).
 | Qwen Code | `qwen` | `~/.qwen/settings.json` | `mcpServers` |
 | GitHub Copilot CLI | `copilot-cli` | `~/.copilot/mcp-config.json` (or `$COPILOT_HOME/mcp-config.json`) | `mcpServers` |
 | LM Studio | `lmstudio` | `~/.lmstudio/mcp.json` | `mcpServers` |
+| Pi | `pi` | `~/.pi/agent/mcp.json` (or `$PI_CODING_AGENT_DIR/mcp.json`) | `mcpServers` |
 | opencode | `opencode` | `~/.config/opencode/config.json` (Windows: `%APPDATA%\opencode\config.json`) | `mcp` (`{"type": "local", "command": [...]}`) |
 
 Claude Code (`claude-code`) and Codex CLI (`codex`) are configured through their own
@@ -156,6 +157,86 @@ Call the QGIS ping tool to verify the connection.
 ```
 
 If QGIS is running with the plugin started you will get `{"pong": true}`.
+
+---
+
+## Pi
+
+[Pi](https://github.com/earendil-works/pi) is a minimal coding agent and deliberately ships
+without an MCP client.  The [`pi-mcp-adapter`](https://github.com/nicobailon/pi-mcp-adapter)
+package adds one, so QGIS MCP reaches Pi the same way it reaches any other client: an MCP
+stdio server in a JSON config file.
+
+### Step 1 - Install the adapter
+
+```bash
+pi install npm:pi-mcp-adapter
+```
+
+Restart Pi afterwards - the adapter loads as a Pi package.
+
+### Step 2 - Register the server
+
+The installer writes this for you:
+
+```bash
+python install.py --non-interactive --clients pi
+```
+
+To do it by hand, add the generic block above to `~/.pi/agent/mcp.json`
+(`$PI_CODING_AGENT_DIR/mcp.json` when `PI_CODING_AGENT_DIR` is set):
+
+```json
+{
+  "mcpServers": {
+    "qgis": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip",
+        "qgis-mcp-server"
+      ]
+    }
+  }
+}
+```
+
+Pi also reads the tool-agnostic global config `~/.config/mcp/mcp.json` and a project-level
+`.mcp.json`.  Entries in `~/.pi/agent/mcp.json` take precedence over both, so it is the file
+to write when the goal is to configure Pi specifically.
+
+### Step 3 - Verify
+
+The adapter exposes one proxy tool instead of 118 schemas and starts servers on demand, so
+QGIS MCP is only spawned on the first QGIS call.  Tools are namespaced with a `qgis_`
+prefix (`qgis_ping`, `qgis_get_layers`, `qgis_render_map`, …):
+
+```
+Call the qgis_ping tool to verify the connection.
+```
+
+You should get `{"pong": true}` when the QGIS plugin server is running.
+
+### Windows: uvx and PATH
+
+The WinGet installer updates `PATH` for *new* processes only, so a Pi window that was
+already open when `uv` was installed keeps the old value and cannot find `uvx`.  Either
+restart Pi, or put the absolute path in `command`:
+
+```json
+{
+  "mcpServers": {
+    "qgis": {
+      "command": "C:\\Users\\<you>\\AppData\\Local\\Microsoft\\WinGet\\Links\\uvx.exe",
+      "args": [
+        "--from",
+        "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip",
+        "qgis-mcp-server"
+      ]
+    }
+  }
+}
+```
 
 ---
 

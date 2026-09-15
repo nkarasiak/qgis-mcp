@@ -3,7 +3,7 @@
 
 Symlinks the QGIS plugin and configures MCP clients (Claude Desktop,
 Cursor, VS Code Copilot, Windsurf, Zed, Claude Code, Codex CLI, opencode,
-Kimi Code CLI, Gemini CLI, Qwen Code, GitHub Copilot CLI, LM Studio).
+Pi, Kimi Code CLI, Gemini CLI, Qwen Code, GitHub Copilot CLI, LM Studio).
 
 Usage:
     python install.py                          # Interactive menu
@@ -115,6 +115,11 @@ def _client_registry() -> dict[str, ClientInfo]:
     qwen_cfg = home / ".qwen" / "settings.json"
     copilot_cfg = Path(os.environ.get("COPILOT_HOME", home / ".copilot")) / "mcp-config.json"
     lmstudio_cfg = home / ".lmstudio" / "mcp.json"
+    # Pi (https://github.com/earendil-works/pi).  Pi itself ships no MCP client:
+    # the pi-mcp-adapter package adds one and reads the standard mcpServers +
+    # command/args block from the Pi agent directory.  PI_CODING_AGENT_DIR
+    # relocates that whole directory, so honour it instead of hardcoding ~/.pi.
+    pi_cfg = Path(os.environ.get("PI_CODING_AGENT_DIR", home / ".pi" / "agent")) / "mcp.json"
 
     return {
         "claude-desktop": {"path": claude_cfg, "key": "mcpServers"},
@@ -131,6 +136,7 @@ def _client_registry() -> dict[str, ClientInfo]:
         "qwen": {"path": qwen_cfg, "key": "mcpServers"},
         "copilot-cli": {"path": copilot_cfg, "key": "mcpServers"},
         "lmstudio": {"path": lmstudio_cfg, "key": "mcpServers"},
+        "pi": {"path": pi_cfg, "key": "mcpServers"},
     }
 
 
@@ -535,6 +541,7 @@ ALL_CLIENTS = [
     "claude-code",
     "codex",
     "opencode",
+    "pi",
     "hermes",
     "kimi",
     "gemini",

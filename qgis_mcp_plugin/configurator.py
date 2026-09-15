@@ -76,6 +76,11 @@ def _client_config_registry(repo_dir):
     qwen_cfg = home / ".qwen" / "settings.json"
     copilot_cfg = Path(os.environ.get("COPILOT_HOME", home / ".copilot")) / "mcp-config.json"
     lmstudio_cfg = home / ".lmstudio" / "mcp.json"
+    # Pi (https://github.com/earendil-works/pi).  Pi itself ships no MCP client:
+    # the pi-mcp-adapter package adds one and reads the standard mcpServers +
+    # command/args block from the Pi agent directory.  PI_CODING_AGENT_DIR
+    # relocates that whole directory, so honour it instead of hardcoding ~/.pi.
+    pi_cfg = Path(os.environ.get("PI_CODING_AGENT_DIR", home / ".pi" / "agent")) / "mcp.json"
 
     return {
         "claude-desktop": {"path": claude_cfg, "key": "mcpServers"},
@@ -91,6 +96,7 @@ def _client_config_registry(repo_dir):
         "qwen": {"path": qwen_cfg, "key": "mcpServers"},
         "copilot-cli": {"path": copilot_cfg, "key": "mcpServers"},
         "lmstudio": {"path": lmstudio_cfg, "key": "mcpServers"},
+        "pi": {"path": pi_cfg, "key": "mcpServers"},
     }
 
 
@@ -209,6 +215,7 @@ class MCPConfiguratorDialog(QDialog):
                 "kimi",
                 "lmstudio",
                 "opencode",
+                "pi",
                 "qwen",
                 "vscode",
                 "windsurf",

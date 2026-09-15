@@ -2,7 +2,7 @@
 
 Connect [QGIS](https://qgis.org/) to [Claude AI](https://claude.ai/) through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), enabling Claude to directly control QGIS - manage layers, edit features, run processing algorithms, render maps, and more.
 
-118 MCP tools covering layer management, feature editing, processing, rendering, styling, layout & atlas authoring, cross-layer SQL, plugin development, and system management. Compatible with QGIS 3.28–4.x. Works with Claude Code, Codex CLI, Gemini CLI, Qwen Code, Kimi Code CLI, GitHub Copilot CLI, opencode, LM Studio, Claude Desktop, Cursor, VS Code, Windsurf, Zed, and more.
+118 MCP tools covering layer management, feature editing, processing, rendering, styling, layout & atlas authoring, cross-layer SQL, plugin development, and system management. Compatible with QGIS 3.28–4.x. Works with Claude Code, Codex CLI, Gemini CLI, Qwen Code, Kimi Code CLI, GitHub Copilot CLI, opencode, Pi, LM Studio, Claude Desktop, Cursor, VS Code, Windsurf, Zed, and more.
 
 ## Architecture
 
@@ -168,6 +168,44 @@ Add to `opencode.json` at your project root:
   }
 }
 ```
+
+</details>
+
+<details>
+<summary>Pi</summary>
+
+Pi core ships no MCP client; the [`pi-mcp-adapter`](https://github.com/nicobailon/pi-mcp-adapter) package adds one.
+
+```bash
+pi install npm:pi-mcp-adapter
+```
+
+Add to `~/.pi/agent/mcp.json` (`$PI_CODING_AGENT_DIR/mcp.json` when that variable is set):
+
+```json
+{
+  "mcpServers": {
+    "qgis": {
+      "command": "uvx",
+      "args": ["--from", "https://github.com/nkarasiak/qgis-mcp/archive/refs/heads/main.zip", "qgis-mcp-server"]
+    }
+  }
+}
+```
+
+The installer writes this block for you with `python install.py --non-interactive --clients pi`. Restart Pi, then verify with:
+
+```
+Call the qgis_ping tool.
+```
+
+Tools are namespaced with a `qgis_` prefix (`qgis_ping`, `qgis_get_layers`, …), and the server is only spawned on the first QGIS call rather than at startup.
+
+> **Windows:** a Pi window that was already open when `uv` was installed keeps the old
+> `PATH` and cannot find `uvx`. Restart Pi, or use the absolute path in `command`
+> (`C:\Users\<you>\AppData\Local\Microsoft\WinGet\Links\uvx.exe`).
+
+For the full guide see [`docs/agent-integration.md`](docs/agent-integration.md).
 
 </details>
 
@@ -426,7 +464,7 @@ python install.py   # symlinks plugin + configures your MCP client
 
 `install.py` options: `--clients claude-desktop,cursor`, `--remote` (uvx instead of uv run), `--profile myprofile`, `--uninstall`.
 
-Known client names: `claude-desktop`, `cursor`, `vscode`, `windsurf`, `zed`, `claude-code`, `codex`, `opencode`, `hermes`, `kimi`, `gemini`, `qwen`, `copilot-cli`, `lmstudio`.
+Known client names: `claude-desktop`, `cursor`, `vscode`, `windsurf`, `zed`, `claude-code`, `codex`, `opencode`, `pi`, `hermes`, `kimi`, `gemini`, `qwen`, `copilot-cli`, `lmstudio`.
 
 > **Windows (Microsoft Store / MSIX Claude Desktop):** `install.py` uses `--directory` instead of `cwd` in generated configs. This is required for Store-installed Claude Desktop, which runs MCP servers in an MSIX sandbox that silently drops `cwd`. If you configure manually, use `uv --directory "/path/to/qgis-mcp" run --no-sync src/qgis_mcp/server.py` - this works on both MSIX and standalone installs. You can identify a Store install when the config file is under `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude\` instead of `%APPDATA%\Claude\`.
 
