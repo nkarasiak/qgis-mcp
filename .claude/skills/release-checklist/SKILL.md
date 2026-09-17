@@ -18,6 +18,22 @@ The QGIS plugin repository rejects uploads if the version already exists, so alw
 
 **Release work lands on `dev` and is tagged there, but `uvx git+...` installs the server from the default branch `main`.** Before tagging a release, fast-forward `dev` → `main` (`git merge --ff-only origin/dev`) so the published server code matches the plugin - bumping only the version string on `main` makes `diagnose` falsely report `ok` while the new tools are missing (see issue #10).
 
+## Writing the GitHub release notes
+
+`.github/workflows/release.yml` passes no `body` to `softprops/action-gh-release`,
+so every release is created with an **empty body**. Filling it is a manual step
+that follows the tag push, not something the Action does:
+
+```bash
+gh release edit v<version> --notes-file <path>
+```
+
+Match v0.14.0 and v0.14.1: short prose, one bold lead per change stating what
+was broken, backticked identifiers, a closing line crediting the reporter and
+the issue. These notes are fuller than the `changelog=` block in
+`qgis_mcp_plugin/metadata.txt`, which the Plugin Manager caps at a few terse
+lines. Write both; they are not the same text.
+
 ## Publishing to plugins.qgis.org
 
 Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds the zip, attaches it to the GitHub release, and then POSTs it to the Hub:
