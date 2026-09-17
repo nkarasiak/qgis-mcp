@@ -20,7 +20,7 @@ about=Socket server plugin that exposes QGIS operations to LLMs through the
     - Non-blocking TCP socket server with length-prefixed framing
     - Toolbar button with port configuration dropdown
 
-version=0.14.0
+version=0.14.1
 author=Nicolas Karasiak
 email=nicart@gmail.com
 tags=mcp,ai,claude,llm,automation,socket,remote
@@ -32,7 +32,11 @@ category=Plugins
 icon=icons/icon.png
 experimental=False
 deprecated=False
-changelog=0.14.0 : execute_processing takes load_results, which loads the
+changelog=0.14.1 : metadata declares supportsQt6 again, so the Qt6 builds
+    of QGIS 3.x load the plugin instead of refusing it as incompatible.
+    The configurator's client list offers Codex (#50). Reported by
+    wcygsw-tech. Thank you.
+    0.14.0 : execute_processing takes load_results, which loads the
     algorithm's outputs into the project and reports them in loaded_layers -
     the only way to keep a TEMPORARY_OUTPUT or memory: result (#46).
     Requested by karmokar1. Thank you.
