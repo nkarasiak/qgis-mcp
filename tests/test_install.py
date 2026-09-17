@@ -1,6 +1,7 @@
 """Unit tests for install.py: JSONC stripping, atomic config writes, config merge."""
 
 import argparse
+import ast
 import json
 import sys
 from pathlib import Path
@@ -159,3 +160,49 @@ def test_one_malformed_config_does_not_stop_the_next_client(tmp_path, monkeypatc
     config = json.loads(good.read_text(encoding="utf-8"))
     assert config["mcpServers"]["qgis"] == install._remote_entry()
     assert "Skipped broken" in capsys.readouterr().out
+
+
+# ── configurator / installer client parity ──────────────────────────────────
+#
+# The plugin ships without install.py, so the QGIS dialog carries its own copy
+# of the client list and the two drift silently.  Issue #50: codex sat in
+# install.py's registry while the dialog's dropdown never offered it.  The
+# dialog needs qgis to import, so these read it as source.
+
+CONFIGURATOR = Path(__file__).resolve().parents[1] / "qgis_mcp_plugin" / "configurator.py"
+
+
+def _configurator_ast():
+    return ast.parse(CONFIGURATOR.read_text(encoding="utf-8"))
+
+
+def _configurator_registry_clients():
+    for node in ast.walk(_configurator_ast()):
+        if isinstance(node, ast.FunctionDef) and node.name == "_client_config_registry":
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Return) and isinstance(sub.value, ast.Dict):
+                    return {k.value for k in sub.value.keys if isinstance(k, ast.Constant)}
+    raise AssertionError("_client_config_registry's return dict not found")
+
+
+def _configurator_dropdown_clients():
+    for node in ast.walk(_configurator_ast()):
+        if not isinstance(node, ast.Call) or getattr(node.func, "attr", None) != "addItems":
+            continue
+        if not node.args or not isinstance(node.args[0], ast.List):
+            continue
+        # Two addItems calls exist; the mode selector's has no client names.
+        names = {e.value for e in node.args[0].elts if isinstance(e, ast.Constant)}
+        if "claude-code" in names:
+            return names
+    raise AssertionError("client_combo.addItems list not found")
+
+
+def test_configurator_dropdown_matches_its_own_registry():
+    assert _configurator_dropdown_clients() == _configurator_registry_clients()
+
+
+def test_configurator_offers_the_same_clients_as_the_installer():
+    # hermes is the one deliberate difference: install.py offers it on Windows
+    # only, the dialog lists it everywhere and prints the manual steps.
+    assert _configurator_dropdown_clients() - {"hermes"} == set(install.ALL_CLIENTS) - {"hermes"}

@@ -111,7 +111,9 @@ def _client_config_registry(repo_dir):
         "windsurf": {"path": windsurf_cfg, "key": "mcpServers"},
         "zed": {"path": zed_cfg, "key": "context_servers"},
         "opencode": {"path": opencode_cfg, "key": "mcp"},
-        "claude-code": {"print_only": True, "entry_format": "claude_cli"},
+        "claude-code": {"print_only": True, "entry_format": "claude_cli", "cli": "claude"},
+        # Codex uses the same `<bin> mcp add` shape but has no scope flag (#50).
+        "codex": {"print_only": True, "entry_format": "claude_cli", "cli": "codex"},
         "hermes": {"print_only": True, "entry_format": "hermes", "hermes_cfg": hermes_cfg},
         "kimi": {"path": kimi_cfg, "key": "mcpServers"},
         "gemini": {"path": gemini_cfg, "key": "mcpServers"},
@@ -232,6 +234,7 @@ class MCPConfiguratorDialog(QDialog):
             [
                 "claude-code",
                 "claude-desktop",
+                "codex",
                 "copilot-cli",
                 "cursor",
                 "gemini",
@@ -526,15 +529,19 @@ class MCPConfiguratorDialog(QDialog):
             return
 
         if info.get("entry_format") == "claude_cli":
+            cli = info.get("cli", "claude")
+            # QGIS is a global tool, so Claude Code installs it at user scope.
+            # Codex has no scope flag and writes its single config either way.
+            scope = " -s user" if cli == "claude" else ""
             if remote:
                 refresh_flag = "--refresh-package qgis-mcp " if refresh else ""
-                cmd = f'claude mcp add qgis -- uvx {refresh_flag}--from "{self.github_url}" qgis-mcp-server'
+                target = f'uvx {refresh_flag}--from "{self.github_url}" qgis-mcp-server'
             else:
                 uv = self._find_uv() or "uv"
-                cmd = (
-                    f"claude mcp add -s user qgis -- "
+                target = (
                     f'"{uv}" --directory "{self.repo_dir}" run --no-sync src/qgis_mcp/server.py'
                 )
+            cmd = f"{cli} mcp add{scope} qgis -- {target}"
             self.preview_label.setText("Run this command in your terminal:")
             self.preview_edit.setPlainText(cmd)
             return
