@@ -2,6 +2,7 @@
 name=QGIS MCP
 qgisMinimumVersion=3.28
 qgisMaximumVersion=4.99
+supportsQt6=True
 description=Connect QGIS to Claude AI via the Model Context Protocol (MCP)
 about=Socket server plugin that exposes QGIS operations to LLMs through the
     Model Context Protocol. Enables Claude to directly control QGIS: manage
