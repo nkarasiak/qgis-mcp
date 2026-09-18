@@ -3392,7 +3392,11 @@ def style_map_prompt(layer_id: str, field: str) -> list[UserMessage]:
 def main():
     transport = os.environ.get("QGIS_MCP_TRANSPORT", "stdio")
     if transport == "streamable-http":
-        mcp.run(transport="streamable-http")
+        http_host = os.environ.get("QGIS_MCP_HTTP_HOST", "127.0.0.1")
+        http_port = _parse_port(
+            os.environ.get("QGIS_MCP_HTTP_PORT", "8000"), "QGIS_MCP_HTTP_PORT"
+        )
+        mcp.run(transport="streamable-http", host=http_host, port=http_port)
     else:
         mcp.run()
 
