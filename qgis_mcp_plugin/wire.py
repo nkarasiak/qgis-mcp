@@ -40,6 +40,67 @@ BATCH_BLOCKED_COMMANDS = frozenset(
     }
 )
 
+# Commands left out of the session journal that export_session replays: the
+# read-only ones (a test pins them to the MCP tools' readOnlyHint), plus the
+# bookkeeping that makes no sense in a replay. `batch` is out because each
+# command in it is journaled on its own; start_processing_job is journaled
+# when the job finishes, as the execute_processing call a replay can wait on.
+UNRECORDED_COMMANDS = frozenset(
+    {
+        # read-only
+        "diagnose",
+        "evaluate_expression",
+        "find_layer",
+        "get_3d_screenshot",
+        "get_active_layer",
+        "get_algorithm_help",
+        "get_bookmarks",
+        "get_canvas_extent",
+        "get_canvas_scale",
+        "get_canvas_screenshot",
+        "get_edit_status",
+        "get_field_statistics",
+        "get_layer_crs",
+        "get_layer_extent",
+        "get_layer_features",
+        "get_layer_labeling",
+        "get_layer_tree",
+        "get_layers",
+        "get_layout_info",
+        "get_map_themes",
+        "get_message_log",
+        "get_plugin_info",
+        "get_processing_job",
+        "get_processing_providers",
+        "get_project_info",
+        "get_project_variables",
+        "get_qgis_info",
+        "get_raster_info",
+        "get_selection",
+        "get_setting",
+        "get_unique_values",
+        "identify_features",
+        "list_checkpoints",
+        "list_connection_tables",
+        "list_connections",
+        "list_layouts",
+        "list_plugins",
+        "list_processing_algorithms",
+        "list_processing_models",
+        "ping",
+        "sample_raster_values",
+        "transform_coordinates",
+        "validate_expression",
+        # bookkeeping
+        "batch",
+        "cancel_processing_job",
+        "create_checkpoint",
+        "export_session",
+        "restore_checkpoint",
+        "start_processing_job",
+    }
+)
+
 # Errnos meaning "socket buffer full, try again later" rather than a real error.
 _WOULD_BLOCK = frozenset({errno.EAGAIN, errno.EWOULDBLOCK})
 

@@ -3,7 +3,7 @@ name: qgis-mcp-tools
 description: Reference for all qgis-mcp MCP tools, resources, and prompts (names, titles, annotations, descriptions). Use when adding/modifying an MCP tool, explaining what a tool does, or checking tool annotations (readOnly/destructive/idempotent).
 ---
 
-# MCP Tools (118 total)
+# MCP Tools (125 total)
 
 | Tool | Title | Annotations | Description |
 |---|---|---|---|
@@ -15,6 +15,10 @@ description: Reference for all qgis-mcp MCP tools, resources, and prompts (names
 | `load_project` | Load Project | destructive | Load a .qgs/.qgz file (replaces the open project) |
 | `create_new_project` | Create New Project | destructive | Create and save new project (replaces the open project) |
 | `save_project` | Save Project | idempotent | Save project to current or new path |
+| `create_checkpoint` | Create Checkpoint | - | Snapshot the whole project (memory layer features included) to a temp .qgz; lists layers with uncommitted edits, which it does not hold |
+| `list_checkpoints` | List Checkpoints | readOnly | Checkpoints: id, name, created, layer_count |
+| `restore_checkpoint` | Restore Checkpoint | destructive | Put the project back as it was at a checkpoint; keeps the file name, rewinds the session journal |
+| `export_session` | Export Session Script | - | The session's mutating commands as a Python script replaying them from the QGIS console (layer ids remapped); `path` writes it, `clear` restarts the journal |
 | `get_layers` | Get Layers | readOnly | List layers with pagination (limit/offset) |
 | `add_vector_layer` | Add Vector Layer | - | Add vector layer (shapefile, GeoJSON, etc.) |
 | `add_raster_layer` | Add Raster Layer | - | Add raster layer (GeoTIFF, etc.) |
@@ -37,6 +41,9 @@ description: Reference for all qgis-mcp MCP tools, resources, and prompts (names
 | `get_canvas_screenshot` | Get Canvas Screenshot | readOnly | Fast canvas widget grab (no re-render), inline image |
 | `get_raster_info` | Get Raster Info | readOnly | Raster band count, stats, nodata, dimensions |
 | `execute_processing` | Execute Processing | - | Run QGIS Processing algorithm (plugin cancels after `timeout` seconds, default 55; socket outlasts it, async+progress+logging). `load_results` adds the outputs to the project and returns them as `loaded_layers` - the only way to keep a `TEMPORARY_OUTPUT`/`memory:` result; vector and raster destinations only, never file or folder ones. `ellipsoid` overrides the project's measurement ellipsoid on the processing context (unknown values refused, `NONE` allowed); a failed run's message carries the reasons the algorithm reported |
+| `start_processing_job` | Start Processing Job | - | Run an algorithm as a background QGIS task with no time limit; returns a job id at once. `TEMPORARY_OUTPUT` needs `load_results`; main-thread-only algorithms refused |
+| `get_processing_job` | Get Processing Job | readOnly | Job state (running+progress, succeeded+result/loaded_layers/warnings, failed+error, cancelled); no id lists all |
+| `cancel_processing_job` | Cancel Processing Job | idempotent | Ask a running job to stop |
 | `list_processing_algorithms` | List Processing Algorithms | readOnly | Search algorithms by keyword/provider |
 | `get_algorithm_help` | Get Algorithm Help | readOnly | Algorithm parameters, outputs, description |
 | `create_processing_model` | Create Processing Model | - | Build a `.model3` workflow from a structured spec (inputs, steps, outputs); always saved into the QGIS user models folder and registered (numeric suffix on name collision); supports `@input` / `$step.OUTPUT` / `=expression` references |
@@ -153,7 +160,7 @@ description: Reference for all qgis-mcp MCP tools, resources, and prompts (names
 - **MCP Logging**: Long-running tools (`execute_processing`, `render_map`, `execute_code`) and notable operations (`load_project`, `reload_plugin`) send `ctx.info()` status messages to the client.
 - **Elicitation**: Destructive tools (`remove_layer`, `delete_features`, `set_setting`, `execute_code`, `rollback_edits`, `execute_connection_sql`, `import_layer_to_connection` when `overwrite`) ask for user confirmation via `ctx.elicit()`. Commands whose tool always elicits are in `BATCH_BLOCKED_COMMANDS` so `batch` cannot bypass the prompt. Fail-open: proceeds if the client doesn't support elicitation (tools are already gated by `ToolAnnotations(destructiveHint=True)`).
 - **Completions**: `layer_id` arguments support auto-completion from available layers.
-- **Tool Titles**: All 118 tools have human-readable `title=` for better display in Claude Desktop / Cursor.
+- **Tool Titles**: All 125 tools have human-readable `title=` for better display in Claude Desktop / Cursor.
 - **Tool Annotations**: `readOnly`, `destructive`, `idempotent` hints via `ToolAnnotations`.
 - **Streamable HTTP**: Set `QGIS_MCP_TRANSPORT=streamable-http` for remote/multi-client support.
 - **Compound Tool Mode**: Set `QGIS_MCP_TOOL_MODE=compound` to replace the granular tools with 27 grouped tools (full parity: every granular command is reachable via an action), reducing schema overhead per LLM turn. Each compound tool takes `action` (str, required) plus `params` (object, optional) holding that action's parameters - e.g. `{"action": "load", "params": {"path": "/data/x.qgz"}}`. Handlers must never use `**kwargs`: FastMCP/pydantic cannot express variadic kwargs in JSON Schema and degrades them to a single required string (issue #24).

@@ -203,3 +203,51 @@ def test_deliberate_command_errors_are_not_rewrapped():
         "these try blocks raise a CommandError and then re-wrap it in their own "
         f"catch-all - add `except CommandError: raise` first: {offenders}"
     )
+
+
+def _commands_of_read_only_tools():
+    """Commands sent by granular tools annotated readOnlyHint=True."""
+    commands = set()
+    for node in ast.walk(ast.parse(_read(os.path.join(MCP_SRC, "server.py")))):
+        if not isinstance(node, ast.AsyncFunctionDef):
+            continue
+        tools = [
+            d
+            for d in node.decorator_list
+            if isinstance(d, ast.Call) and getattr(d.func, "attr", None) == "tool"
+        ]
+        read_only = tools and any(
+            isinstance(k, ast.keyword)
+            and k.arg == "readOnlyHint"
+            and getattr(k.value, "value", None) is True
+            for k in ast.walk(tools[0])
+        )
+        if not read_only:
+            continue
+        for call in ast.walk(node):
+            func = getattr(call, "func", None)
+            if getattr(func, "id", None) in ("_send", "_send_sync") and call.args:
+                commands.add(call.args[0].value)
+    return commands
+
+
+def test_the_journal_leaves_out_exactly_the_read_only_commands():
+    """export_session replays what changed something: the read-only tools' commands.
+
+    Anything else in UNRECORDED_COMMANDS has to be listed here on purpose.
+    """
+    bookkeeping = {
+        "batch",
+        "cancel_processing_job",
+        "create_checkpoint",
+        "export_session",
+        "restore_checkpoint",
+        "start_processing_job",
+    }
+    tree = ast.parse(_read(os.path.join(PLUGIN_DIR, "wire.py")))
+    unrecorded = next(
+        ast.literal_eval(node.value.args[0])
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign) and node.targets[0].id == "UNRECORDED_COMMANDS"
+    )
+    assert unrecorded - bookkeeping == _commands_of_read_only_tools()

@@ -2,7 +2,7 @@
 
 Connect [QGIS](https://qgis.org/) to any AI agent that speaks the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), so the agent drives QGIS directly: manage layers, edit features, run processing algorithms, render maps, and more.
 
-118 MCP tools covering layer management, feature editing, processing, rendering, styling, layout & atlas authoring, cross-layer SQL, plugin development, and system management. Compatible with QGIS 3.28–4.x. Model and client agnostic: any MCP client works, among them Claude Code, Codex CLI, Gemini CLI, Qwen Code, Kimi Code CLI, GitHub Copilot CLI, opencode, LM Studio, Claude Desktop, Cursor, VS Code, Windsurf, Zed, and more.
+125 MCP tools covering layer management, feature editing, processing, rendering, styling, layout & atlas authoring, cross-layer SQL, plugin development, and system management. Compatible with QGIS 3.28–4.x. Model and client agnostic: any MCP client works, among them Claude Code, Codex CLI, Gemini CLI, Qwen Code, Kimi Code CLI, GitHub Copilot CLI, opencode, LM Studio, Claude Desktop, Cursor, VS Code, Windsurf, Zed, and more.
 
 ## Architecture
 
@@ -315,7 +315,7 @@ To auto-update instead, add `--refresh-package qgis-mcp` before `--from` in the 
 
 After updating the plugin, click **Stop / Start** in the QGIS MCP dock widget (or reload via `Plugins` > `QGIS MCP` > `Reload Plugin`) to load the new code without restarting QGIS.
 
-## Tools (118)
+## Tools (125)
 
 | Category | Tools |
 |----------|-------|
@@ -328,7 +328,8 @@ After updating the plugin, click **Stop / Start** in the QGIS MCP dock widget (o
 | **Connections** | `list_connections`, `create_postgresql_connection`, `list_connection_tables`, `add_layer_from_connection`, `import_layer_to_connection`, `execute_connection_sql` |
 | **Rendering** | `render_map`, `get_canvas_screenshot`, `get_3d_screenshot`, `get_canvas_extent`, `set_canvas_extent`, `get_canvas_scale`, `set_canvas_scale` |
 | **Bookmarks & themes** | `add_bookmark`, `get_bookmarks`, `remove_bookmark`, `add_map_theme`, `get_map_themes`, `apply_map_theme`, `remove_map_theme` |
-| **Processing** | `execute_processing`, `execute_processing_batch`, `list_processing_algorithms`, `get_algorithm_help`, `get_processing_providers`, `create_processing_model`, `list_processing_models`, `run_model` |
+| **Processing** | `execute_processing`, `execute_processing_batch`, `list_processing_algorithms`, `get_algorithm_help`, `get_processing_providers`, `create_processing_model`, `list_processing_models`, `run_model`, `start_processing_job`, `get_processing_job`, `cancel_processing_job` |
+| **Session** | `create_checkpoint`, `list_checkpoints`, `restore_checkpoint`, `export_session` |
 | **Analysis** | `raster_calculator`, `zonal_statistics`, `sample_raster_values`, `spatial_join` |
 | **Layouts** | `list_layouts`, `export_layout`, `create_layout`, `add_layout_map`, `add_layout_label`, `add_layout_legend`, `add_layout_scalebar`, `add_layout_picture`, `add_layout_table`, `get_layout_info`, `remove_layout` |
 | **Atlas** | `configure_atlas`, `export_atlas` |
@@ -366,7 +367,7 @@ Groups: `system`, `project`, `layer`, `features`, `selection`, `style`, `canvas`
 | `QGIS_MCP_TRANSPORT` | `stdio` | MCP transport: `stdio` or `streamable-http` |
 | `QGIS_MCP_LOG_FILE` | `~/.local/share/qgis-mcp/server.log` | Log file path (empty to disable) |
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level |
-| `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (118 tools) or `compound` (27 grouped) |
+| `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (125 tools) or `compound` (27 grouped) |
 | `QGIS_MCP_AUTO_CONFIRM` | on | Confirmation elicitation on destructive tools (`execute_code`, `remove_layer`, `delete_features`, ...) is skipped by default: your client already asks before running them, so it was a second prompt for the same call. Set to `0`/`false`/`no`/`off` to elicit anyway - worth it only for a client that runs tools unattended. |
 
 ### Authentication

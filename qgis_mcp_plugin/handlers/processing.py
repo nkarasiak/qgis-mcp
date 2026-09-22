@@ -1,6 +1,7 @@
 """Handlers for the QGIS Processing framework: algorithms, models, analysis."""
 
 import contextlib
+import math
 import os
 import re
 import time
@@ -42,6 +43,7 @@ from ..compat import (
     LAYER_RASTER,
     MSG_INFO,
     MSG_WARNING,
+    PROC_ALG_NO_THREADING,
     PROC_FILE_FOLDER,
     PROC_NUM_INTEGER,
     PROCESSING_OPTIONAL,
@@ -54,7 +56,25 @@ _MAX_TRACKED_ERRORS = 10
 _MAX_ERROR_LENGTH = 500
 
 
-class _ResponsiveFeedback(QgsProcessingFeedback):
+class _CollectingFeedback(QgsProcessingFeedback):
+    """Processing feedback that keeps the errors an algorithm reports."""
+
+    def __init__(self):
+        super().__init__()
+        self.errors = []
+        self.error_count = 0
+
+    def reportError(self, error, fatalError=False):
+        # The GDAL providers shell out and surface a non-zero exit code only
+        # through here, never through the results dict, so keeping the messages
+        # is the only way a failed run can be described to the caller.
+        self.error_count += 1
+        if len(self.errors) < _MAX_TRACKED_ERRORS:
+            self.errors.append(str(error)[:_MAX_ERROR_LENGTH])
+        super().reportError(error, fatalError)
+
+
+class _ResponsiveFeedback(_CollectingFeedback):
     """Processing feedback that keeps the GUI alive and enforces a deadline.
 
     ``processing.run()`` is synchronous and, called straight from the server's
@@ -82,8 +102,6 @@ class _ResponsiveFeedback(QgsProcessingFeedback):
         self._deadline = time.monotonic() + budget_seconds
         self._last_pump = 0.0
         self.timed_out = False
-        self.errors = []
-        self.error_count = 0
 
     def _tick(self):
         now = time.monotonic()
@@ -102,15 +120,6 @@ class _ResponsiveFeedback(QgsProcessingFeedback):
     def pushInfo(self, info):
         self._tick()
         super().pushInfo(info)
-
-    def reportError(self, error, fatalError=False):
-        # The GDAL providers shell out and surface a non-zero exit code only
-        # through here, never through the results dict, so keeping the messages
-        # is the only way a failed run can be described to the caller.
-        self.error_count += 1
-        if len(self.errors) < _MAX_TRACKED_ERRORS:
-            self.errors.append(str(error)[:_MAX_ERROR_LENGTH])
-        super().reportError(error, fatalError)
 
 
 def _error_detail(feedback):
@@ -218,18 +227,25 @@ class ProcessingHandlers:
             stale = self._unchanged_outputs(existing)
         if feedback.timed_out:
             raise CommandError(timeout_message)
+        failure = self._output_failure(algorithm, declared, stale, feedback)
+        if failure:
+            raise CommandError(failure)
+        return result
+
+    def _output_failure(self, algorithm, declared, stale, feedback):
+        """Why a run that reported success did not produce its outputs, or None."""
         missing = self._missing_outputs(algorithm, declared)
         if missing:
-            raise CommandError(
+            return (
                 f"{algorithm} reported success but wrote no {', '.join(missing)}"
                 f"{_error_detail(feedback)}"
             )
         if stale:
-            raise CommandError(
+            return (
                 f"{algorithm} reported success but left {', '.join(stale)} unchanged "
                 f"(a file from before this run){_error_detail(feedback)}"
             )
-        return result
+        return None
 
     @staticmethod
     def _check_ellipsoid(ellipsoid):
@@ -369,6 +385,201 @@ class ProcessingHandlers:
             raise
         except Exception as e:
             raise CommandError(f"Processing error: {e!s}") from e
+
+    # Finished jobs kept for get_processing_job; the oldest are dropped first.
+    _MAX_JOBS = 50
+
+    @command
+    def start_processing_job(
+        self, algorithm, parameters, load_results=False, ellipsoid=None, **kwargs
+    ):
+        """Run *algorithm* as a QGIS background task, with no deadline.
+
+        QgsProcessingAlgRunnerTask is what the Processing toolbox itself runs:
+        the algorithm works on a thread of its own, so QGIS stays usable and
+        this socket keeps answering while it does. Outputs are verified, and
+        loaded if asked, on the main thread when it finishes (_finish_job).
+        """
+        from processing.tools import dataobjects
+        from qgis.core import (
+            QgsProcessingAlgRunnerTask,
+            QgsProcessingOutputLayerDefinition,
+            QgsProcessingParameterFeatureSink,
+            QgsProcessingParameterRasterDestination,
+            QgsProcessingParameterVectorDestination,
+        )
+
+        alg = QgsApplication.processingRegistry().algorithmById(algorithm)
+        if alg is None:
+            raise CommandError(f"Algorithm not found: {algorithm}")
+        if alg.flags() & PROC_ALG_NO_THREADING:
+            raise CommandError(
+                f"{algorithm} must run on QGIS's main thread, so it cannot be a "
+                "background job. Use execute_processing."
+            )
+        feedback = _CollectingFeedback()
+        context = self._ellipsoid_context(ellipsoid, feedback) or dataobjects.createContext(
+            feedback
+        )
+        project = QgsProject.instance()
+        # The destinations processing.runAndLoadResults would load.
+        loadable = (
+            QgsProcessingParameterFeatureSink,
+            QgsProcessingParameterVectorDestination,
+            QgsProcessingParameterRasterDestination,
+        )
+        run_parameters = dict(parameters)
+        for param in alg.destinationParameterDefinitions():
+            value = run_parameters.get(param.name())
+            if value is None and not param.flags() & PROCESSING_OPTIONAL:
+                value = run_parameters[param.name()] = "TEMPORARY_OUTPUT"
+            if not isinstance(value, str):
+                continue
+            if load_results and isinstance(param, loadable):
+                run_parameters[param.name()] = QgsProcessingOutputLayerDefinition(value, project)
+            elif value.startswith(("TEMPORARY_OUTPUT", "memory:")):
+                # execute_processing hands back a discarded-layer hint here; a
+                # job would finish long after anyone could act on it.
+                raise CommandError(
+                    f"{param.name()} is a temporary output, which a background job "
+                    "discards when it ends. Pass load_results=True or an output path."
+                )
+        ok, message = alg.checkParameterValues(run_parameters, context)
+        if not ok:
+            raise CommandError(f"{algorithm}: {message}")
+
+        declared = dict(parameters)
+        task = QgsProcessingAlgRunnerTask(alg, run_parameters, context, feedback)
+        job = {
+            "id": f"job{next(self._job_ids)}",
+            "algorithm": algorithm,
+            "state": "running",
+            "started": time.monotonic(),
+            "parameters": declared,
+            "load_results": load_results,
+            "ellipsoid": ellipsoid,
+            "existing": self._output_files_before(algorithm, declared),
+            # Held for as long as the job is listed: the task only references
+            # the context and feedback, and Python would free them under it.
+            "task": task,
+            "context": context,
+            "feedback": feedback,
+        }
+        task.executed.connect(lambda ok, results: self._finish_job(job, ok, results))
+        self._jobs[job["id"]] = job
+        finished = [jid for jid, j in self._jobs.items() if j["state"] != "running"]
+        for jid in finished[: max(0, len(self._jobs) - self._MAX_JOBS)]:
+            del self._jobs[jid]
+        QgsApplication.taskManager().addTask(task)
+        QgsMessageLog.logMessage(f"Background job {job['id']}: {algorithm}", self.LOG_TAG, MSG_INFO)
+        return self._job_summary(job)
+
+    def _finish_job(self, job, ok, results):
+        """Verify and load a finished job's outputs. Runs on the main thread.
+
+        Called from a Qt signal, where an exception would land in QGIS's Python
+        error dialog, so every failure is recorded on the job instead.
+        """
+        feedback = job["feedback"]
+        algorithm = job["algorithm"]
+        job["elapsed"] = round(time.monotonic() - job["started"], 1)
+        try:
+            stale = self._unchanged_outputs(job["existing"])
+            if not ok:
+                cancelled = feedback.isCanceled()
+                job["state"] = "cancelled" if cancelled else "failed"
+                job["error"] = (
+                    "Cancelled" if cancelled else f"Processing failed{_error_detail(feedback)}"
+                )
+                return
+            failure = self._output_failure(algorithm, job["parameters"], stale, feedback)
+            if failure:
+                job.update(state="failed", error=failure)
+                return
+            loaded = self._load_job_outputs(job["context"], feedback) if job["load_results"] else []
+            job.update(
+                state="succeeded",
+                result={k: _output_value(v) for k, v in results.items()},
+                **_warnings(feedback),
+            )
+            if loaded:
+                job["loaded_layers"] = loaded
+            # Journaled only now, and as the blocking command: a replay has to
+            # finish the run before anything that used its outputs, and the
+            # budget leaves room for a slower machine.
+            params = {
+                "algorithm": algorithm,
+                "parameters": job["parameters"],
+                "timeout": max(self._PROCESSING_TIMEOUT, math.ceil(job["elapsed"] * 2)),
+            }
+            if job["load_results"]:
+                params["load_results"] = True
+            if job["ellipsoid"] is not None:
+                params["ellipsoid"] = job["ellipsoid"]
+            self._record("execute_processing", params, [(lyr["id"], lyr["name"]) for lyr in loaded])
+        except Exception as e:
+            job.update(state="failed", error=f"Could not finish the job: {e!s}")
+            QgsMessageLog.logMessage(
+                f"Background job {job['id']} failed to finish: {e!r}", self.LOG_TAG, MSG_WARNING
+            )
+
+    @staticmethod
+    def _load_job_outputs(context, feedback):
+        """Move a job's layer outputs into the project, as runAndLoadResults does."""
+        from qgis.core import QgsProcessingUtils
+
+        project = QgsProject.instance()
+        store = context.temporaryLayerStore()
+        loaded = []
+        for layer_ref, details in context.layersToLoadOnCompletion().items():
+            # A file output is opened here; a temporary one is already in the store.
+            layer = QgsProcessingUtils.mapLayerFromString(layer_ref, context)
+            if layer is None:
+                continue
+            if store.mapLayer(layer.id()) is not None:
+                store.takeMapLayer(layer)
+            details.setOutputLayerName(layer)
+            project.addMapLayer(layer)
+            if details.postProcessor() is not None:
+                details.postProcessor().postProcessLayer(layer, context, feedback)
+            loaded.append({"id": layer.id(), "name": layer.name()})
+        return loaded
+
+    @staticmethod
+    def _job_summary(job):
+        summary = {key: job[key] for key in ("id", "algorithm", "state")}
+        if job["state"] == "running":
+            summary["progress"] = round(job["feedback"].progress(), 1)
+            summary["elapsed"] = round(time.monotonic() - job["started"], 1)
+        for key in ("elapsed", "result", "error", "loaded_layers", "warnings", "warning_count"):
+            if key in job:
+                summary[key] = job[key]
+        return summary
+
+    def _job(self, job_id):
+        job = self._jobs.get(job_id)
+        if job is None:
+            known = ", ".join(self._jobs) or "none"
+            raise CommandError(f"No processing job {job_id!r}. Known jobs: {known}")
+        return job
+
+    @command
+    def get_processing_job(self, job_id=None, **kwargs):
+        """One job's state and, once finished, its result or error; every job without an id."""
+        if job_id is None:
+            jobs = [self._job_summary(job) for job in self._jobs.values()]
+            return {"jobs": jobs, "count": len(jobs)}
+        return self._job_summary(self._job(job_id))
+
+    @command
+    def cancel_processing_job(self, job_id, **kwargs):
+        """Ask a running job to stop; its state turns 'cancelled' once QGIS has stopped it."""
+        job = self._job(job_id)
+        if job["state"] == "running":
+            # The task is QGIS's, deleted once finished; state says it is not yet.
+            with contextlib.suppress(RuntimeError):
+                job["task"].cancel()
+        return self._job_summary(job)
 
     @command
     def list_processing_algorithms(self, search=None, provider=None, **kwargs):

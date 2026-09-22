@@ -33,7 +33,9 @@ category=Plugins
 icon=icons/icon.png
 experimental=False
 deprecated=False
-changelog=0.15.0 : Fewer silent errors (argleton.org audit): failed processing runs
+changelog=0.15.0 : New: background processing jobs with no time limit, project
+    checkpoints to undo a run of changes, and export_session to replay a session.
+    Fewer silent errors (argleton.org audit): failed processing runs
     report QGIS's reason, execute_processing takes an ellipsoid, and capped,
     refused or partial results say so instead of passing as success.
     identify, sampling and add_features take an optional crs.

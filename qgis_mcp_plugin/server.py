@@ -9,17 +9,20 @@ thread touches the PyQGIS API, which is not thread-safe.
 """
 
 import contextlib
+import copy
 import inspect
+import itertools
 import json
 import math
 import os
 import secrets
+import shutil
 import socket
 import traceback
 from collections import deque
 from typing import ClassVar
 
-from qgis.core import QgsApplication, QgsMessageLog
+from qgis.core import QgsApplication, QgsMessageLog, QgsProject
 from qgis.PyQt.QtCore import QObject, QTimer
 
 from .compat import MSG_CRITICAL, MSG_INFO, MSG_WARNING
@@ -41,6 +44,7 @@ from .handlers import (
     LayoutHandlers,
     ProcessingHandlers,
     ProjectHandlers,
+    SessionHandlers,
     StyleHandlers,
     SystemHandlers,
 )
@@ -50,6 +54,7 @@ from .wire import (
     HEADER_STRUCT,
     MAX_MESSAGE_SIZE,
     RECV_CHUNK_SIZE,
+    UNRECORDED_COMMANDS,
     OutboundBuffer,
     OutboundOverflow,
     frame,
@@ -87,6 +92,7 @@ class QgisMCPServer(
     ProcessingHandlers,
     LayoutHandlers,
     ConnectionHandlers,
+    SessionHandlers,
     HandlerBase,
     QObject,
 ):
@@ -107,6 +113,9 @@ class QgisMCPServer(
     # Consecutive rejected tokens tolerated on one connection before it is
     # dropped, so a guessing peer has to pay for a new connection each time.
     MAX_AUTH_FAILURES: ClassVar[int] = 5
+
+    # Commands kept for export_session; the oldest are dropped past this.
+    MAX_JOURNAL: ClassVar[int] = 1000
 
     def __init__(
         self,
@@ -151,6 +160,16 @@ class QgisMCPServer(
         # guard a second client's command could execute *inside* the first
         # one's handler, interleaving edit sessions and project state.
         self._in_dispatch = False
+        # Background processing jobs by id (ProcessingHandlers).
+        self._jobs = {}
+        self._job_ids = itertools.count(1)
+        # Every command that changed something, for export_session (_record).
+        self._journal = deque(maxlen=self.MAX_JOURNAL)
+        self._journal_seq = itertools.count(1)
+        # Project snapshots by id (SessionHandlers), written under one temp dir.
+        self._checkpoints = {}
+        self._checkpoint_ids = itertools.count(1)
+        self._checkpoint_dir = None
 
     def _notify_clients_changed(self):
         """Report the active client count to the UI (badge on the toolbar icon)."""
@@ -333,6 +352,10 @@ class QgisMCPServer(
         self.outbound.clear()
         self._auth_failures.clear()
         self._notify_clients_changed()
+        if self._checkpoint_dir:
+            shutil.rmtree(self._checkpoint_dir, ignore_errors=True)
+            self._checkpoint_dir = None
+            self._checkpoints.clear()
 
         self.socket = None
         QgsMessageLog.logMessage("QGIS MCP server stopped", self.LOG_TAG, MSG_INFO)
@@ -619,9 +642,20 @@ class QgisMCPServer(
                     )
                     return {"status": "error", "message": message}
 
+            # Copied before the call: handlers may rewrite what they are given
+            # (runAndLoadResults turns output paths into layer definitions).
+            record = cmd_type not in UNRECORDED_COMMANDS
+            if record:
+                recorded = copy.deepcopy(params)
+                layers_before = set(QgsProject.instance().mapLayers())
+
             try:
                 QgsMessageLog.logMessage(f"Executing: {cmd_type}", self.LOG_TAG, MSG_INFO)
-                return {"status": "success", "result": handler(**params)}
+                result = handler(**params)
+                # execute_code reports a script that raised as a success.
+                if record and not (isinstance(result, dict) and result.get("executed") is False):
+                    self._record(cmd_type, recorded, self._layers_added_since(layers_before))
+                return {"status": "success", "result": result}
             except CommandError as e:
                 # Expected failure the caller can act on - message only, no
                 # traceback: it would bury real defects in log noise.
@@ -646,6 +680,29 @@ class QgisMCPServer(
                 MSG_CRITICAL,
             )
             return {"status": "error", "message": str(e), "internal": True}
+
+    def _record(self, cmd_type, params, creates=()):
+        """Journal a command that succeeded, for export_session to replay.
+
+        *creates* is the ``(layer id, name)`` of each layer it added: ids are
+        generated anew on every run, so the replay maps them onto the ones it
+        gets by name.
+        """
+        self._journal.append(
+            {
+                "seq": next(self._journal_seq),
+                "command": cmd_type,
+                "params": params,
+                "creates": list(creates),
+            }
+        )
+
+    @staticmethod
+    def _layers_added_since(before):
+        project = QgsProject.instance()
+        return [
+            (lid, layer.name()) for lid, layer in project.mapLayers().items() if lid not in before
+        ]
 
     @command
     def batch(self, commands, **kwargs):

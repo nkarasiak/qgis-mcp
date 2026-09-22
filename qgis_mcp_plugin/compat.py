@@ -24,6 +24,7 @@ from qgis.core import (
     QgsLayoutExporter,
     QgsMapLayer,
     QgsMessageLog,
+    QgsProcessingAlgorithm,
     QgsProcessingParameterDefinition,
     QgsProcessingParameterFile,
     QgsProcessingParameterNumber,
@@ -99,6 +100,10 @@ LAYOUT_SUCCESS = _enum((Qgis, "LayoutResult.Success"), (QgsLayoutExporter, "Succ
 PROCESSING_OPTIONAL = _enum(
     (Qgis, "ProcessingParameterFlag.Optional"),
     (QgsProcessingParameterDefinition, "FlagOptional"),
+)
+PROC_ALG_NO_THREADING = _enum(
+    (Qgis, "ProcessingAlgorithmFlag.NoThreading"),
+    (QgsProcessingAlgorithm, "FlagNoThreading"),
 )
 
 # ── Aggregate functions ──────────────────────────────────────────────

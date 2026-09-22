@@ -211,25 +211,52 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
     async def project_set_crs(ctx, kwargs):
         return make_project_response(await _send("set_project_crs", {"crs": kwargs["crs"]}))
 
+    async def project_create_checkpoint(ctx, kwargs):
+        payload = {"name": kwargs["name"]} if kwargs.get("name") else {}
+        return await _send("create_checkpoint", payload, timeout=TIMEOUT_LONG)
+
+    async def project_export_session(ctx, kwargs):
+        payload = {}
+        if kwargs.get("path"):
+            payload["path"] = kwargs["path"]
+        if kwargs.get("clear"):
+            payload["clear"] = True
+        return await _send("export_session", payload)
+
     project_actions: dict[str, _Action] = {
         "get_info": lambda ctx, kwargs: _send("get_project_info"),
         "load": project_load,
         "create": project_create,
         "save": project_save,
         "set_crs": project_set_crs,
+        "create_checkpoint": project_create_checkpoint,
+        "list_checkpoints": lambda ctx, kwargs: _send("list_checkpoints"),
+        "restore_checkpoint": lambda ctx, kwargs: _send(
+            "restore_checkpoint", {"checkpoint_id": kwargs["checkpoint_id"]}, timeout=TIMEOUT_LONG
+        ),
+        "export_session": project_export_session,
     }
 
     @mcp.tool(
         title="Project",
         description=(
             "Project management.\n"
-            "Actions: get_info, load, create, save, set_crs\n"
+            "Actions: get_info, load, create, save, set_crs, create_checkpoint, "
+            "list_checkpoints, restore_checkpoint, export_session\n"
             "- get_info: no params\n"
             "- load: path (str)\n"
             "- create: path (str)\n"
             "- save: path (str, optional)\n"
             "- set_crs: crs (str)\n"
-            "load and create replace the open project; unsaved changes to it are lost."
+            "- create_checkpoint: name (str, optional) - snapshot the whole project, memory "
+            "layer features included, to undo a sequence of changes; uncommitted edits and "
+            "file/database data are not held\n"
+            "- list_checkpoints: no params\n"
+            "- restore_checkpoint: checkpoint_id (str) - discard every change since it\n"
+            "- export_session: path (str, optional), clear (bool, optional) - the commands "
+            "that changed something, as a Python script replaying them from the QGIS console\n"
+            "load, create and restore_checkpoint replace the open project; unsaved changes "
+            "to it are lost."
             f"{_PARAMS_NOTE}"
         ),
         annotations=ToolAnnotations(destructiveHint=True),
@@ -1000,6 +1027,14 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
                 payload[key] = kwargs[key]
         return await _send("create_processing_model", payload, timeout=TIMEOUT_LONG)
 
+    async def processing_start_job(ctx, kwargs):
+        payload = {"algorithm": kwargs["algorithm"], "parameters": kwargs["parameters"]}
+        if kwargs.get("load_results"):
+            payload["load_results"] = True
+        if kwargs.get("ellipsoid") is not None:
+            payload["ellipsoid"] = kwargs["ellipsoid"]
+        return await _send("start_processing_job", payload)
+
     processing_actions: dict[str, _Action] = {
         "execute": processing_execute,
         "execute_batch": processing_execute_batch,
@@ -1011,6 +1046,13 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
             "get_algorithm_help", {"algorithm_id": kwargs["algorithm_id"]}
         ),
         "create_model": processing_create_model,
+        "start_job": processing_start_job,
+        "get_job": lambda ctx, kwargs: _send(
+            "get_processing_job", {"job_id": kwargs["job_id"]} if kwargs.get("job_id") else {}
+        ),
+        "cancel_job": lambda ctx, kwargs: _send(
+            "cancel_processing_job", {"job_id": kwargs["job_id"]}
+        ),
     }
 
     @mcp.tool(
@@ -1018,7 +1060,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
         description=(
             "QGIS Processing framework.\n"
             "Actions: execute, execute_batch, list_algorithms, get_help, get_providers, "
-            "create_model, list_models, run_model\n"
+            "create_model, list_models, run_model, start_job, get_job, cancel_job\n"
             "- execute: algorithm (str), parameters (dict), timeout (int, optional, seconds "
             "before the algorithm is cancelled, default 55), load_results (bool, optional) - "
             "add the outputs to the project and list them in 'loaded_layers'; the only way to "
@@ -1046,7 +1088,14 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
             "    outputs: [{name, from_step, from_output, description?}]; omit to expose the last step's "
             "OUTPUT as 'Result'.\n"
             "    The model is saved into the QGIS user models folder and registered; a numeric suffix is "
-            "appended to the name on collision."
+            "appended to the name on collision.\n"
+            "- start_job: algorithm (str), parameters (dict), load_results (bool, optional), "
+            "ellipsoid (str, optional) - run as a background task with no time limit and return "
+            "a job id at once; use it for anything that may take more than a minute. A "
+            "'TEMPORARY_OUTPUT' output needs load_results\n"
+            "- get_job: job_id (str, optional) - omit it to list every job. The state is "
+            "running with progress, succeeded with result, failed with error, or cancelled\n"
+            "- cancel_job: job_id (str)"
             f"{_PARAMS_NOTE}"
         ),
     )

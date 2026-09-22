@@ -754,6 +754,73 @@ async def save_project(ctx: Context, path: str | None = None, instance: str | No
     return await _send("save_project", params, instance=instance)
 
 
+# --- Session: checkpoints and replay ---
+
+
+@mcp.tool(
+    title="Create Checkpoint",
+    description="Snapshot the whole project (layers, styles, labels, layouts, map themes, "
+    "variables, and the features of memory layers) so restore_checkpoint can return to it. "
+    "Take one before a sequence of changes you may want to undo. The user's project file is "
+    "not touched. Data in files and databases is not copied, and uncommitted edits are "
+    "listed under 'uncommitted_edits' because the checkpoint does not hold them. The last 20 "
+    "are kept, until the plugin's server stops.",
+)
+async def create_checkpoint(
+    ctx: Context, name: str | None = None, instance: str | None = None
+) -> dict:
+    params = {"name": name} if name else {}
+    return await _send("create_checkpoint", params, timeout=TIMEOUT_LONG, instance=instance)
+
+
+@mcp.tool(
+    title="List Checkpoints",
+    annotations=ToolAnnotations(readOnlyHint=True),
+    description="List the project checkpoints: id, name, creation time, layer count.",
+    structured_output=True,
+)
+async def list_checkpoints(ctx: Context, instance: str | None = None) -> dict[str, Any]:
+    return await _send("list_checkpoints", instance=instance)
+
+
+@mcp.tool(
+    title="Restore Checkpoint",
+    annotations=ToolAnnotations(destructiveHint=True),
+    description="Put the project back as it was at a checkpoint: every change since, and any "
+    "uncommitted edit, is discarded. The project keeps its file name and is left unsaved. "
+    "export_session afterwards replays the restored state, not the undone steps.",
+)
+async def restore_checkpoint(ctx: Context, checkpoint_id: str, instance: str | None = None) -> dict:
+    return await _send(
+        "restore_checkpoint",
+        {"checkpoint_id": checkpoint_id},
+        timeout=TIMEOUT_LONG,
+        instance=instance,
+    )
+
+
+@mcp.tool(
+    title="Export Session Script",
+    description="Every command that changed something in this QGIS since the plugin's server "
+    "started (read-only calls left out), as a Python script that replays them from the QGIS "
+    "Python console. Layer ids are remapped on replay. Returns the script, or writes it to "
+    "'path' and returns the path. clear: start a new journal afterwards. Commands from every "
+    "connected client are in it; a restore_checkpoint rewinds it.",
+)
+async def export_session(
+    ctx: Context,
+    path: str | None = None,
+    clear: bool = False,
+    instance: str | None = None,
+) -> dict:
+    params: dict[str, Any] = {}
+    if path:
+        params["path"] = path
+    if clear:
+        params["clear"] = True
+    return await _send("export_session", params, instance=instance)
+
+
 # --- Layer Management ---
 
 
@@ -1344,7 +1411,7 @@ async def get_raster_info(
     description="Execute a QGIS Processing algorithm. Use get_algorithm_help to discover parameters. "
     "Layer params accept layer IDs or file paths. Set OUTPUT to 'memory:' for temp layers. "
     "timeout: seconds before the algorithm is cancelled (default 55). Raise it for heavy "
-    "raster work, but note that long jobs hold the QGIS session for their duration. "
+    "raster work, or use start_processing_job, which runs in the background with no limit. "
     "load_results: add the algorithm's outputs to the project and list them in "
     "'loaded_layers' (the processing.runAndLoadResults() behaviour). This is the only way "
     "to keep a 'TEMPORARY_OUTPUT'/'memory:' result, which is otherwise discarded when the "
@@ -1384,6 +1451,57 @@ async def execute_processing(
     )
     await ctx.report_progress(100, 100)
     return result
+
+
+@mcp.tool(
+    title="Start Processing Job",
+    description="Run a Processing algorithm as a QGIS background task, with no time limit, "
+    "and return its job id at once. QGIS stays usable while it runs. Poll "
+    "get_processing_job for progress and the result; cancel_processing_job stops it. Use it "
+    "instead of execute_processing for anything that may take more than a minute. Same "
+    "parameters as execute_processing. A 'TEMPORARY_OUTPUT'/'memory:' output needs "
+    "load_results=True, since the job ends after this call returns. Algorithms that must "
+    "run on QGIS's main thread are refused: use execute_processing for those.",
+)
+async def start_processing_job(
+    ctx: Context,
+    algorithm: str,
+    parameters: dict,
+    load_results: bool = False,
+    ellipsoid: str | None = None,
+    instance: str | None = None,
+) -> dict:
+    params: dict[str, Any] = {"algorithm": algorithm, "parameters": parameters}
+    if load_results:
+        params["load_results"] = True
+    if ellipsoid is not None:
+        params["ellipsoid"] = ellipsoid
+    return await _send("start_processing_job", params, instance=instance)
+
+
+@mcp.tool(
+    title="Get Processing Job",
+    annotations=ToolAnnotations(readOnlyHint=True),
+    description="State of a background job: 'running' (with progress 0-100), 'succeeded' "
+    "(with result, loaded_layers and warnings, as execute_processing returns them), 'failed' "
+    "(with error) or 'cancelled'. Omit job_id to list every job.",
+    structured_output=True,
+)
+async def get_processing_job(
+    ctx: Context, job_id: str | None = None, instance: str | None = None
+) -> dict[str, Any]:
+    params = {"job_id": job_id} if job_id else {}
+    return await _send("get_processing_job", params, instance=instance)
+
+
+@mcp.tool(
+    title="Cancel Processing Job",
+    annotations=ToolAnnotations(idempotentHint=True),
+    description="Ask a running background job to stop. Its state turns 'cancelled' once QGIS "
+    "has stopped it; outputs it already wrote stay on disk.",
+)
+async def cancel_processing_job(ctx: Context, job_id: str, instance: str | None = None) -> dict:
+    return await _send("cancel_processing_job", {"job_id": job_id}, instance=instance)
 
 
 @mcp.tool(
@@ -3263,7 +3381,7 @@ def llms_context_resource() -> str:
 
 ## Overview
 QGIS MCP connects QGIS Desktop to LLMs via the Model Context Protocol.
-118 tools for project management, layer operations, feature editing, styling, processing, and more.
+125 tools for project management, layer operations, feature editing, styling, processing, and more.
 
 ## Quick Start
 1. `ping` - verify connectivity
@@ -3289,6 +3407,8 @@ QGIS MCP connects QGIS Desktop to LLMs via the Model Context Protocol.
 - **Canvas**: get_canvas_extent, set_canvas_extent, get_canvas_screenshot, get_canvas_scale, set_canvas_scale
 - **Raster**: get_raster_info
 - **Processing**: execute_processing, list_processing_algorithms, get_algorithm_help, create_processing_model
+- **Background jobs**: start_processing_job, get_processing_job, cancel_processing_job (no time limit, QGIS stays usable)
+- **Session**: create_checkpoint, list_checkpoints, restore_checkpoint (undo a whole sequence of changes), export_session (replayable PyQGIS script)
 - **Rendering**: render_map (re-render to image), get_canvas_screenshot (fast grab)
 - **Code**: execute_code (arbitrary PyQGIS)
 - **Batch**: batch_commands (multiple commands in one round-trip)
@@ -3348,7 +3468,7 @@ currently reachable - a name that is not configured is rejected with the valid n
 instances (default: unset = a single instance named "default" from QGIS_MCP_HOST/PORT)
 - QGIS_MCP_TOKEN - optional shared secret; when set, must match the plugin's value (default: unset = no auth)
 - QGIS_MCP_TRANSPORT - "stdio" (default) or "streamable-http"
-- QGIS_MCP_TOOL_MODE - "granular" (default, 118 tools) or "compound" (27 grouped tools)
+- QGIS_MCP_TOOL_MODE - "granular" (default, 125 tools) or "compound" (27 grouped tools)
 - QGIS_MCP_LOG_FILE - log file path (default: ~/.local/share/qgis-mcp/server.log)
 - QGIS_MCP_LOG_LEVEL - file log level (default: INFO)
 """

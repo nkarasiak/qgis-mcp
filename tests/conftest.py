@@ -263,7 +263,7 @@ def cities_layer(client, test_project):
 
 # The registry is the source of truth; test_plugin_structure pins the plugin
 # side of the parity, so these two numbers only move on a deliberate change.
-TOOL_COUNT = 118
+TOOL_COUNT = 125
 COMPOUND_TOOL_COUNT = 27
 
 # The resources that read through _send_sync, and therefore land on the

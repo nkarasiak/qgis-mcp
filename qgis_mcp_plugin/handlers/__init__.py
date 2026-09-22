@@ -12,6 +12,7 @@ from .layers import LayerHandlers
 from .layout import LayoutHandlers
 from .processing import ProcessingHandlers
 from .project import ProjectHandlers
+from .session import SessionHandlers
 from .style import StyleHandlers
 from .system import SystemHandlers
 
@@ -24,6 +25,7 @@ __all__ = [
     "LayoutHandlers",
     "ProcessingHandlers",
     "ProjectHandlers",
+    "SessionHandlers",
     "StyleHandlers",
     "SystemHandlers",
 ]
