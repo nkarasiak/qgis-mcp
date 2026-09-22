@@ -487,3 +487,30 @@ def test_a_layer_output_in_the_project_is_just_its_id(outputs):
     out = server.execute_processing("native:buffer", {"INPUT": "c", "OUTPUT": "TEMPORARY_OUTPUT"})
 
     assert out["result"]["OUTPUT"] == {"id": "buf_1", "name": "Buffered"}
+
+
+def test_spatial_join_reports_method_and_how_much_joined(plugin_handlers, monkeypatch):
+    """First match drops extra matches; the count and method make that visible."""
+    from unittest.mock import MagicMock
+
+    layer = MagicMock()
+    layer.type.return_value = plugin_handlers.base.LAYER_VECTOR
+    layer.featureCount.return_value = 3
+    qgs_project = MagicMock()
+    qgs_project.instance.return_value.mapLayer.return_value = layer
+    monkeypatch.setattr(plugin_handlers.base, "QgsProject", qgs_project)
+
+    class Server(plugin_handlers.processing.ProcessingHandlers, plugin_handlers.base.HandlerBase):
+        LOG_TAG = "test"
+
+        def _run_alg(self, algorithm, parameters, *args, **kwargs):
+            return {"OUTPUT": "/tmp/joined.gpkg", "JOINED_COUNT": 2}
+
+    result = Server().spatial_join("t", "j", output_path="/tmp/joined.gpkg")
+
+    assert result == {
+        "output": "/tmp/joined.gpkg",
+        "method": "first_match",
+        "target_features": 3,
+        "joined_count": 2,
+    }

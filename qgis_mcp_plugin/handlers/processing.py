@@ -1073,7 +1073,21 @@ class ProcessingHandlers:
             "OUTPUT": output_path or "memory:joined",
         }
         r = self._run_alg("native:joinattributesbylocation", params)
-        return self._register_output(r["OUTPUT"], "joined")
+        response = self._register_output(r["OUTPUT"], "joined")
+        # Without these the caller cannot tell how much joined, or that first
+        # match (the default) kept one arbitrary match and dropped the rest.
+        response.update(
+            {
+                "method": self._JOIN_METHODS.get(int(method), str(method)),
+                "target_features": target.featureCount(),
+                # One-to-many counts joined pairs; the others count target
+                # features that found a match.
+                "joined_count": r.get("JOINED_COUNT"),
+            }
+        )
+        return response
+
+    _JOIN_METHODS: ClassVar[dict] = {0: "one_to_many", 1: "first_match", 2: "largest_overlap"}
 
     def _register_output(self, out, default_name):
         """Add a processing output layer to the project, or report a file path."""
