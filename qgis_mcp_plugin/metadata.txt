@@ -33,13 +33,7 @@ category=Plugins
 icon=icons/icon.png
 experimental=False
 deprecated=False
-changelog=0.15.0 : New: background processing jobs with no time limit, project
-    checkpoints to undo a run of changes, and export_session to replay a session.
-    Fewer silent errors (argleton.org audit): failed processing runs
-    report QGIS's reason, execute_processing takes an ellipsoid, and capped,
-    refused or partial results say so instead of passing as success.
-    identify, sampling and add_features take an optional crs.
-    spatial_join and other wrappers report features QGIS skipped, e.g.
-    invalid geometries (#52). Reported by artbotterell. Thank you.
-    apply_style_qml takes inline QML and rolls back a style QGIS misreads (#42).
+changelog=0.15.0 : Background processing jobs with no time limit, project checkpoints
+    to undo a run of changes, export_session to replay a session as a script.
+    Fewer silent errors: failed or partial results say why (#52). Inline QML (#42).
     Earlier releases: https://github.com/nkarasiak/qgis-mcp/releases
