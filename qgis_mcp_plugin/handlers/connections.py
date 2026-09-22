@@ -15,6 +15,7 @@ from qgis.core import (
     QgsCredentials,
     QgsDataSourceUri,
     QgsProject,
+    QgsProviderConnectionException,
     QgsProviderRegistry,
     QgsVectorLayer,
     QgsVectorLayerExporter,
@@ -405,12 +406,23 @@ class ConnectionHandlers:
         conn = self._connection(provider, connection)
         if not conn.capabilities() & CONN_CAP_EXECUTE_SQL:
             raise CommandError(f"Provider {provider!r} cannot execute SQL")
-        rows = conn.executeSql(sql) or []
+        # execSql rather than executeSql: it also names the columns, which bare
+        # row lists left to positional guessing (a SELECT * cannot be read).
+        try:
+            result = conn.execSql(sql)
+        except QgsProviderConnectionException as e:
+            # The database's own message, as a user error rather than a plugin bug.
+            raise CommandError(f"SQL failed: {e}") from e
         limit = int(limit)
-        truncated = limit >= 0 and len(rows) > limit
-        if truncated:
-            rows = rows[:limit]
+        rows = []
+        truncated = False
+        while result.hasNextRow():
+            if 0 <= limit <= len(rows):
+                truncated = True
+                break
+            rows.append(result.nextRow())
         return {
+            "columns": list(result.columns()),
             "rows": [[self._convert_attribute(v) for v in row] for row in rows],
             "count": len(rows),
             "truncated": truncated,

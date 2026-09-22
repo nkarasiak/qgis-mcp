@@ -58,26 +58,48 @@ class LayerHandlers:
         QgsMessageLog.logMessage(f"{kind} layer added: {layer.name()}", self.LOG_TAG, MSG_INFO)
         return layer
 
+    @staticmethod
+    def _with_crs(layer, response):
+        """Add the layer's CRS to *response*, warning when it has none.
+
+        A file without a .prj loads valid with no CRS, and depending on the
+        user's settings QGIS may then assume the project CRS - every later
+        coordinate and measurement rests on that guess.
+        """
+        response["crs"] = layer.crs().authid()
+        if layer.isSpatial() and not layer.crs().isValid():
+            response["warning"] = (
+                "The layer has no CRS (missing .prj or georeferencing); set one with "
+                "set_layer_crs before trusting coordinates or measurements"
+            )
+        return response
+
     @command
     def add_vector_layer(self, path, name=None, provider="ogr", **kwargs):
         layer = self._add_layer(path, name, provider, QgsVectorLayer, "Vector")
-        return {
-            "id": layer.id(),
-            "name": layer.name(),
-            "type": self._get_layer_type(layer),
-            "feature_count": layer.featureCount(),
-        }
+        return self._with_crs(
+            layer,
+            {
+                "id": layer.id(),
+                "name": layer.name(),
+                "type": self._get_layer_type(layer),
+                "feature_count": layer.featureCount(),
+            },
+        )
 
     @command
     def add_raster_layer(self, path, name=None, provider="gdal", **kwargs):
         layer = self._add_layer(path, name, provider, QgsRasterLayer, "Raster")
-        return {
-            "id": layer.id(),
-            "name": layer.name(),
-            "type": "raster",
-            "width": layer.width(),
-            "height": layer.height(),
-        }
+        return self._with_crs(
+            layer,
+            {
+                "id": layer.id(),
+                "name": layer.name(),
+                "type": "raster",
+                "width": layer.width(),
+                "height": layer.height(),
+            },
+        )
 
     @command
     def get_layers(self, limit=50, offset=0, **kwargs):
@@ -358,15 +380,34 @@ class LayerHandlers:
         children = [self._layer_tree_node(c) for c in root.children()]
         return {"children": children}
 
+    @staticmethod
+    def _group(root, name, label):
+        """The one group named *name* anywhere under *root*, or raise.
+
+        findGroup() returns the first match, so with two groups of one name
+        the layer silently went into whichever the tree listed first.
+        """
+
+        def named(node):
+            for child in node.children():
+                if isinstance(child, QgsLayerTreeGroup):
+                    if child.name() == name:
+                        yield child
+                    yield from named(child)
+
+        matches = list(named(root))
+        if not matches:
+            raise CommandError(f"{label} not found: {name}")
+        if len(matches) > 1:
+            raise CommandError(
+                f"{len(matches)} groups are named '{name}'; rename one so it can be told apart"
+            )
+        return matches[0]
+
     @command
     def create_layer_group(self, name, parent=None, **kwargs):
         root = QgsProject.instance().layerTreeRoot()
-        if parent:
-            target = root.findGroup(parent)
-            if target is None:
-                raise CommandError(f"Parent group not found: {parent}")
-        else:
-            target = root
+        target = self._group(root, parent, "Parent group") if parent else root
         target.addGroup(name)
         return {"name": name, "ok": True}
 
@@ -379,9 +420,7 @@ class LayerHandlers:
         if node is None:
             raise CommandError(f"Layer not found in tree: {layer_id}")
 
-        target = root.findGroup(group_name)
-        if target is None:
-            raise CommandError(f"Group not found: {group_name}")
+        target = self._group(root, group_name, "Group")
 
         clone = node.clone()
         target.addChildNode(clone)

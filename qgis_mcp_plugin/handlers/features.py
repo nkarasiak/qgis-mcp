@@ -268,6 +268,9 @@ class FeatureHandlers:
         layer = self._get_vector_layer(layer_id)
         dp = layer.dataProvider()
 
+        if fids is not None and expression:
+            # fids used to win silently, deleting a set the caller did not filter.
+            raise CommandError("Pass fids or expression, not both")
         if fids is not None:
             target_fids = fids
         elif expression:
@@ -687,6 +690,13 @@ class FeatureHandlers:
                         f"Layer '{lyr.name()}' is not a vector layer - cannot be queried"
                     )
                 continue
+            if lyr.name() in sources:
+                # Two sources under one table name: the query reads one of
+                # them without saying which.
+                raise CommandError(
+                    f"Two queried layers are named '{lyr.name()}'; rename one or pass "
+                    "'layers' to pick which to query"
+                )
             definition.addSource(lyr.name(), lid)
             sources.append(lyr.name())
         if not sources:
@@ -729,7 +739,8 @@ class FeatureHandlers:
         x, y = float(point[0]), float(point[1])
         pt_geom = QgsGeometry.fromPointXY(QgsPointXY(x, y))
         if layer_ids:
-            targets = [self._layer(lid) for lid in layer_ids]
+            # An explicit raster used to be skipped, answering "nothing here".
+            targets = [self._get_vector_layer(lid) for lid in layer_ids]
         else:
             targets = [n.layer() for n in project.layerTreeRoot().findLayers() if n.isVisible()]
         prefilter = QgsRectangle(x - tolerance, y - tolerance, x + tolerance, y + tolerance)

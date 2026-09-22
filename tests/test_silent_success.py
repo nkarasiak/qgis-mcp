@@ -250,3 +250,140 @@ def test_provider_write_failure_carries_the_providers_own_error(server, vector, 
         server.add_field("lid", "f", "string")
 
     dp.clearErrors.assert_called_once()  # a stale error must not be blamed on this write
+
+
+# --- silent fallbacks left from the review ----------------------------------------
+
+
+def test_delete_features_refuses_fids_and_expression_together(server, vector, CommandError):
+    """fids used to win silently, deleting a set the caller had not filtered."""
+    with pytest.raises(CommandError, match="not both"):
+        server.delete_features("lid", fids=[1, 2], expression='"a" = 1')
+
+    vector.dataProvider.return_value.deleteFeatures.assert_not_called()
+
+
+def test_identify_refuses_an_explicit_raster(server, vector, plugin_handlers):
+    """An explicit raster id was skipped, answering "nothing here"."""
+    vector.type.return_value = plugin_handlers.base.LAYER_RASTER
+
+    with pytest.raises(plugin_handlers.base.WrongLayerType):
+        server.identify_features([0.0, 0.0], layer_ids=["dem"])
+
+
+def test_execute_sql_refuses_two_layers_with_one_name(
+    server, project, plugin_handlers, monkeypatch, CommandError
+):
+    """Both register as one table name and the query reads either, unannounced."""
+    layers = {}
+    for lid in ("a", "b"):
+        lyr = MagicMock()
+        lyr.type.return_value = plugin_handlers.base.LAYER_VECTOR
+        lyr.name.return_value = "roads"
+        layers[lid] = lyr
+    project.mapLayer.side_effect = layers.get
+
+    with pytest.raises(CommandError, match="named 'roads'"):
+        server.execute_sql("SELECT * FROM roads", layers=["a", "b"])
+
+
+@pytest.mark.parametrize("valid", [True, False])
+def test_added_layer_reports_its_crs_and_warns_without_one(
+    server, plugin_handlers, monkeypatch, valid
+):
+    layer = MagicMock()
+    layer.isValid.return_value = True
+    layer.isSpatial.return_value = True
+    layer.crs.return_value.isValid.return_value = valid
+    layer.crs.return_value.authid.return_value = "EPSG:2154" if valid else ""
+    monkeypatch.setattr(plugin_handlers.layers, "QgsRasterLayer", lambda *a: layer)
+
+    result = server.add_raster_layer("/data/scan.tif")
+
+    assert result["crs"] == ("EPSG:2154" if valid else "")
+    assert ("warning" in result) is (not valid)
+
+
+class FakeGroup:
+    def __init__(self, name, *children):
+        self._name, self._children = name, list(children)
+
+    def name(self):
+        return self._name
+
+    def children(self):
+        return self._children
+
+
+@pytest.fixture
+def tree(plugin_handlers, project, monkeypatch):
+    monkeypatch.setattr(plugin_handlers.layers, "QgsLayerTreeGroup", FakeGroup)
+    root = FakeGroup("", FakeGroup("roads"), FakeGroup("admin", FakeGroup("roads")))
+    project.layerTreeRoot.return_value = root
+    return root
+
+
+def test_group_lookup_refuses_a_name_two_groups_share(server, tree, CommandError):
+    """findGroup() took the first, so the layer went to whichever the tree listed first."""
+    with pytest.raises(CommandError, match="2 groups are named 'roads'"):
+        server._group(tree, "roads", "Group")
+
+
+def test_group_lookup_finds_a_unique_nested_group(server, tree, CommandError):
+    assert server._group(tree, "admin", "Group").name() == "admin"
+    with pytest.raises(CommandError, match="Group not found: water"):
+        server._group(tree, "water", "Group")
+
+
+# --- execute_connection_sql -------------------------------------------------------
+
+
+class FakeResult:
+    def __init__(self, columns, rows):
+        self._columns, self._rows = columns, list(rows)
+
+    def columns(self):
+        return self._columns
+
+    def hasNextRow(self):
+        return bool(self._rows)
+
+    def nextRow(self):
+        return self._rows.pop(0)
+
+
+@pytest.fixture
+def db(plugin_handlers, monkeypatch):
+    class Server(plugin_handlers.connections.ConnectionHandlers, plugin_handlers.base.HandlerBase):
+        LOG_TAG = "test"
+
+    server = Server()
+    conn = MagicMock()
+    conn.capabilities.return_value = plugin_handlers.connections.CONN_CAP_EXECUTE_SQL
+    monkeypatch.setattr(server, "_connection", lambda provider, name: conn)
+    return server, conn
+
+
+def test_connection_sql_names_its_columns(db):
+    """Bare row lists left SELECT * output to positional guessing."""
+    server, conn = db
+    conn.execSql.return_value = FakeResult(["name", "pop"], [["a", 1], ["b", 2], ["c", 3]])
+
+    result = server.execute_connection_sql("postgres", "db", "SELECT * FROM t", limit=2)
+
+    assert result["columns"] == ["name", "pop"]
+    assert result["rows"] == [["a", 1], ["b", 2]]
+    assert result["truncated"] is True
+
+
+def test_connection_sql_error_is_a_user_error(db, plugin_handlers, monkeypatch):
+    server, conn = db
+
+    class ConnError(Exception):
+        pass
+
+    monkeypatch.setattr(plugin_handlers.connections, "QgsProviderConnectionException", ConnError)
+    conn.execSql.side_effect = ConnError("no such table: t")
+
+    with pytest.raises(plugin_handlers.base.CommandError, match="SQL failed: no such table"):
+        server.execute_connection_sql("postgres", "db", "SELECT * FROM t")
