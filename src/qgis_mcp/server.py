@@ -2307,7 +2307,9 @@ async def set_setting(ctx: Context, key: str, value: str, instance: str | None =
     annotations=ToolAnnotations(readOnlyHint=True),
     description="Transform coordinates between CRS. Accepts a point {x, y}, "
     "a point list [{x, y}, ...], or a bbox {xmin, ymin, xmax, ymax}. "
-    "Returns the same format.",
+    "Returns the same format. x is always longitude/easting and y latitude/northing, "
+    "including for EPSG:4326. A bbox that crosses the antimeridian comes back with "
+    "xmin > xmax and crosses_antimeridian: true.",
     structured_output=True,
 )
 async def transform_coordinates(
