@@ -689,11 +689,14 @@ class LayerHandlers:
             raise CommandError("Pass exactly one of 'path' or 'qml'")
         layer = self._layer(layer_id)
 
-        if qml is None:
-            with open(path, encoding="utf-8") as f:
-                qml = f.read()
+        if path is not None:
+            # Bytes, so the parser honours the file's own encoding declaration.
+            with open(path, "rb") as f:
+                text = f.read()
+        else:
+            text = qml
         try:
-            root = ElementTree.fromstring(qml)
+            root = ElementTree.fromstring(text)
         except ElementTree.ParseError as e:
             raise CommandError(f"QML is not well-formed XML: {e}") from e
         if root.tag != "qgis":
@@ -709,15 +712,19 @@ class LayerHandlers:
 
         previous = QgsMapLayerStyle()
         previous.readFromLayer(layer)
-        fd, tmp = tempfile.mkstemp(suffix=".qml")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(qml)
-            message, success = layer.loadNamedStyle(tmp)
-        finally:
-            os.remove(tmp)
+        if path is not None:
+            message, success = layer.loadNamedStyle(path)
+        else:
+            fd, tmp = tempfile.mkstemp(suffix=".qml")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(qml)
+                message, success = layer.loadNamedStyle(tmp)
+            finally:
+                os.remove(tmp)
 
-        renderer = layer.renderer()
+        # Mesh and annotation layers have no renderer() at all.
+        renderer = layer.renderer() if hasattr(layer, "renderer") else None
         loaded = renderer.type() if renderer is not None else None
         if not success or (declared and loaded != declared):
             previous.writeToLayer(layer)
@@ -781,11 +788,11 @@ class LayerHandlers:
             # gdalwarp carries a source nodata over to the fill; without one it
             # fills the cells outside the reprojected footprint with 0, which
             # reads as real data. An alpha band marks them instead; gdalwarp
-            # carries a source alpha band over by itself.
+            # carries a source alpha band over by itself, but only the last one.
             bands = range(1, layer.bandCount() + 1)
-            alpha = not any(
-                dp.colorInterpretation(band) == RASTER_ALPHA_BAND for band in bands
-            ) and not all(dp.sourceHasNoDataValue(band) for band in bands)
+            alpha = dp.colorInterpretation(layer.bandCount()) != RASTER_ALPHA_BAND and not all(
+                dp.sourceHasNoDataValue(band) for band in bands
+            )
             if alpha:
                 params["EXTRA"] = "-dstalpha"
             self._run_alg("gdal:warpreproject", params)

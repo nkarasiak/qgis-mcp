@@ -1364,7 +1364,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
         description=(
             "QGIS message log.\n"
             "Actions: get\n"
-            "- get: level (str, optional: 'info', 'warning', 'critical'), "
+            "- get: level (str, optional: 'info', 'warning', 'critical', 'success', 'none'), "
             "tag (str, optional), limit (int, default 100)"
             f"{_PARAMS_NOTE}"
         ),

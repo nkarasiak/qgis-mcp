@@ -22,6 +22,17 @@ def test_unique_values_flags_a_capped_list_and_nulls(server, vector):  # noqa: F
     assert result["has_null"] is True
 
 
+def test_unique_values_capped_sample_without_null_asks_for_one(server, vector):  # noqa: F811
+    """The capped sample can miss NULL; a truncated list asks the layer directly."""
+    vector.fields.return_value.indexOf.return_value = 0
+    vector.uniqueValues.return_value = {"a", "b", "c", "d"}
+    vector.getFeatures.return_value = iter([MagicMock()])
+
+    result = server.get_unique_values("lid", "f", limit=2)
+
+    assert (result["truncated"], result["has_null"]) == (True, True)
+
+
 def test_unique_values_complete_list_is_not_truncated(server, vector):  # noqa: F811
     vector.fields.return_value.indexOf.return_value = 0
     vector.uniqueValues.return_value = {"a", "b"}

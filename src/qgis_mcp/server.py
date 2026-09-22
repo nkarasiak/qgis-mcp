@@ -2107,7 +2107,8 @@ async def export_layout(
 @mcp.tool(
     title="Get Message Log",
     annotations=ToolAnnotations(readOnlyHint=True),
-    description="Get QGIS message log entries. Filter by level ('info', 'warning', 'critical') "
+    description="Get QGIS message log entries. Filter by level ('info', 'warning', 'critical', "
+    "'success', 'none') "
     "and/or tag (e.g. 'QGIS MCP'). Returns newest first.",
     structured_output=True,
 )

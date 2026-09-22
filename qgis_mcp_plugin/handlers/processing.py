@@ -213,6 +213,9 @@ class ProcessingHandlers:
             # processing.run raises a generic "There were errors executing the
             # algorithm."; the reason the algorithm gave went to the feedback.
             raise CommandError(f"Processing error: {e!s}{_error_detail(feedback)}") from e
+        finally:
+            # Also puts back the real mtime of every file the run left alone.
+            stale = self._unchanged_outputs(existing)
         if feedback.timed_out:
             raise CommandError(timeout_message)
         missing = self._missing_outputs(algorithm, declared)
@@ -221,7 +224,6 @@ class ProcessingHandlers:
                 f"{algorithm} reported success but wrote no {', '.join(missing)}"
                 f"{_error_detail(feedback)}"
             )
-        stale = self._unchanged_outputs(existing)
         if stale:
             raise CommandError(
                 f"{algorithm} reported success but left {', '.join(stale)} unchanged "
@@ -302,27 +304,30 @@ class ProcessingHandlers:
 
         Each file is backdated 10 s first: on a coarse clock (FAT32 keeps 2 s,
         some SMB shares more) a fast rerun writing the same bytes would
-        otherwise keep the old stamp and read as untouched.
+        otherwise keep the old stamp and read as untouched. _unchanged_outputs
+        puts the real stamp back on each file the run did not write.
         """
         state = {}
         for path in self._output_paths(algorithm, parameters):
             if os.path.isfile(path):
-                st = os.stat(path)
+                st = original = os.stat(path)
                 with contextlib.suppress(OSError):
                     os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns - 10_000_000_000))
                     st = os.stat(path)
-                state[path] = (st.st_mtime_ns, st.st_size)
+                state[path] = ((st.st_mtime_ns, st.st_size), original)
         return state
 
     @staticmethod
     def _unchanged_outputs(before):
-        """Files from *before* that the run did not touch."""
+        """Files from *before* that the run did not touch, their mtime restored."""
         unchanged = []
-        for path, stamp in before.items():
+        for path, (stamp, original) in before.items():
             if os.path.isfile(path):
                 st = os.stat(path)
                 if (st.st_mtime_ns, st.st_size) == stamp:
                     unchanged.append(path)
+                    with contextlib.suppress(OSError):
+                        os.utime(path, ns=(original.st_atime_ns, original.st_mtime_ns))
         return unchanged
 
     @command
@@ -1108,9 +1113,13 @@ class ProcessingHandlers:
                 except QgsCsException:
                     # Off what the raster's CRS can express: no value, and the
                     # rest of the points still sampled.
-                    results.append(
-                        {"x": pt[0], "y": pt[1], "outside_extent": True, "transform_failed": True}
-                    )
+                    failed = {"x": pt[0], "y": pt[1], "outside_extent": True}
+                    if band is not None:
+                        failed.update({"band": int(band), "value": None})
+                    else:
+                        failed["values"] = dict.fromkeys(range(1, layer.bandCount() + 1))
+                    failed["transform_failed"] = True
+                    results.append(failed)
                     continue
             sample = {"x": pt[0], "y": pt[1], "outside_extent": not extent.contains(p)}
             if band is not None:

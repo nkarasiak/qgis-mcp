@@ -657,13 +657,21 @@ class FeatureHandlers:
             values = sorted(values, key=lambda x: (str(type(x)), x))
         if limit >= 0:
             values = values[:limit]
+        # NULL is dropped from values; say whether the field has any.
+        has_null = any(v is None or str(v) == "NULL" for v in raw)
+        if truncated and not has_null:
+            # A capped sample can miss NULL, so ask for one directly.
+            request = QgsFeatureRequest().setFilterExpression(
+                f"{QgsExpression.quotedColumnRef(field)} IS NULL"
+            )
+            request.setLimit(1)
+            has_null = any(True for _ in layer.getFeatures(request))
         return {
             "field": field,
             "values": values,
             "count": len(values),
             "truncated": truncated,
-            # NULL is dropped from values; say whether the field has any.
-            "has_null": any(v is None or str(v) == "NULL" for v in raw),
+            "has_null": has_null,
         }
 
     @command
@@ -786,7 +794,11 @@ class FeatureHandlers:
                 continue
             if to_ref is not None:
                 geom = QgsGeometry(geom)
-                geom.transform(to_ref)
+                try:
+                    geom.transform(to_ref)
+                except QgsCsException:
+                    # This feature reaches past ref_crs; the rest still count.
+                    continue
             if tolerance > 0:
                 if geom.distance(pt_geom) > tolerance:
                     continue

@@ -238,5 +238,12 @@ def test_sample_a_point_the_raster_crs_cannot_express_is_skipped(
     )
 
     first, second = result["samples"]
-    assert first == {"x": 500.0, "y": 0.0, "outside_extent": True, "transform_failed": True}
+    assert first == {
+        "x": 500.0,
+        "y": 0.0,
+        "outside_extent": True,
+        "band": 1,
+        "value": None,
+        "transform_failed": True,
+    }
     assert second["value"] == 6.0

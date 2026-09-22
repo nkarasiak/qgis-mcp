@@ -572,10 +572,13 @@ def test_an_untouched_file_from_an_earlier_run_is_not_success(file_output, plugi
     """GDAL failed and reported it only to the feedback; the old file stood in for the output."""
     with_run, out = file_output
     out.write_bytes(b"old")
+    stamp = os.stat(out).st_mtime_ns
     server = with_run(writes=None)
 
     with pytest.raises(plugin_handlers.processing.CommandError, match="unchanged"):
         server._run_alg("gdal:translate", {"OUTPUT": str(out)})
+    # The backdating that makes a coarse clock visible does not outlive the check.
+    assert os.stat(out).st_mtime_ns == stamp
 
 
 def test_an_overwritten_output_passes(file_output):
