@@ -192,6 +192,7 @@ class ProcessingHandlers:
 
     @command
     def execute_processing(self, algorithm, parameters, timeout=None, load_results=False, **kwargs):
+        feedback = None
         try:
             QgsMessageLog.logMessage(f"Processing: {algorithm}", self.LOG_TAG, MSG_INFO)
             budget = self._PROCESSING_TIMEOUT if timeout is None else float(timeout)
@@ -221,7 +222,10 @@ class ProcessingHandlers:
             # after 55s...", which reads like the timeout was itself a failure.
             raise
         except Exception as e:
-            raise CommandError(f"Processing error: {e!s}") from e
+            # processing.run raises a generic "There were errors executing the
+            # algorithm."; the reason the algorithm gave went to the feedback.
+            detail = f": {'; '.join(feedback.errors)}" if feedback and feedback.errors else ""
+            raise CommandError(f"Processing error: {e!s}{detail}") from e
 
     @command
     def list_processing_algorithms(self, search=None, provider=None, **kwargs):

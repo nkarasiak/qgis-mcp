@@ -101,3 +101,25 @@ def test_output_verification_survives_the_parameter_rewrite(
     )
 
     assert calls["checked"]["OUTPUT"] == "/tmp/out.gpkg"
+
+
+def test_failed_run_reports_the_engine_reason_not_just_the_generic_message(
+    processing, plugin_handlers, monkeypatch
+):
+    """processing.run raises a generic exception; the real reason went to the feedback."""
+    server, _ = processing
+
+    def run(algorithm, parameters, feedback=None):
+        # What _ResponsiveFeedback.reportError collects (the stub base has no reportError).
+        feedback.errors.append("Input layer has fewer than 3 points")
+        raise Exception("There were errors executing the algorithm.")
+
+    monkeypatch.setattr(sys.modules["processing"], "run", run)
+    CommandError = plugin_handlers.processing.CommandError
+
+    with pytest.raises(CommandError) as excinfo:
+        server.execute_processing("native:voronoipolygons", {"INPUT": "c"})
+
+    message = str(excinfo.value)
+    assert "There were errors executing the algorithm." in message
+    assert "Input layer has fewer than 3 points" in message
