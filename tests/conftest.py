@@ -26,6 +26,7 @@ QGIS_MODULES = (
     "qgis.PyQt.QtCore",
     "qgis.PyQt.QtGui",
     "qgis.PyQt.QtWidgets",
+    "qgis.PyQt.QtXml",
 )
 
 

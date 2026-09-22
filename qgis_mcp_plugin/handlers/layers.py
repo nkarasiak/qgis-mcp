@@ -9,7 +9,6 @@ import math
 import os
 import tempfile
 from typing import ClassVar
-from xml.etree import ElementTree
 
 from qgis.core import (
     QgsCoordinateReferenceSystem,
@@ -23,6 +22,7 @@ from qgis.core import (
     QgsVectorLayerJoinInfo,
 )
 from qgis.PyQt.QtGui import QColor
+from qgis.PyQt.QtXml import QDomDocument
 
 from ..compat import (
     LAYER_RASTER,
@@ -695,20 +695,25 @@ class LayerHandlers:
                 text = f.read()
         else:
             text = qml
-        try:
-            root = ElementTree.fromstring(text)
-        except ElementTree.ParseError as e:
-            raise CommandError(f"QML is not well-formed XML: {e}") from e
-        if root.tag != "qgis":
-            raise CommandError(f"QML root element must be <qgis>, got <{root.tag}>")
+        # Qt's parser, the one loadNamedStyle itself reads the QML with: no
+        # second XML parser for the same untrusted text.
+        doc = QDomDocument()
+        ok, error, line, column = doc.setContent(text)
+        if not ok:
+            raise CommandError(
+                f"QML is not well-formed XML: {error} (line {line}, column {column})"
+            )
+        root = doc.documentElement()
+        if root.tagName() != "qgis":
+            raise CommandError(f"QML root element must be <qgis>, got <{root.tagName()}>")
 
-        is_raster = layer.type() == LAYER_RASTER
-        own = root.find("pipe/rasterrenderer" if is_raster else "renderer-v2")
-        other = root.find("renderer-v2" if is_raster else "pipe/rasterrenderer")
-        if own is None and other is not None:
-            kind = "vector" if is_raster else "raster"
+        vector = root.firstChildElement("renderer-v2")
+        raster = root.firstChildElement("pipe").firstChildElement("rasterrenderer")
+        own, other = (raster, vector) if layer.type() == LAYER_RASTER else (vector, raster)
+        if own.isNull() and not other.isNull():
+            kind = "vector" if own is raster else "raster"
             raise CommandError(f"QML holds a {kind} style; layer {layer.name()} is not {kind}")
-        declared = own.get("type") if own is not None else None
+        declared = None if own.isNull() else own.attribute("type") or None
 
         previous = QgsMapLayerStyle()
         previous.readFromLayer(layer)
