@@ -41,7 +41,7 @@ description: Reference for all qgis-mcp MCP tools, resources, and prompts (names
 | `get_algorithm_help` | Get Algorithm Help | readOnly | Algorithm parameters, outputs, description |
 | `create_processing_model` | Create Processing Model | - | Build a `.model3` workflow from a structured spec (inputs, steps, outputs); always saved into the QGIS user models folder and registered (numeric suffix on name collision); supports `@input` / `$step.OUTPUT` / `=expression` references |
 | `render_map` | Render Map | idempotent | Render canvas to inline image (60s, async+progress+logging) |
-| `execute_code` | Execute Code | destructive | Run arbitrary PyQGIS code (plugin cancels past `timeout` seconds, default 55, returning `timed_out` and the output so far; result carries `elapsed`; async+progress+logging) |
+| `execute_code` | Execute Code | destructive | Run arbitrary PyQGIS code (plugin cancels past `timeout` seconds, default 55, raising a tool error with the output so far; a script that raises is a tool error carrying the traceback; result carries `elapsed`; async+progress+logging) |
 | `batch_commands` | Batch Commands | - | Multiple commands in one round-trip |
 | `list_layouts` | List Layouts | readOnly | List print layouts |
 | `export_layout` | Export Layout | idempotent | Export print layout to PDF/PNG/SVG |

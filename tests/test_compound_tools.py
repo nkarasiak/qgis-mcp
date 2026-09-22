@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from conftest import COMPOUND_TOOL_COUNT
+from conftest import COMPOUND_TOOL_COUNT, make_ctx
 from mcp_compat import connect, schema
 
 from qgis_mcp.compound_tools import FastMCP, register_compound_tools
@@ -194,6 +194,19 @@ async def test_compound_missing_required_param_names_itself():
     )
     with pytest.raises(ToolError, match="missing required parameter 'expression'"):
         await mcp._tool_manager.get_tool("expression").fn(ctx=None, action="evaluate", params={})
+
+
+@pytest.mark.asyncio
+async def test_compound_code_execute_script_that_raises_is_a_tool_error():
+    mcp = FastMCP("compound-code-error-test")
+    failed = {"executed": False, "error": "boom", "traceback": "Traceback ...", "elapsed": 0.1}
+    register_compound_tools(
+        mcp, _send=AsyncMock(return_value=failed), _confirm_destructive=AsyncMock(return_value=True)
+    )
+    with pytest.raises(ToolError, match=r"Code failed after 0\.1s: boom"):
+        await mcp._tool_manager.get_tool("code").fn(
+            ctx=make_ctx(), action="execute", params={"code": "raise"}
+        )
 
 
 @pytest.mark.asyncio

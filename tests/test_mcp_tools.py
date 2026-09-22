@@ -190,6 +190,46 @@ async def test_execute_code_timeout_keeps_the_plugin_deadline_first(mock_connect
 
 
 @pytest.mark.asyncio
+async def test_execute_code_script_that_raises_is_a_tool_error(mock_connection):
+    """A raising script came back as status success with executed=False; now isError."""
+    mock_connection.returns(
+        {
+            "executed": False,
+            "error": "division by zero",
+            "traceback": "Traceback ...\nZeroDivisionError: division by zero\n",
+            "stdout": "before\n",
+            "stderr": "",
+            "elapsed": 0.01,
+        }
+    )
+    with pytest.raises(ToolError) as exc:
+        await srv.execute_code(make_ctx(), code="print('before'); 1/0")
+    message = str(exc.value)
+    assert "Code failed after 0.01s: division by zero" in message
+    assert "ZeroDivisionError" in message
+    assert "stdout:\nbefore" in message
+    assert "stderr:" not in message
+    assert "made before it failed are kept" in message
+
+
+@pytest.mark.asyncio
+async def test_execute_code_timeout_is_a_tool_error_with_partial_output(mock_connection):
+    mock_connection.returns(
+        {
+            "executed": False,
+            "timed_out": True,
+            "error": "Code cancelled after 1s (timeout). ... side effects up to this point stand.",
+            "stdout": "step 1\n",
+            "stderr": "",
+            "elapsed": 1.0,
+        }
+    )
+    with pytest.raises(ToolError, match=r"Code cancelled after 1s \(timeout\)") as exc:
+        await srv.execute_code(make_ctx(), code="while True: pass", timeout=1)
+    assert "stdout:\nstep 1" in str(exc.value)
+
+
+@pytest.mark.asyncio
 async def test_execute_processing_batch_timeout_bounds_the_whole_batch(mock_connection):
     mock_connection.returns({"results": []})
 

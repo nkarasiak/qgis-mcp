@@ -56,6 +56,7 @@ from qgis_mcp.helpers import (
     TIMEOUT_DEFAULT,
     TIMEOUT_LONG,
     CommandTimeout,
+    code_failure_message,
     enrich_diagnose,
     make_layer_response,
     make_project_response,
@@ -1790,7 +1791,8 @@ async def render_map(
     "seconds. timeout: seconds before the script is cancelled (default 55); a script that runs "
     "past it comes back with timed_out=True and the output printed so far, and its side effects "
     "stand. Raise timeout or split bulk work into several calls; QGIS is unresponsive while a "
-    "script runs. A single blocking call (time.sleep, GDAL) cannot be interrupted before it returns.",
+    "script runs. A single blocking call (time.sleep, GDAL) cannot be interrupted before it returns. "
+    "A script that raises or times out is a tool error carrying the traceback and output so far.",
 )
 async def execute_code(
     ctx: Context, code: str, timeout: int | None = None, instance: str | None = None
@@ -1812,6 +1814,8 @@ async def execute_code(
         socket_timeout = int(timeout) + 5
     result = await _send("execute_code", params, timeout=socket_timeout, instance=instance)
     await ctx.report_progress(100, 100)
+    if failure := code_failure_message(result):
+        raise ToolError(failure)
     return result
 
 

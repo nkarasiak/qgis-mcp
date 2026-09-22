@@ -26,6 +26,26 @@ from qgis_mcp.protocol import (  # noqa: F401 - re-exported for server-side impo
 )
 
 
+def code_failure_message(result: dict) -> str | None:
+    """Error text for an execute_code result whose script raised or timed out, else None.
+
+    The plugin reports a failed script as a successful command with
+    ``executed: False``; the MCP tools raise this text as a ToolError so the
+    client sees ``isError`` and still gets the traceback and partial output.
+    """
+    if result.get("executed", True):
+        return None
+    parts = [
+        f"Code failed after {result.get('elapsed', '?')}s: {result.get('error', 'unknown error')}"
+    ]
+    for key in ("traceback", "stdout", "stderr"):
+        if result.get(key):
+            parts.append(f"{key}:\n{result[key].rstrip()}")
+    if not result.get("timed_out"):
+        parts.append("Changes the script made before it failed are kept.")
+    return "\n\n".join(parts)
+
+
 def enrich_diagnose(result: dict) -> dict:
     """Append server/plugin version-match check to a diagnose result."""
     server_version = get_client_version()

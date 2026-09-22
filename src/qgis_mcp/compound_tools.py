@@ -26,6 +26,7 @@ from mcp.types import Annotations, ImageContent, ToolAnnotations
 from qgis_mcp.helpers import (
     BATCH_BLOCKED_COMMANDS,
     TIMEOUT_LONG,
+    code_failure_message,
     enrich_diagnose,
     make_layer_response,
     make_project_response,
@@ -1063,6 +1064,8 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
         socket_timeout = with_timeout(payload, kwargs)
         result = await _send("execute_code", payload, timeout=socket_timeout)
         await ctx.report_progress(100, 100)
+        if failure := code_failure_message(result):
+            raise ToolError(failure)
         return result
 
     code_actions: dict[str, _Action] = {"execute": code_execute}
@@ -1073,7 +1076,8 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
             "Execute arbitrary PyQGIS code.\n"
             "Actions: execute\n"
             "- execute: code (str), timeout (int, optional, seconds before the script is cancelled, "
-            "default 55; output so far is returned) - destructive, requires confirmation"
+            "default 55); a script that raises or times out is a tool error with the traceback and "
+            "output so far - destructive, requires confirmation"
             f"{_PARAMS_NOTE}"
         ),
         annotations=ToolAnnotations(destructiveHint=True),
