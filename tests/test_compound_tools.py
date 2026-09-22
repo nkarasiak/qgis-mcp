@@ -210,6 +210,18 @@ async def test_compound_code_execute_script_that_raises_is_a_tool_error():
 
 
 @pytest.mark.asyncio
+async def test_compound_features_get_refuses_a_limit_above_the_max():
+    send = AsyncMock(return_value={})
+    mcp = FastMCP("compound-limit-test")
+    register_compound_tools(mcp, _send=send, _confirm_destructive=AsyncMock(return_value=True))
+    with pytest.raises(ToolError, match="limit 100 exceeds the maximum of 50"):
+        await mcp._tool_manager.get_tool("features").fn(
+            ctx=None, action="get", params={"layer_id": "L", "limit": 100}
+        )
+    send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_compound_refuses_a_misspelled_param_before_sending():
     """A typo ("expresion") was dropped, returning unfiltered features as the answer."""
     send = AsyncMock(return_value={"features": []})

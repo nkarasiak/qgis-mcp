@@ -25,6 +25,22 @@ from qgis_mcp.protocol import (  # noqa: F401 - re-exported for server-side impo
     get_update_command,
 )
 
+MAX_FEATURE_LIMIT = 50
+
+
+def feature_limit_error(limit: int) -> str | None:
+    """Refusal text for a get_layer_features limit above the cap, else None.
+
+    It used to be clamped to 50 unseen, so a caller asking for 200 read 50
+    features as if they were all it asked for.
+    """
+    if limit > MAX_FEATURE_LIMIT:
+        return (
+            f"limit {limit} exceeds the maximum of {MAX_FEATURE_LIMIT}; "
+            "page through the rest with offset"
+        )
+    return None
+
 
 def code_failure_message(result: dict) -> str | None:
     """Error text for an execute_code result whose script raised or timed out, else None.

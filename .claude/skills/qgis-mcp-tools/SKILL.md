@@ -12,8 +12,8 @@ description: Reference for all qgis-mcp MCP tools, resources, and prompts (names
 | `list_qgis_instances` | List QGIS Instances | readOnly | Configured QGIS instances (name, host, port) + current reachability |
 | `get_qgis_info` | Get QGIS Info | readOnly | QGIS version, profile, plugins |
 | `get_project_info` | Get Project Info | readOnly | Project metadata, CRS, layers |
-| `load_project` | Load Project | - | Load a .qgs/.qgz file |
-| `create_new_project` | Create New Project | - | Create and save new project |
+| `load_project` | Load Project | destructive | Load a .qgs/.qgz file (replaces the open project) |
+| `create_new_project` | Create New Project | destructive | Create and save new project (replaces the open project) |
 | `save_project` | Save Project | idempotent | Save project to current or new path |
 | `get_layers` | Get Layers | readOnly | List layers with pagination (limit/offset) |
 | `add_vector_layer` | Add Vector Layer | - | Add vector layer (shapefile, GeoJSON, etc.) |

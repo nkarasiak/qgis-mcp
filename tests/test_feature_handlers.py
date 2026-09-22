@@ -184,6 +184,7 @@ def exporter(plugin_handlers, features, layer):
     class Server(plugin_handlers.layers.LayerHandlers, plugin_handlers.base.HandlerBase):
         def _run_alg(self, algorithm, parameters, *args, **kwargs):
             runs.append(algorithm)
+            self.last_params = parameters
             return {"OUTPUT": "out"}
 
     return Server(), runs
@@ -210,6 +211,27 @@ def test_export_layer_refuses_a_filter_on_a_raster(plugin_handlers, exporter, la
         server.export_layer("lid", "/tmp/o.tif", filter_expression="1 = 1")
 
     assert runs == []
+
+
+@pytest.mark.parametrize("has_nodata", [(True, True), (True, False)], ids=["all", "one_missing"])
+def test_export_layer_warp_marks_fill_cells_only_without_source_nodata(
+    plugin_handlers, exporter, layer, has_nodata
+):
+    """gdalwarp fills outside the footprint with 0 when the source has no nodata."""
+    server, runs = exporter
+    layer.type.return_value = plugin_handlers.base.LAYER_RASTER
+    layer.bandCount.return_value = 2
+    layer.dataProvider.return_value.sourceHasNoDataValue.side_effect = lambda b: has_nodata[b - 1]
+
+    result = server.export_layer("lid", "/tmp/o.tif", target_crs="EPSG:3857")
+
+    assert runs == ["gdal:warpreproject"]
+    if all(has_nodata):
+        assert "EXTRA" not in server.last_params
+        assert "alpha_band_added" not in result
+    else:
+        assert server.last_params["EXTRA"] == "-dstalpha"
+        assert result["alpha_band_added"] is True
 
 
 class Crs(str):

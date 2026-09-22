@@ -28,14 +28,18 @@ async def test_get_layers_passes_pagination(mock_connection):
 
 
 @pytest.mark.asyncio
-async def test_get_layer_features_enforces_max_limit(mock_connection):
-    mock_connection.returns({"features": [], "feature_count": 0, "fields": []})
+async def test_get_layer_features_refuses_a_limit_above_the_max(mock_connection):
+    """It was clamped to 50 unseen, so 50 features read as all 100 asked for."""
+    with pytest.raises(ToolError, match="limit 100 exceeds the maximum of 50"):
+        await srv.get_layer_features(make_ctx(), layer_id="test", limit=100)
+    mock_connection.send_command.assert_not_called()
 
-    ctx = make_ctx()
-    await srv.get_layer_features(ctx, layer_id="test", limit=100)
-    # Should have been capped to 50
-    call_params = mock_connection.send_command.call_args[0][1]
-    assert call_params["limit"] == 50
+
+@pytest.mark.asyncio
+async def test_create_and_load_project_are_marked_destructive():
+    """Both replace the open project, discarding its unsaved changes."""
+    for name in ("create_new_project", "load_project"):
+        assert srv.mcp._tool_manager.get_tool(name).annotations.destructiveHint is True
 
 
 @pytest.mark.asyncio

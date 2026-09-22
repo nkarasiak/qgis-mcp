@@ -720,13 +720,27 @@ class LayerHandlers:
             if filter_expression:
                 # Ignoring it would hand back the whole raster as if filtered.
                 raise CommandError("filter_expression applies to vector layers only")
-            if target_crs:
-                self._run_alg(
-                    "gdal:warpreproject",
-                    {"INPUT": layer, "TARGET_CRS": target_crs, "OUTPUT": output_path},
-                )
-            else:
+            if not target_crs:
                 self._run_alg("gdal:translate", {"INPUT": layer, "OUTPUT": output_path})
-            return {"ok": True, "output": output_path}
+                return {"ok": True, "output": output_path}
+            params = {"INPUT": layer, "TARGET_CRS": target_crs, "OUTPUT": output_path}
+            dp = layer.dataProvider()
+            # gdalwarp carries a source nodata over to the fill; without one it
+            # fills the cells outside the reprojected footprint with 0, which
+            # reads as real data. An alpha band marks them instead.
+            alpha = not all(
+                dp.sourceHasNoDataValue(band) for band in range(1, layer.bandCount() + 1)
+            )
+            if alpha:
+                params["EXTRA"] = "-dstalpha"
+            self._run_alg("gdal:warpreproject", params)
+            result = {"ok": True, "output": output_path}
+            if alpha:
+                result["alpha_band_added"] = True
+                result["note"] = (
+                    "The source has no nodata value, so an alpha band (the last band) marks "
+                    "the cells outside the reprojected footprint; they would otherwise read as 0."
+                )
+            return result
 
         raise CommandError(f"Unsupported layer type for export: {layer_id}")

@@ -28,6 +28,7 @@ from qgis_mcp.helpers import (
     TIMEOUT_LONG,
     code_failure_message,
     enrich_diagnose,
+    feature_limit_error,
     make_layer_response,
     make_project_response,
     make_render_response,
@@ -227,9 +228,11 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
             "- load: path (str)\n"
             "- create: path (str)\n"
             "- save: path (str, optional)\n"
-            "- set_crs: crs (str)"
+            "- set_crs: crs (str)\n"
+            "load and create replace the open project; unsaved changes to it are lost."
             f"{_PARAMS_NOTE}"
         ),
+        annotations=ToolAnnotations(destructiveHint=True),
         structured_output=True,
     )
     async def project(
@@ -415,9 +418,11 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
     # ------------------------------------------------------------------
 
     async def features_get(ctx, kwargs):
+        if refusal := feature_limit_error(kwargs.get("limit", 10)):
+            raise ToolError(refusal)
         payload = {
             "layer_id": kwargs["layer_id"],
-            "limit": min(kwargs.get("limit", 10), 50),
+            "limit": kwargs.get("limit", 10),
             "offset": kwargs.get("offset", 0),
             "include_geometry": kwargs.get("include_geometry", False),
         }

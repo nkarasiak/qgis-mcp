@@ -58,6 +58,7 @@ from qgis_mcp.helpers import (
     CommandTimeout,
     code_failure_message,
     enrich_diagnose,
+    feature_limit_error,
     make_layer_response,
     make_project_response,
     make_render_response,
@@ -718,7 +719,12 @@ async def get_project_info(ctx: Context, instance: str | None = None) -> dict[st
 # --- Project Management ---
 
 
-@mcp.tool(title="Load Project", description="Load a QGIS project from a .qgs/.qgz file path.")
+@mcp.tool(
+    title="Load Project",
+    annotations=ToolAnnotations(destructiveHint=True),
+    description="Load a QGIS project from a .qgs/.qgz file path. Replaces the open project; "
+    "unsaved changes to it are lost.",
+)
 async def load_project(ctx: Context, path: str, instance: str | None = None) -> list:
     await ctx.info(f"Loading project: {path}")
     result = await _send("load_project", {"path": path}, instance=instance)
@@ -727,7 +733,9 @@ async def load_project(ctx: Context, path: str, instance: str | None = None) -> 
 
 @mcp.tool(
     title="Create New Project",
-    description="Create a new empty QGIS project and save it to the given path.",
+    annotations=ToolAnnotations(destructiveHint=True),
+    description="Create a new empty QGIS project and save it to the given path. Replaces the "
+    "open project; unsaved changes to it are lost.",
 )
 async def create_new_project(ctx: Context, path: str, instance: str | None = None) -> list:
     result = await _send("create_new_project", {"path": path}, instance=instance)
@@ -883,7 +891,7 @@ async def zoom_to_layer(ctx: Context, layer_id: str, instance: str | None = None
     annotations=ToolAnnotations(readOnlyHint=True),
     description="Get features from a vector layer. Flat dicts: _fid + attributes at top level. "
     "expression filter (QGIS, e.g. "
-    '"name = \'Berlin\'", "population > 1000000"), limit (max 50, default 10), offset for paging, '
+    '"name = \'Berlin\'", "population > 1000000"), limit (max 50, larger is refused; default 10), offset for paging, '
     "optional geometry in _geometry key. feature_count is the layer total; matched is the "
     "count after the expression filter.",
     structured_output=True,
@@ -897,8 +905,8 @@ async def get_layer_features(
     include_geometry: bool = False,
     instance: str | None = None,
 ) -> dict[str, Any]:
-    if limit > 50:
-        limit = 50
+    if refusal := feature_limit_error(limit):
+        raise ToolError(refusal)
     params = {
         "layer_id": layer_id,
         "limit": limit,
