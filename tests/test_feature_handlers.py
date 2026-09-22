@@ -234,6 +234,22 @@ def test_export_layer_warp_marks_fill_cells_only_without_source_nodata(
         assert result["alpha_band_added"] is True
 
 
+def test_export_layer_warp_keeps_a_source_alpha_band(plugin_handlers, exporter, layer, monkeypatch):
+    """gdalwarp carries it over: reporting an alpha band as added was false."""
+    server, _ = exporter
+    monkeypatch.setattr(plugin_handlers.layers, "RASTER_ALPHA_BAND", "alpha")
+    layer.type.return_value = plugin_handlers.base.LAYER_RASTER
+    layer.bandCount.return_value = 2
+    dp = layer.dataProvider.return_value
+    dp.sourceHasNoDataValue.return_value = False
+    dp.colorInterpretation.side_effect = lambda b: "alpha" if b == 2 else "gray"
+
+    result = server.export_layer("lid", "/tmp/o.tif", target_crs="EPSG:3857")
+
+    assert "EXTRA" not in server.last_params
+    assert "alpha_band_added" not in result
+
+
 class Crs(str):
     """A CRS that compares by authid, like QgsCoordinateReferenceSystem."""
 
@@ -293,6 +309,28 @@ def test_identify_same_crs_uses_the_point_as_is(identify):
     server.identify_features([1.0, 2.0], layer_ids=["lid"])
 
     features.QgsGeometry.return_value.transform.assert_not_called()
+
+
+class CsError(Exception):
+    pass
+
+
+def test_identify_skips_a_layer_the_point_cannot_reach(identify, monkeypatch):
+    """A QgsCsException on one layer used to abort the whole call."""
+    server, layer, features = identify
+    monkeypatch.setattr(features, "QgsCsException", CsError)
+    layer.crs.return_value = Crs("EPSG:4326")
+    layer.id.return_value = "lid"
+
+    def unreachable(self, rect):
+        raise CsError("forward transform")
+
+    monkeypatch.setattr(FakeTransform, "transformBoundingBox", unreachable)
+
+    result = server.identify_features([1.0, 2.0], layer_ids=["lid"])
+
+    assert result["results"] == []
+    assert result["skipped_layers"] == [{"layer_id": "lid", "reason": "point not transformable"}]
 
 
 # --- set_layer_property -------------------------------------------------------
@@ -525,6 +563,23 @@ def test_field_calculator_reports_the_units_of_area(
         "area_units": "ha",
         "distance_units": "meters",
     }
+
+
+def test_field_calculator_reports_the_crs_units_of_the_area_function(
+    calculator, features, monkeypatch
+):
+    """area() is planimetric in the layer CRS, not the project's ellipsoid."""
+    server, layer = calculator
+    monkeypatch.setattr(
+        features, "QgsUnitTypes", MagicMock(**{"encodeUnit.return_value": "degrees"})
+    )
+
+    result = server.field_calculator("lid", "area", "area($geometry)")
+
+    assert result["measurement"] == {"planimetric_units": "degrees"}
+    features.QgsUnitTypes.encodeUnit.assert_called_once_with(
+        layer.crs.return_value.mapUnits.return_value
+    )
 
 
 def test_identify_point_in_an_explicit_crs(identify, plugin_handlers, monkeypatch):

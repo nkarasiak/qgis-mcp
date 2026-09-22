@@ -208,3 +208,35 @@ def test_sample_points_in_an_explicit_crs_are_reprojected(raster, plugin_handler
     assert result["samples"][0]["value"] == 6.0
     assert result["samples"][0]["outside_extent"] is False
     assert result["crs"] == "EPSG:4326"
+
+
+def test_sample_a_point_the_raster_crs_cannot_express_is_skipped(
+    raster, plugin_handlers, monkeypatch
+):
+    """A QgsCsException on one point used to abort the whole call."""
+    server, layer = raster
+    monkeypatch.setattr(plugin_handlers.base, "QgsCoordinateReferenceSystem", lambda s: Crs(s))
+    layer.crs.return_value = Crs("EPSG:32631")
+
+    class CsError(Exception):
+        pass
+
+    class ToRaster:
+        def __init__(self, src, dst, project):
+            pass
+
+        def transform(self, p):
+            if p[0] > 100:
+                raise CsError("forward transform")
+            return (1.5, 3.5)
+
+    monkeypatch.setattr(plugin_handlers.processing, "QgsCsException", CsError)
+    monkeypatch.setattr(plugin_handlers.processing, "QgsCoordinateTransform", ToRaster)
+
+    result = server.sample_raster_values(
+        "r", [[500.0, 0.0], [2.35, 48.85]], band=1, crs="EPSG:4326"
+    )
+
+    first, second = result["samples"]
+    assert first == {"x": 500.0, "y": 0.0, "outside_extent": True, "transform_failed": True}
+    assert second["value"] == 6.0

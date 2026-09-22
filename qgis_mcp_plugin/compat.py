@@ -27,6 +27,7 @@ from qgis.core import (
     QgsProcessingParameterDefinition,
     QgsProcessingParameterFile,
     QgsProcessingParameterNumber,
+    QgsRaster,
     QgsRasterBandStats,
     QgsSingleBandGrayRenderer,
     QgsUnitTypes,
@@ -89,6 +90,7 @@ GEOM_UNKNOWN = _enum((Qgis, "GeometryType.Unknown"), (QgsWkbTypes, "UnknownGeome
 
 # ── Raster stats ─────────────────────────────────────────────────────
 RASTER_STATS_ALL = _enum((Qgis, "RasterBandStatistic.All"), (QgsRasterBandStats, "All"))
+RASTER_ALPHA_BAND = _enum((Qgis, "RasterColorInterpretation.AlphaBand"), (QgsRaster, "AlphaBand"))
 
 # ── Layout export result ─────────────────────────────────────────────
 LAYOUT_SUCCESS = _enum((Qgis, "LayoutResult.Success"), (QgsLayoutExporter, "Success"))

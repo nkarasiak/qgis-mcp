@@ -11,6 +11,7 @@ import re
 
 from qgis.core import (
     QgsCoordinateTransform,
+    QgsCsException,
     QgsExpression,
     QgsExpressionContext,
     QgsExpressionContextUtils,
@@ -622,15 +623,22 @@ class FeatureHandlers:
         }
         if first_error:
             response["first_error"] = first_error
+        measurement = {}
         if re.search(r"\$(area|length|perimeter)\b", expression):
             # $area/$length follow the project's units and ellipsoid, not the
             # layer's - say which, since the field name often claims otherwise.
             project = QgsProject.instance()
-            response["measurement"] = {
-                "ellipsoid": project.ellipsoid(),
-                "area_units": QgsUnitTypes.encodeUnit(project.areaUnits()),
-                "distance_units": QgsUnitTypes.encodeUnit(project.distanceUnits()),
-            }
+            measurement.update(
+                ellipsoid=project.ellipsoid(),
+                area_units=QgsUnitTypes.encodeUnit(project.areaUnits()),
+                distance_units=QgsUnitTypes.encodeUnit(project.distanceUnits()),
+            )
+        if re.search(r"\b(area|length|perimeter)\s*\(", expression):
+            # The function forms are planimetric in the geometry's CRS (the
+            # layer's for $geometry): square degrees on a geographic layer.
+            measurement["planimetric_units"] = QgsUnitTypes.encodeUnit(layer.crs().mapUnits())
+        if measurement:
+            response["measurement"] = measurement
         return response
 
     @command
@@ -769,6 +777,29 @@ class FeatureHandlers:
             rows.append({fn: self._convert_attribute(feat[fn]) for fn in fields})
         return {"fields": fields, "rows": rows, "count": len(rows), "truncated": truncated}
 
+    def _identify_in_layer(self, layer, rect, to_ref, pt_geom, tolerance, limit):
+        """(hits, truncated) for *layer* in *rect*, compared in the point's CRS."""
+        feats = []
+        for feat in layer.getFeatures(QgsFeatureRequest().setFilterRect(rect)):
+            geom = feat.geometry()
+            if geom.isEmpty():
+                continue
+            if to_ref is not None:
+                geom = QgsGeometry(geom)
+                geom.transform(to_ref)
+            if tolerance > 0:
+                if geom.distance(pt_geom) > tolerance:
+                    continue
+            elif not geom.intersects(pt_geom):
+                continue
+            if len(feats) >= limit:
+                # A hit past the limit: stop, and say the list is partial.
+                return feats, True
+            attrs = {f.name(): self._convert_attribute(feat[f.name()]) for f in layer.fields()}
+            attrs["_fid"] = feat.id()
+            feats.append(attrs)
+        return feats, False
+
     @command
     def identify_features(self, point, tolerance=0.0, layer_ids=None, limit=10, crs=None, **kwargs):
         """Identify features at a point [x, y] across layers.
@@ -786,6 +817,7 @@ class FeatureHandlers:
             targets = [n.layer() for n in project.layerTreeRoot().findLayers() if n.isVisible()]
         prefilter = QgsRectangle(x - tolerance, y - tolerance, x + tolerance, y + tolerance)
         results = []
+        skipped = []
         for layer in targets:
             if layer is None or layer.type() != LAYER_VECTOR:
                 continue
@@ -794,32 +826,19 @@ class FeatureHandlers:
             # two differ, so search in layer CRS and compare in ref_crs.
             to_project = QgsCoordinateTransform(layer.crs(), ref_crs, project)
             reproject = layer.crs() != ref_crs and to_project.isValid()
-            layer_rect = prefilter
-            if reproject:
-                to_layer = QgsCoordinateTransform(ref_crs, layer.crs(), project)
-                layer_rect = to_layer.transformBoundingBox(prefilter)
-            req = QgsFeatureRequest().setFilterRect(layer_rect)
-            feats = []
-            truncated = False
-            for feat in layer.getFeatures(req):
-                geom = feat.geometry()
-                if geom.isEmpty():
-                    continue
+            try:
+                layer_rect = prefilter
                 if reproject:
-                    geom = QgsGeometry(geom)
-                    geom.transform(to_project)
-                if tolerance > 0:
-                    if geom.distance(pt_geom) > tolerance:
-                        continue
-                elif not geom.intersects(pt_geom):
-                    continue
-                if len(feats) >= limit:
-                    # A hit past the limit: stop, and say the list is partial.
-                    truncated = True
-                    break
-                attrs = {f.name(): self._convert_attribute(feat[f.name()]) for f in layer.fields()}
-                attrs["_fid"] = feat.id()
-                feats.append(attrs)
+                    to_layer = QgsCoordinateTransform(ref_crs, layer.crs(), project)
+                    layer_rect = to_layer.transformBoundingBox(prefilter)
+                feats, truncated = self._identify_in_layer(
+                    layer, layer_rect, to_project if reproject else None, pt_geom, tolerance, limit
+                )
+            except QgsCsException:
+                # The point lies outside what the layer's CRS can express; one
+                # such layer used to abort the whole call.
+                skipped.append({"layer_id": layer.id(), "reason": "point not transformable"})
+                continue
             if feats:
                 results.append(
                     {
@@ -830,4 +849,7 @@ class FeatureHandlers:
                         "truncated": truncated,
                     }
                 )
-        return {"point": [x, y], "crs": ref_crs.authid(), "results": results}
+        response = {"point": [x, y], "crs": ref_crs.authid(), "results": results}
+        if skipped:
+            response["skipped_layers"] = skipped
+        return response

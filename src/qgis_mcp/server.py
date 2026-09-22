@@ -1619,7 +1619,8 @@ async def zonal_statistics(
     description="Sample raster pixel values at points. 'points' is a list of [x, y] in crs "
     "when given (reprojected to the raster), else in the raster's CRS. Omit 'band' to sample "
     "all bands. A null value is nodata when outside_extent is false; outside_extent true "
-    "means the point is off the raster (often a CRS mix-up).",
+    "means the point is off the raster (often a CRS mix-up); transform_failed marks a point "
+    "the raster's CRS cannot express.",
 )
 async def sample_raster_values(
     ctx: Context,
@@ -1675,7 +1676,8 @@ async def export_layer(
     description="Add (if missing) + populate a field from a QGIS expression, per feature, in-place. "
     "field_type: string|int|double|bool|date|datetime (default double). "
     "Example: expression='$area', field_name='area'. $area/$length use the project's "
-    "ellipsoid and units (reported back as 'measurement'), not necessarily m2/m. "
+    "ellipsoid and units (reported back as 'measurement'), not necessarily m2/m; the "
+    "area()/length() functions are planimetric in the layer CRS (measurement.planimetric_units). "
     "Returns updated and failed counts; failed features keep their old value and "
     "first_error says why. Refused while the layer has an open edit session.",
 )
@@ -3011,7 +3013,7 @@ async def evaluate_expression(
     "The point and tolerance are in crs when given, else the project CRS; layers in another "
     "CRS are reprojected. tolerance (in those units) expands the search; 0 = exact hit. "
     "layer_ids limits the search (default: visible vector layers). limit caps features per "
-    "layer.",
+    "layer. Layers the point cannot be transformed into are listed in skipped_layers.",
 )
 async def identify_features(
     ctx: Context,

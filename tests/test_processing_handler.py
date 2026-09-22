@@ -6,6 +6,7 @@ issue #40 has to run against a snapshot taken before the run or it silently stop
 anything.
 """
 
+import os
 import sys
 
 import pytest
@@ -581,6 +582,24 @@ def test_an_overwritten_output_passes(file_output):
     with_run, out = file_output
     out.write_bytes(b"old")
     server = with_run(writes=b"new and longer")
+
+    assert server._run_alg("gdal:translate", {"OUTPUT": str(out)})["OUTPUT"] == str(out)
+
+
+def test_a_rewrite_on_a_coarse_clock_passes(file_output, monkeypatch):
+    """FAT32 keeps 2 s: a fast rerun writing the same bytes kept the old stamp."""
+    with_run, out = file_output
+    out.write_bytes(b"old")
+    stamp = os.stat(out).st_mtime_ns
+    server = with_run(writes=b"old")
+    run = sys.modules["processing"].run
+
+    def coarse_run(*args, **kwargs):
+        result = run(*args, **kwargs)
+        os.utime(out, ns=(stamp, stamp))  # the rewrite lands on the same tick
+        return result
+
+    monkeypatch.setattr(sys.modules["processing"], "run", coarse_run)
 
     assert server._run_alg("gdal:translate", {"OUTPUT": str(out)})["OUTPUT"] == str(out)
 

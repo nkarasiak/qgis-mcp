@@ -24,7 +24,14 @@ from qgis.core import (
 )
 from qgis.PyQt.QtGui import QColor
 
-from ..compat import LAYER_RASTER, LAYER_VECTOR, MSG_INFO, MSG_WARNING, RASTER_STATS_ALL
+from ..compat import (
+    LAYER_RASTER,
+    LAYER_VECTOR,
+    MSG_INFO,
+    MSG_WARNING,
+    RASTER_ALPHA_BAND,
+    RASTER_STATS_ALL,
+)
 from ..errors import CommandError
 from ..registry import command
 from ..wire import zip_strict
@@ -773,10 +780,12 @@ class LayerHandlers:
             dp = layer.dataProvider()
             # gdalwarp carries a source nodata over to the fill; without one it
             # fills the cells outside the reprojected footprint with 0, which
-            # reads as real data. An alpha band marks them instead.
-            alpha = not all(
-                dp.sourceHasNoDataValue(band) for band in range(1, layer.bandCount() + 1)
-            )
+            # reads as real data. An alpha band marks them instead; gdalwarp
+            # carries a source alpha band over by itself.
+            bands = range(1, layer.bandCount() + 1)
+            alpha = not any(
+                dp.colorInterpretation(band) == RASTER_ALPHA_BAND for band in bands
+            ) and not all(dp.sourceHasNoDataValue(band) for band in bands)
             if alpha:
                 params["EXTRA"] = "-dstalpha"
             self._run_alg("gdal:warpreproject", params)

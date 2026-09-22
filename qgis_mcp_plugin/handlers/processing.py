@@ -9,6 +9,7 @@ from typing import ClassVar
 from qgis.core import (
     QgsApplication,
     QgsCoordinateTransform,
+    QgsCsException,
     QgsEllipsoidUtils,
     QgsMapLayer,
     QgsMessageLog,
@@ -298,11 +299,18 @@ class ProcessingHandlers:
         Windows a locked one cannot even be replaced), and "the file exists"
         then passed for "the run wrote it". Folders are left out: overwriting
         files inside one does not change its own mtime.
+
+        Each file is backdated 10 s first: on a coarse clock (FAT32 keeps 2 s,
+        some SMB shares more) a fast rerun writing the same bytes would
+        otherwise keep the old stamp and read as untouched.
         """
         state = {}
         for path in self._output_paths(algorithm, parameters):
             if os.path.isfile(path):
                 st = os.stat(path)
+                with contextlib.suppress(OSError):
+                    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns - 10_000_000_000))
+                    st = os.stat(path)
                 state[path] = (st.st_mtime_ns, st.st_size)
         return state
 
@@ -1095,7 +1103,15 @@ class ProcessingHandlers:
         for pt in points:
             p = QgsPointXY(pt[0], pt[1])
             if to_raster is not None:
-                p = to_raster.transform(p)
+                try:
+                    p = to_raster.transform(p)
+                except QgsCsException:
+                    # Off what the raster's CRS can express: no value, and the
+                    # rest of the points still sampled.
+                    results.append(
+                        {"x": pt[0], "y": pt[1], "outside_extent": True, "transform_failed": True}
+                    )
+                    continue
             sample = {"x": pt[0], "y": pt[1], "outside_extent": not extent.contains(p)}
             if band is not None:
                 val, ok = dp.sample(p, int(band))
