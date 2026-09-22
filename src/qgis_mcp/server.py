@@ -1677,7 +1677,8 @@ async def export_layer(
     "field_type: string|int|double|bool|date|datetime (default double). "
     "Example: expression='$area', field_name='area'. $area/$length use the project's "
     "ellipsoid and units (reported back as 'measurement'), not necessarily m2/m; the "
-    "area()/length() functions are planimetric in the layer CRS (measurement.planimetric_units). "
+    "area()/length() functions are planimetric in the layer CRS (measurement.planimetric_units, "
+    "squared for area()); length() of a string counts characters and reports no units. "
     "Returns updated and failed counts; failed features keep their old value and "
     "first_error says why. Refused while the layer has an open edit session.",
 )

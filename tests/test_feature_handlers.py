@@ -473,6 +473,8 @@ def calculator(plugin_handlers, server, layer, features, monkeypatch):
     monkeypatch.setattr(features, "QgsExpression", EvalExpression)
     monkeypatch.setattr(features, "QgsExpressionContext", MagicMock)
     monkeypatch.setattr(EvalExpression, "fail", ())
+    # The parse tree needs real QGIS; tests/test_qgis_live.py covers the walk.
+    monkeypatch.setattr(features, "_measures_geometry", lambda expression: False)
     layer.isEditable.return_value = False
     layer.fields.return_value.indexOf.return_value = 2  # field exists
     rows = []
@@ -573,6 +575,7 @@ def test_field_calculator_reports_the_crs_units_of_the_area_function(
     monkeypatch.setattr(
         features, "QgsUnitTypes", MagicMock(**{"encodeUnit.return_value": "degrees"})
     )
+    monkeypatch.setattr(features, "_measures_geometry", lambda expression: True)
 
     result = server.field_calculator("lid", "area", "area($geometry)")
 

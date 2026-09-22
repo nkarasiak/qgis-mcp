@@ -15,6 +15,7 @@ from qgis.core import (
     QgsExpression,
     QgsExpressionContext,
     QgsExpressionContextUtils,
+    QgsExpressionNodeFunction,
     QgsFeature,
     QgsFeatureRequest,
     QgsField,
@@ -49,6 +50,59 @@ from ..compat import (
 )
 from ..errors import CommandError
 from ..registry import command
+
+# Child accessors of each QgsExpressionNode kind; PyQGIS has no findNodes().
+_SINGLE_CHILDREN = (
+    "opLeft",
+    "opRight",
+    "operand",
+    "node",
+    "lowerBound",
+    "higherBound",
+    "container",
+    "index",
+    "elseExp",
+)
+
+
+def _function_calls(node):
+    """Every function node in the expression tree under *node*."""
+    if isinstance(node, QgsExpressionNodeFunction):
+        yield node
+    kids = [getattr(node, name)() for name in _SINGLE_CHILDREN if hasattr(node, name)]
+    for name in ("args", "list"):
+        node_list = getattr(node, name)() if hasattr(node, name) else None
+        if node_list is not None:
+            kids.extend(node_list.list())
+    for when_then in node.conditions() if hasattr(node, "conditions") else ():
+        kids.extend((when_then.whenExp(), when_then.thenExp()))
+    for kid in kids:
+        if kid is not None:
+            yield from _function_calls(kid)
+
+
+def _measures_geometry(expression):
+    """Whether *expression* calls area(), perimeter() or length() on a geometry.
+
+    length() is also the string length: length("name") counts characters, so
+    it only counts when its argument involves a geometry.
+    """
+    # The expression owns its node tree: keep it alive for the walk, or the
+    # nodes are freed under it (a native crash on QGIS 4).
+    parsed = QgsExpression(expression)
+    root = parsed.rootNode()
+    if root is None:
+        return False
+    functions = QgsExpression.Functions()
+    for call in _function_calls(root):
+        name = functions[call.fnIndex()].name()
+        if name in ("area", "perimeter"):
+            return True
+        if name == "length":
+            args = call.args().list() if call.args() is not None else []
+            if args and args[0].needsGeometry():
+                return True
+    return False
 
 
 class FeatureHandlers:
@@ -633,7 +687,7 @@ class FeatureHandlers:
                 area_units=QgsUnitTypes.encodeUnit(project.areaUnits()),
                 distance_units=QgsUnitTypes.encodeUnit(project.distanceUnits()),
             )
-        if re.search(r"\b(area|length|perimeter)\s*\(", expression):
+        if _measures_geometry(expression):
             # The function forms are planimetric in the geometry's CRS (the
             # layer's for $geometry): square degrees on a geographic layer.
             measurement["planimetric_units"] = QgsUnitTypes.encodeUnit(layer.crs().mapUnits())

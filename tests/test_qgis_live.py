@@ -818,6 +818,47 @@ def test_layer_extent_empty_layer_is_json_safe(client):
         client.send_command("remove_layer", {"layer_id": layer_id})
 
 
+def test_field_calculator_string_length_reports_no_units(client):
+    """length("name") counts characters; only a geometry length gets CRS units."""
+    resp = client.send_command(
+        "create_memory_layer",
+        {
+            "name": f"calc_{uuid.uuid4().hex[:8]}",
+            "geometry_type": "LineString",
+            "crs": "EPSG:4326",
+            "fields": [{"name": "name", "type": "string"}],
+        },
+    )
+    layer_id = resp["result"]["id"]
+    try:
+        client.send_command(
+            "add_features",
+            {
+                "layer_id": layer_id,
+                "features": [
+                    {"attributes": {"name": "abcd"}, "geometry_wkt": "LINESTRING(0 0, 3 4)"}
+                ],
+            },
+        )
+        cases = [
+            ('length("name")', False),
+            ('length(upper("name")) + 1', False),
+            ("length($geometry)", True),
+            ("round(area(buffer($geometry, 1)), 2)", True),
+            ('CASE WHEN length("name") > 2 THEN perimeter($geometry) END', True),
+        ]
+        for i, (expression, geometric) in enumerate(cases):
+            resp = client.send_command(
+                "field_calculator",
+                {"layer_id": layer_id, "field_name": f"f{i}", "expression": expression},
+            )
+            assert resp["status"] == "success", resp
+            units = resp["result"].get("measurement", {}).get("planimetric_units")
+            assert (units == "degrees") is geometric, (expression, resp["result"])
+    finally:
+        client.send_command("remove_layer", {"layer_id": layer_id})
+
+
 def test_run_model_defaults_destination_parameters(client, setup_test_data):
     """Omitting a model's sink parameter must not abort the run."""
     name = f"livemodel_{uuid.uuid4().hex[:6]}"
