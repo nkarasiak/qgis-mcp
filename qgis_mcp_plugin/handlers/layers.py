@@ -26,6 +26,24 @@ from ..errors import CommandError
 from ..registry import command
 from ..wire import zip_strict
 
+_TRUE = ("true", "1", "yes", "on")
+_FALSE = ("false", "0", "no", "off")
+
+
+def _to_bool(value):
+    """Parse a boolean the MCP tool may send as a string.
+
+    ``bool("false")`` is True, so the value has to be read, not truthiness-tested.
+    """
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in _TRUE:
+        return True
+    if text in _FALSE:
+        return False
+    raise CommandError(f"Not a boolean: {value!r}. Use true or false")
+
 
 class LayerHandlers:
     """Adding, removing, inspecting and configuring map layers."""
@@ -365,7 +383,7 @@ class LayerHandlers:
     _LAYER_PROPERTIES: ClassVar[dict] = {
         "opacity": (float, "setOpacity"),
         "name": (str, "setName"),
-        "scale_visibility": (bool, "setScaleBasedVisibility"),
+        "scale_visibility": (_to_bool, "setScaleBasedVisibility"),
         "min_scale": (float, "setMinimumScale"),
         "max_scale": (float, "setMaximumScale"),
     }
@@ -374,10 +392,12 @@ class LayerHandlers:
     def set_layer_property(self, layer_id, property, value, **kwargs):
         layer = self._layer(layer_id)
         coerce, setter = self._pick(self._LAYER_PROPERTIES, property, "property")
-        getattr(layer, setter)(coerce(value))
+        applied = coerce(value)
+        getattr(layer, setter)(applied)
 
         self.iface.mapCanvas().refresh()
-        return {"ok": True, "property": property, "value": value}
+        # The coerced value, so the caller sees what was set, not what was sent.
+        return {"ok": True, "property": property, "value": applied}
 
     @command
     def get_layer_extent(self, layer_id, **kwargs):

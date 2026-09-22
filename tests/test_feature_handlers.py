@@ -210,3 +210,130 @@ def test_export_layer_refuses_a_filter_on_a_raster(plugin_handlers, exporter, la
         server.export_layer("lid", "/tmp/o.tif", filter_expression="1 = 1")
 
     assert runs == []
+
+
+class Crs(str):
+    """A CRS that compares by authid, like QgsCoordinateReferenceSystem."""
+
+    def authid(self):
+        return str(self)
+
+
+class FakeTransform:
+    def __init__(self, src, dst, project):
+        self.src, self.dst = src, dst
+
+    def isValid(self):
+        return True
+
+    def transformBoundingBox(self, rect):
+        return ("rect", self.src, self.dst)
+
+
+@pytest.fixture
+def identify(plugin_handlers, server, layer, features, monkeypatch):
+    """identify_features with a project in EPSG:3857 and one hit feature."""
+    project = plugin_handlers.base.QgsProject.instance.return_value
+    monkeypatch.setattr(features, "QgsProject", plugin_handlers.base.QgsProject)
+    monkeypatch.setattr(features, "QgsCoordinateTransform", FakeTransform)
+    monkeypatch.setattr(features, "QgsGeometry", MagicMock())
+    project.crs.return_value = Crs("EPSG:3857")
+    layer.fields.return_value = []
+    feat = MagicMock()
+    feat.geometry.return_value.isEmpty.return_value = False
+    layer.getFeatures.return_value = [feat]
+    return server, layer, features
+
+
+def test_identify_searches_a_layer_in_its_own_crs(identify):
+    """The point is project CRS; comparing it raw to layer coords found nothing."""
+    server, layer, features = identify
+    layer.crs.return_value = Crs("EPSG:4326")
+
+    result = server.identify_features([250000.0, 6200000.0], layer_ids=["lid"])
+
+    rect = features.QgsFeatureRequest.return_value.setFilterRect.call_args[0][0]
+    assert rect == ("rect", "EPSG:3857", "EPSG:4326"), "prefilter must be in layer CRS"
+    copy = features.QgsGeometry.return_value
+    (to_project,) = copy.transform.call_args[0]
+    assert (to_project.src, to_project.dst) == ("EPSG:4326", "EPSG:3857")
+    assert result["crs"] == "EPSG:3857"
+    assert result["results"][0]["count"] == 1
+
+
+def test_identify_same_crs_uses_the_point_as_is(identify):
+    server, layer, features = identify
+    layer.crs.return_value = Crs("EPSG:3857")
+
+    server.identify_features([1.0, 2.0], layer_ids=["lid"])
+
+    features.QgsGeometry.return_value.transform.assert_not_called()
+
+
+# --- set_layer_property -------------------------------------------------------
+
+
+@pytest.fixture
+def layer_server(plugin_handlers, features, layer):
+    class Server(plugin_handlers.layers.LayerHandlers, plugin_handlers.base.HandlerBase):
+        iface = MagicMock()
+
+    return Server()
+
+
+@pytest.mark.parametrize(("sent", "applied"), [("false", False), ("True", True), ("0", False)])
+def test_scale_visibility_reads_the_boolean_it_is_sent(layer_server, layer, sent, applied):
+    """bool("false") is True, so "false" used to switch scale visibility on."""
+    result = layer_server.set_layer_property("lid", "scale_visibility", sent)
+
+    layer.setScaleBasedVisibility.assert_called_once_with(applied)
+    assert result["value"] is applied
+
+
+def test_scale_visibility_refuses_a_non_boolean(plugin_handlers, layer_server, layer):
+    with pytest.raises(plugin_handlers.base.CommandError, match="Not a boolean"):
+        layer_server.set_layer_property("lid", "scale_visibility", "maybe")
+
+    layer.setScaleBasedVisibility.assert_not_called()
+
+
+# --- create_new_project -------------------------------------------------------
+
+
+@pytest.fixture
+def project_server(plugin_handlers, monkeypatch):
+    project = MagicMock()
+    project.write.return_value = True
+    project.crs.return_value.authid.return_value = "EPSG:4326"
+    project.ellipsoid.return_value = "EPSG:7030"
+    qgs_project = MagicMock(**{"instance.return_value": project})
+    monkeypatch.setattr(plugin_handlers.project, "QgsProject", qgs_project)
+
+    class Server(plugin_handlers.project.ProjectHandlers):
+        LOG_TAG = "test"
+        iface = MagicMock()
+
+    return Server(), project
+
+
+def test_create_new_project_runs_file_new(project_server):
+    """clear() left no CRS and ellipsoid NONE, and kept an unsaved project's layers."""
+    server, project = project_server
+    server.iface.newProject.return_value = True
+
+    result = server.create_new_project("/tmp/p.qgz")
+
+    server.iface.newProject.assert_called_once_with(False)
+    project.clear.assert_not_called()
+    project.setFileName.assert_called_once_with("/tmp/p.qgz")
+    assert (result["crs"], result["ellipsoid"]) == ("EPSG:4326", "EPSG:7030")
+
+
+def test_create_new_project_reports_when_qgis_refuses(plugin_handlers, project_server):
+    server, project = project_server
+    server.iface.newProject.return_value = False
+
+    with pytest.raises(plugin_handlers.base.CommandError):
+        server.create_new_project("/tmp/p.qgz")
+
+    project.write.assert_not_called()

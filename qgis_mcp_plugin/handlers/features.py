@@ -9,6 +9,7 @@ took via ``buffered``.
 import contextlib
 
 from qgis.core import (
+    QgsCoordinateTransform,
     QgsExpression,
     QgsExpressionContext,
     QgsExpressionContextUtils,
@@ -668,12 +669,24 @@ class FeatureHandlers:
         for layer in targets:
             if layer is None or layer.type() != LAYER_VECTOR:
                 continue
-            req = QgsFeatureRequest().setFilterRect(prefilter)
+            # The point and tolerance are in project CRS; the features are in the
+            # layer's. Comparing them raw answered "nothing here" whenever the
+            # two differ, so search in layer CRS and compare in project CRS.
+            to_project = QgsCoordinateTransform(layer.crs(), project.crs(), project)
+            reproject = layer.crs() != project.crs() and to_project.isValid()
+            layer_rect = prefilter
+            if reproject:
+                to_layer = QgsCoordinateTransform(project.crs(), layer.crs(), project)
+                layer_rect = to_layer.transformBoundingBox(prefilter)
+            req = QgsFeatureRequest().setFilterRect(layer_rect)
             feats = []
             for feat in layer.getFeatures(req):
                 geom = feat.geometry()
                 if geom.isEmpty():
                     continue
+                if reproject:
+                    geom = QgsGeometry(geom)
+                    geom.transform(to_project)
                 if tolerance > 0:
                     if geom.distance(pt_geom) > tolerance:
                         continue
@@ -693,4 +706,4 @@ class FeatureHandlers:
                         "count": len(feats),
                     }
                 )
-        return {"point": [x, y], "results": results}
+        return {"point": [x, y], "crs": project.crs().authid(), "results": results}

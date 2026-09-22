@@ -66,9 +66,13 @@ class ProjectHandlers:
 
     @command
     def create_new_project(self, path, **kwargs):
+        # File > New, not project.clear(): clear() skips the defaults File > New
+        # applies, leaving no CRS and ellipsoid NONE so every later measurement
+        # was planimetric. It also only ran for a saved project, so an unsaved
+        # one's layers carried over into the "empty" project.
+        if not self.iface.newProject(False):
+            raise CommandError("QGIS did not create a new project")
         project = QgsProject.instance()
-        if project.fileName():
-            project.clear()
         project.setFileName(path)
         self.iface.mapCanvas().refresh()
         if project.write():
@@ -76,6 +80,8 @@ class ProjectHandlers:
             return {
                 "created": f"Project created and saved successfully at: {path}",
                 "layer_count": len(project.mapLayers()),
+                "crs": project.crs().authid(),
+                "ellipsoid": project.ellipsoid(),
             }
         else:
             raise CommandError(f"Failed to save project to {path}")

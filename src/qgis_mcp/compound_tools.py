@@ -1222,7 +1222,8 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
             "Actions: sql, identify\n"
             "- sql: query (str), layers (list[str], optional), as_layer (bool, default false), "
             "layer_name (str), geometry_field (str, optional), uid_field (str, optional), limit (int, default 1000, negative for all)\n"
-            "- identify: point (list[float] [x,y]), tolerance (float, default 0), "
+            "- identify: point (list[float] [x,y], project CRS), tolerance (float, project CRS "
+            "units, default 0), "
             "layer_ids (list[str], optional), limit (int, default 10)"
             f"{_PARAMS_NOTE}"
         ),

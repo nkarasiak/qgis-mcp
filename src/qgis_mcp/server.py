@@ -2961,7 +2961,8 @@ async def evaluate_expression(
     title="Identify Features",
     annotations=ToolAnnotations(readOnlyHint=True),
     description="Identify features at a point [x, y] in project CRS across layers (map-click "
-    "analogue). tolerance (map units) expands the search; 0 = exact hit. layer_ids limits the "
+    "analogue); layers in another CRS are reprojected. tolerance (project CRS units) expands "
+    "the search; 0 = exact hit. layer_ids limits the "
     "search (default: visible vector layers). limit caps features per layer.",
 )
 async def identify_features(
