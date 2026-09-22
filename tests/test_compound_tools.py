@@ -5,7 +5,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from conftest import COMPOUND_TOOL_COUNT
@@ -194,3 +194,73 @@ async def test_compound_missing_required_param_names_itself():
     )
     with pytest.raises(ToolError, match="missing required parameter 'expression'"):
         await mcp._tool_manager.get_tool("expression").fn(ctx=None, action="evaluate", params={})
+
+
+@pytest.mark.asyncio
+async def test_compound_refuses_a_misspelled_param_before_sending():
+    """A typo ("expresion") was dropped, returning unfiltered features as the answer."""
+    send = AsyncMock(return_value={"features": []})
+    mcp = FastMCP("compound-typo-test")
+    register_compound_tools(mcp, _send=send, _confirm_destructive=AsyncMock(return_value=True))
+
+    with pytest.raises(ToolError, match=r"unknown parameter\(s\) \['expresion'\]"):
+        await mcp._tool_manager.get_tool("features").fn(
+            ctx=None, action="get", params={"layer_id": "l", "expresion": "pop > 1e6"}
+        )
+    send.assert_not_called()
+
+
+# Placeholder values by parameter name, good enough for every handler to build its
+# payload and reach _send - where the unknown-parameter check runs.
+_LIST_PARAM = re.compile(
+    r"(points|fields|fids|predicates|stats|steps|commands|layer_ids|inputs|outputs|_list"
+    r"|layers|features|updates|columns|values|order)$"
+)
+_NUMBER_PARAM = re.compile(
+    r"(timeout|limit|offset|band|dpi|width|height|^x$|^y$|size|classes|method|scale|opacity"
+    r"|index|precision|length|rotation|distance|heading|pitch|min_value|max_value|zoom)"
+)
+# Words the description parser picks up from prose, not parameter names.
+_NOT_PARAMS = {"str", "int", "list", "dict", "float", "bool", "extension", "models"}
+
+
+def _placeholder(name):
+    if _LIST_PARAM.search(name):
+        return []
+    if name in ("parameters", "attributes", "variables"):
+        return {}
+    if name == "point":
+        return [0.0, 0.0]
+    if name == "bbox":
+        return {"xmin": 0, "ymin": 0, "xmax": 1, "ymax": 1}
+    if _NUMBER_PARAM.search(name):
+        return 1
+    return "x"
+
+
+@pytest.mark.asyncio
+async def test_compound_accepts_every_documented_param():
+    """The unknown-parameter check must never refuse a parameter the description lists."""
+    send = AsyncMock(return_value={"results": [], "base64_data": "AA", "layers": [], "ok": True})
+    mcp = FastMCP("compound-documented-params-test")
+    register_compound_tools(mcp, _send=send, _confirm_destructive=AsyncMock(return_value=True))
+    ctx = MagicMock(info=AsyncMock(), report_progress=AsyncMock())
+    refused, checked = [], 0
+    for tool in await mcp.list_tools():
+        for line in (tool.description or "").splitlines():
+            match = re.match(r"- (\w+):\s*(.*)", line.strip())
+            if not match:
+                continue
+            action, rest = match.groups()
+            names = [n for n in re.findall(r"(\w+) \(", rest) if n not in _NOT_PARAMS]
+            send.reset_mock()
+            try:
+                await mcp._tool_manager.get_tool(tool.name).fn(
+                    ctx=ctx, action=action, params={n: _placeholder(n) for n in names}
+                )
+            except ToolError as e:
+                if "unknown parameter" in str(e):
+                    refused.append(f"{tool.name}.{action}: {e}")
+            checked += send.called
+    assert refused == []
+    assert checked > 100, "most actions must reach _send, or this test checks nothing"

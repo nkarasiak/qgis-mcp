@@ -9,6 +9,7 @@ dispatches to the same ``_send()`` logic used by the granular tools.
 """
 
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from typing import Any
 
 try:
@@ -56,19 +57,58 @@ _Action = Callable[[Context, dict[str, Any]], Awaitable[Any]]
 
 
 class _Params(dict):
-    """An action's params, where a missing required key is a ToolError.
+    """An action's params, where a missing or unused key is a ToolError.
 
     Handlers read required params as ``kwargs["x"]``; a bare KeyError reached
     the client as "Error executing tool <name>: 'x'", and mcp >= 2.1 masks
     anything that is not a ToolError entirely.
+
+    Every lookup is recorded, so a key the handler never looked at - a typo
+    such as "expresion" - can be refused (:meth:`check_all_read`) instead of
+    silently dropped, which returned unfiltered results as if they were the
+    answer. Granular mode refuses such keys in the plugin; compound handlers
+    build their own payloads, so they never got that far.
     """
 
     def __init__(self, group: str, action: str, params: dict):
         super().__init__(params)
         self._where = f"{group} action '{action}'"
+        self._read: set = set()
+
+    def __getitem__(self, key):
+        self._read.add(key)
+        return super().__getitem__(key)
 
     def __missing__(self, key):
         raise ToolError(f"{self._where}: missing required parameter '{key}'")
+
+    def get(self, key, default=None):
+        self._read.add(key)
+        return super().get(key, default)
+
+    def __contains__(self, key):
+        self._read.add(key)
+        return super().__contains__(key)
+
+    def forwarded(self) -> dict:
+        """All params as a plain dict, for a handler that passes them through.
+
+        The plugin then validates them against the command's signature itself.
+        """
+        self._read.update(self)
+        return dict(self)
+
+    def check_all_read(self):
+        unused = sorted(set(self) - self._read)
+        if unused:
+            raise ToolError(
+                f"{self._where}: unknown parameter(s) {unused}; "
+                "see the tool description for the ones it takes"
+            )
+
+
+# The params of the action being dispatched, for the pre-send check below.
+_current_params: ContextVar[_Params | None] = ContextVar("_current_params", default=None)
 
 
 async def _dispatch(
@@ -82,7 +122,28 @@ async def _dispatch(
     handler = actions.get(action)
     if handler is None:
         raise ToolError(f"Unknown {group} action: {action}")
-    return await handler(ctx, _Params(group, action, params or {}))
+    token = _current_params.set(_Params(group, action, params or {}))
+    try:
+        return await handler(ctx, _current_params.get())
+    finally:
+        _current_params.reset(token)
+
+
+def _checked_send(send):
+    """*send*, refusing first when the action left a parameter unread.
+
+    Every handler reads its params while building the payload and sends once,
+    so by the time it sends, a key it never looked at is one it ignores. The
+    check runs before the command reaches QGIS, never after it has acted.
+    """
+
+    async def checked(*args, **kwargs):
+        params = _current_params.get()
+        if params is not None:
+            params.check_all_read()
+        return await send(*args, **kwargs)
+
+    return checked
 
 
 def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa: C901
@@ -93,6 +154,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
     for the branches of the nested handlers as well, and those are already as
     small as each action allows.
     """
+    _send = _checked_send(_send)
 
     # ------------------------------------------------------------------
     # 1. system
@@ -821,9 +883,10 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
             },
         ),
         "export_atlas": render_export_atlas,
-        # Layout items take the caller's params as-is, so one entry per command.
+        # Layout items take the caller's params as-is, so one entry per command;
+        # the plugin refuses any the command does not take.
         **{
-            item_action: (lambda ctx, kwargs, command=command: _send(command, kwargs))
+            item_action: (lambda ctx, kwargs, command=command: _send(command, kwargs.forwarded()))
             for item_action, command in _LAYOUT_ITEM_COMMANDS.items()
         },
     }
