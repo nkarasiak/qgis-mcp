@@ -82,6 +82,7 @@ class _ResponsiveFeedback(QgsProcessingFeedback):
         self._last_pump = 0.0
         self.timed_out = False
         self.errors = []
+        self.error_count = 0
 
     def _tick(self):
         now = time.monotonic()
@@ -105,6 +106,7 @@ class _ResponsiveFeedback(QgsProcessingFeedback):
         # The GDAL providers shell out and surface a non-zero exit code only
         # through here, never through the results dict, so keeping the messages
         # is the only way a failed run can be described to the caller.
+        self.error_count += 1
         if len(self.errors) < _MAX_TRACKED_ERRORS:
             self.errors.append(str(error)[:_MAX_ERROR_LENGTH])
         super().reportError(error, fatalError)
@@ -117,6 +119,19 @@ def _error_detail(feedback):
     first stderr line is often a harmless warning with the exit code last.
     """
     return f": {'; '.join(feedback.errors)}" if feedback.errors else ""
+
+
+def _warnings(feedback):
+    """Non-fatal errors of a run that produced its outputs, as response keys.
+
+    A run under the Processing setting "Skip invalid features" succeeds while
+    dropping every feature with an invalid geometry; the skips reach only the
+    feedback, so a join came back with most targets unmatched and no word
+    why (#52). warning_count is the total; warnings keeps the first few.
+    """
+    if not feedback.errors:
+        return {}
+    return {"warnings": feedback.errors, "warning_count": feedback.error_count}
 
 
 def _output_value(value):
@@ -155,6 +170,11 @@ class ProcessingHandlers:
         "postgresql:",
         "mssql:",
     )
+
+    def _run_alg_with_warnings(self, algorithm, parameters):
+        """_run_alg, plus the non-fatal errors it reported as response keys (#52)."""
+        feedback = _ResponsiveFeedback(self._PROCESSING_TIMEOUT)
+        return self._run_alg(algorithm, parameters, feedback), _warnings(feedback)
 
     def _run_alg(self, algorithm, parameters, feedback=None, load=False, context=None):
         """Run *algorithm*, raising when it did not actually produce its output.
@@ -324,11 +344,10 @@ class ProcessingHandlers:
                     for lid, layer in project.mapLayers().items()
                     if lid not in before
                 ]
-            if feedback.errors:
-                # The outputs are there, so this is not a failure - but GDAL
-                # writes real warnings to stderr and swallowing them is what
-                # made a silently failed run so hard to see.
-                response["warnings"] = feedback.errors
+            # The outputs are there, so this is not a failure - but GDAL writes
+            # real warnings to stderr and swallowing them is what made a
+            # silently failed run so hard to see.
+            response.update(_warnings(feedback))
             return response
         except CommandError:
             # Already a deliberate, user-facing message (the timeout above).
@@ -882,7 +901,11 @@ class ProcessingHandlers:
         feedback = _ResponsiveFeedback(self._PROCESSING_TIMEOUT)
         context = self._ellipsoid_context(ellipsoid, feedback)
         result = self._run_alg(target, parameters, feedback, context=context)
-        return {"model": model, "result": {k: _output_value(v) for k, v in result.items()}}
+        return {
+            "model": model,
+            "result": {k: _output_value(v) for k, v in result.items()},
+            **_warnings(feedback),
+        }
 
     @command
     def get_processing_providers(self, **kwargs):
@@ -937,6 +960,7 @@ class ProcessingHandlers:
                         "index": i,
                         "status": "success",
                         "result": {k: _output_value(v) for k, v in r.items()},
+                        **_warnings(feedback),
                     }
                 )
             except Exception as e:
@@ -1048,8 +1072,8 @@ class ProcessingHandlers:
             "STATISTICS": stats or [0, 1, 2],
             "OUTPUT": output_path or "memory:zonal_stats",
         }
-        r = self._run_alg("native:zonalstatisticsfb", params)
-        return self._register_output(r["OUTPUT"], "zonal_stats")
+        r, warnings = self._run_alg_with_warnings("native:zonalstatisticsfb", params)
+        return {**self._register_output(r["OUTPUT"], "zonal_stats"), **warnings}
 
     @command
     def sample_raster_values(self, raster_layer, points, band=None, crs=None, **kwargs):
@@ -1120,7 +1144,7 @@ class ProcessingHandlers:
             "PREFIX": prefix,
             "OUTPUT": output_path or "memory:joined",
         }
-        r = self._run_alg("native:joinattributesbylocation", params)
+        r, warnings = self._run_alg_with_warnings("native:joinattributesbylocation", params)
         response = self._register_output(r["OUTPUT"], "joined")
         # Without these the caller cannot tell how much joined, or that first
         # match (the default) kept one arbitrary match and dropped the rest.
@@ -1128,9 +1152,10 @@ class ProcessingHandlers:
             {
                 "method": self._JOIN_METHODS.get(int(method), str(method)),
                 "target_features": target.featureCount(),
-                # One-to-many counts joined pairs; the others count target
-                # features that found a match.
+                # Target features that found a match, whatever the method: a
+                # one-to-many layer has more rows than this.
                 "joined_count": r.get("JOINED_COUNT"),
+                **warnings,
             }
         )
         return response

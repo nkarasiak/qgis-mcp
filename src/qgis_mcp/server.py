@@ -1730,8 +1730,10 @@ async def get_unique_values(
     "5=within 6=crosses (default [0]). method: 0=one-to-many 1=first match (default) "
     "2=largest overlap. First match keeps one arbitrary match per target feature and drops "
     "the others; use 0 when several can match. join_fields = copied columns (default all). "
-    "No output_path = in-memory layer. Returns joined_count: joined pairs for one-to-many, "
-    "matched target features otherwise, next to target_features.",
+    "No output_path = in-memory layer. Returns joined_count (target features that found a "
+    "match, whatever the method) next to target_features. warnings/warning_count report "
+    "features QGIS skipped, e.g. invalid geometries under the Processing setting that skips "
+    "them; fix them first (native:fixgeometries) or those features never match.",
 )
 async def spatial_join(
     ctx: Context,

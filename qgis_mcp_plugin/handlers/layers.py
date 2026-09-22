@@ -700,21 +700,25 @@ class LayerHandlers:
 
         if layer.type() == LAYER_VECTOR:
             src = layer
+            # Only the first run reads the layer, so only it can skip invalid features.
+            warnings = None
             if filter_expression:
                 self._check_filter_expression(layer, filter_expression)
-                r = self._run_alg(
+                r, warnings = self._run_alg_with_warnings(
                     "native:extractbyexpression",
                     {"INPUT": layer, "EXPRESSION": filter_expression, "OUTPUT": "memory:"},
                 )
                 src = r["OUTPUT"]
             if target_crs:
-                self._run_alg(
+                _, saved = self._run_alg_with_warnings(
                     "native:reprojectlayer",
                     {"INPUT": src, "TARGET_CRS": target_crs, "OUTPUT": output_path},
                 )
             else:
-                self._run_alg("native:savefeatures", {"INPUT": src, "OUTPUT": output_path})
-            return {"ok": True, "output": output_path}
+                _, saved = self._run_alg_with_warnings(
+                    "native:savefeatures", {"INPUT": src, "OUTPUT": output_path}
+                )
+            return {"ok": True, "output": output_path, **(saved if warnings is None else warnings)}
 
         if layer.type() == LAYER_RASTER:
             if filter_expression:

@@ -516,6 +516,34 @@ def test_spatial_join_reports_method_and_how_much_joined(plugin_handlers, monkey
     }
 
 
+def test_spatial_join_reports_features_qgis_skipped(plugin_handlers, monkeypatch):
+    """#52: under "skip invalid features" the join succeeds with most targets unmatched."""
+    from unittest.mock import MagicMock
+
+    layer = MagicMock()
+    layer.type.return_value = plugin_handlers.base.LAYER_VECTOR
+    layer.featureCount.return_value = 3235
+    qgs_project = MagicMock()
+    qgs_project.instance.return_value.mapLayer.return_value = layer
+    monkeypatch.setattr(plugin_handlers.base, "QgsProject", qgs_project)
+    skipped = [f"Feature ({i}) has invalid geometry and has been skipped" for i in range(12)]
+
+    class Server(plugin_handlers.processing.ProcessingHandlers, plugin_handlers.base.HandlerBase):
+        LOG_TAG = "test"
+
+        def _run_alg(self, algorithm, parameters, feedback=None, *args, **kwargs):
+            # What _ResponsiveFeedback.reportError leaves after 12 skips.
+            feedback.errors.extend(skipped[:10])
+            feedback.error_count = len(skipped)
+            return {"OUTPUT": "/tmp/joined.gpkg", "JOINED_COUNT": 576}
+
+    result = Server().spatial_join("t", "j", method=0, output_path="/tmp/joined.gpkg")
+
+    assert result["joined_count"] == 576
+    assert result["warning_count"] == 12
+    assert result["warnings"] == skipped[:10]
+
+
 # --- a leftover output file is not proof of a successful run ------------------
 
 
