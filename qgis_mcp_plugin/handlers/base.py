@@ -5,6 +5,7 @@ without importing each other.
 """
 
 from qgis.core import (
+    QgsCoordinateReferenceSystem,
     QgsExpression,
     QgsExpressionContext,
     QgsExpressionContextUtils,
@@ -48,6 +49,14 @@ class HandlerBase:
         if layer.type() != LAYER_RASTER:
             raise WrongLayerType(f"Not a raster layer: {layer_id}")
         return layer
+
+    @staticmethod
+    def _parse_crs(crs):
+        """The CRS *crs* names, or raise - an invalid one would transform nothing."""
+        parsed = QgsCoordinateReferenceSystem(crs)
+        if not parsed.isValid():
+            raise CommandError(f"Invalid CRS: {crs}")
+        return parsed
 
     @staticmethod
     def _load_error(layer):

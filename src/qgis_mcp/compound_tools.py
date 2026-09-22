@@ -447,7 +447,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
             {"layer_id": kwargs["layer_id"], "field_name": kwargs["field_name"]},
         ),
         "add": lambda ctx, kwargs: _send(
-            "add_features", {"layer_id": kwargs["layer_id"], "features": kwargs["features"]}
+            "add_features", picked(kwargs, ("layer_id", "features"), ("crs",))
         ),
         "update": lambda ctx, kwargs: _send(
             "update_features", {"layer_id": kwargs["layer_id"], "updates": kwargs["updates"]}
@@ -467,7 +467,8 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
             "- get: layer_id (str), limit (int, default 10, max 50), offset (int, default 0), "
             "expression (str, optional), include_geometry (bool, default false)\n"
             "- get_statistics: layer_id (str), field_name (str)\n"
-            "- add: layer_id (str), features (list[dict]) - destructive\n"
+            "- add: layer_id (str), features (list[dict]), crs (str, optional - of "
+            "geometry_wkt, default the layer CRS) - destructive\n"
             "- update: layer_id (str), updates (list[dict]) - destructive\n"
             "- update_geometry: layer_id (str), updates (list[dict], "
             "[{fid, geometry_wkt}]) - destructive\n"
@@ -1291,7 +1292,8 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
             timeout=TIMEOUT_LONG,
         ),
         "identify": lambda ctx, kwargs: _send(
-            "identify_features", picked(kwargs, ("point",), ("tolerance", "layer_ids", "limit"))
+            "identify_features",
+            picked(kwargs, ("point",), ("tolerance", "layer_ids", "limit", "crs")),
         ),
     }
 
@@ -1302,9 +1304,9 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
             "Actions: sql, identify\n"
             "- sql: query (str), layers (list[str], optional), as_layer (bool, default false), "
             "layer_name (str), geometry_field (str, optional), uid_field (str, optional), limit (int, default 1000, negative for all)\n"
-            "- identify: point (list[float] [x,y], project CRS), tolerance (float, project CRS "
-            "units, default 0), "
-            "layer_ids (list[str], optional), limit (int, default 10)"
+            "- identify: point (list[float] [x,y], in crs or the project CRS), tolerance "
+            "(float, same units, default 0), "
+            "layer_ids (list[str], optional), limit (int, default 10), crs (str, optional)"
             f"{_PARAMS_NOTE}"
         ),
         annotations=ToolAnnotations(readOnlyHint=True),
@@ -1527,6 +1529,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
                 "raster_layer": kwargs["raster_layer"],
                 "points": kwargs["points"],
                 "band": kwargs.get("band"),
+                **({"crs": kwargs["crs"]} if kwargs.get("crs") else {}),
             },
         ),
     }
@@ -1548,8 +1551,8 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
             "output_path (str, optional - omit for an in-memory layer)\n"
             "- raster_calculator: expression (str, reference bands as 'LayerName@band'), "
             "output_path (str, GeoTIFF), reference_layer (str, optional - grid/extent source)\n"
-            "- sample_raster: raster_layer (str), points (list[[x, y]] in the raster CRS), "
-            "band (int, optional - omit to sample all bands)"
+            "- sample_raster: raster_layer (str), points (list[[x, y]] in crs or the raster "
+            "CRS), band (int, optional - omit to sample all bands), crs (str, optional)"
             f"{_PARAMS_NOTE}"
         ),
     )
@@ -1572,8 +1575,8 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
                 "ymin": kwargs["ymin"],
                 "xmax": kwargs["xmax"],
                 "ymax": kwargs["ymax"],
-                "crs": kwargs.get("crs", "EPSG:4326"),
                 "group": kwargs.get("group", ""),
+                **({"crs": kwargs["crs"]} if kwargs.get("crs") else {}),
             },
         ),
         "remove": lambda ctx, kwargs: _send(
@@ -1588,7 +1591,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
             "Actions: list, add, remove\n"
             "- list: no params\n"
             "- add: name (str), xmin (float), ymin (float), xmax (float), ymax (float), "
-            "crs (str, default 'EPSG:4326'), group (str, optional)\n"
+            "crs (str, optional - default the project CRS), group (str, optional)\n"
             "- remove: bookmark_id (str) - destructive"
             f"{_PARAMS_NOTE}"
         ),

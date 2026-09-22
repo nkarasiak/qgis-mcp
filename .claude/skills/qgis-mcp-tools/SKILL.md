@@ -25,7 +25,7 @@ description: Reference for all qgis-mcp MCP tools, resources, and prompts (names
 | `zoom_to_layer` | Zoom to Layer | idempotent | Zoom canvas to layer extent |
 | `get_layer_features` | Get Layer Features | readOnly | Flat features with _fid, expression filter, limit/offset, geometry |
 | `get_field_statistics` | Get Field Statistics | readOnly | Aggregate stats for a field (count, mean, min, max, etc.) |
-| `add_features` | Add Features | destructive | Add features to a vector layer |
+| `add_features` | Add Features | destructive | Add features to a vector layer; WKT in the layer CRS or optional `crs`; wrong geometry type refused, invalid/2D-on-Z geometry in `warnings` |
 | `update_features` | Update Features | destructive | Update feature attributes by fid |
 | `delete_features` | Delete Features | destructive | Delete features by fids or expression (elicitation) |
 | `select_features` | Select Features | idempotent | Select features by expression or fids |
@@ -66,7 +66,7 @@ description: Reference for all qgis-mcp MCP tools, resources, and prompts (names
 | `execute_processing_batch` | Execute Processing Batch | - | Run one algorithm over many parameter dicts; per-run success/error/skipped status (`timeout` bounds the whole batch, default 55s) |
 | `raster_calculator` | Raster Calculator | - | Band math via QgsRasterCalculator, 'Name@band' refs, GeoTIFF out (60s). Grid, extent and CRS from `reference_layer` (unknown or ambiguous refused; default = first file-based raster); a name shared by several loaded rasters is refused when the expression uses it |
 | `zonal_statistics` | Zonal Statistics | - | Per-polygon raster stats (native:zonalstatisticsfb), memory or file out (60s) |
-| `sample_raster_values` | Sample Raster Values | readOnly | Sample pixel values at [x,y] points (raster CRS), one/all bands |
+| `sample_raster_values` | Sample Raster Values | readOnly | Sample pixel values at [x,y] points (raster CRS or optional `crs`), one/all bands; `outside_extent` per point tells nodata from off-raster |
 | `export_layer` | Export Layer | idempotent | Export vector/raster to disk; target_crs reproject, filter_expression subset (60s) |
 | `field_calculator` | Field Calculator | - | Add+populate field from QGIS expression, in-place |
 | `get_unique_values` | Get Unique Values | readOnly | Distinct values of a field (limit, -1 for all) |
@@ -82,7 +82,7 @@ description: Reference for all qgis-mcp MCP tools, resources, and prompts (names
 | `remove_layout` | Remove Layout | destructive | Remove a print layout (elicitation) |
 | `execute_sql` | Execute SQL | - | SQL across loaded layers via virtual layer; rows inline or as a new layer (60s) |
 | `evaluate_expression` | Evaluate Expression | readOnly | Evaluate a standalone QGIS expression to a scalar (aggregate, @vars) |
-| `identify_features` | Identify Features | readOnly | Features at a point [x,y] across layers (map-click analogue) |
+| `identify_features` | Identify Features | readOnly | Features at a point [x,y] across layers (map-click analogue); point in project CRS or optional `crs`, layers reprojected |
 | `duplicate_layer` | Duplicate Layer | - | Duplicate a layer (with style) under a new name |
 | `set_layer_order` | Set Layer Order | idempotent | Set explicit layer draw order (top to bottom) |
 | `set_raster_style` | Set Raster Style | - | Raster symbology: `singleband_pseudocolor` (ramp + classification/interpolation), `singleband_gray`, `multiband_color` (RGB), `hillshade`. min/max default to band statistics |
@@ -112,7 +112,7 @@ description: Reference for all qgis-mcp MCP tools, resources, and prompts (names
 | `set_layer_crs` | Set Layer CRS | - | Set a layer's CRS - reinterprets coordinates, does **not** reproject data |
 | `set_project_crs` | Set Project CRS | - | Set the project CRS (changes how layers project onto the canvas) |
 | `get_bookmarks` | Get Bookmarks | readOnly | Spatial bookmarks (name, group, extent, CRS) |
-| `add_bookmark` | Add Bookmark | - | Add a spatial bookmark from a name + extent and CRS |
+| `add_bookmark` | Add Bookmark | - | Add a spatial bookmark from a name + extent; `crs` defaults to the project CRS |
 | `remove_bookmark` | Remove Bookmark | destructive | Remove a spatial bookmark by ID |
 | `get_map_themes` | Get Map Themes | readOnly | Map themes (visibility presets) and the layers each shows |
 | `add_map_theme` | Add Map Theme | - | Save current layer visibility as a theme (updates an existing name) |

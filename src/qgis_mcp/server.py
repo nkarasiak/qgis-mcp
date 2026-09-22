@@ -943,17 +943,21 @@ async def get_field_statistics(
     title="Add Features",
     annotations=ToolAnnotations(destructiveHint=True),
     description="Add features to a vector layer. Each feature: {attributes: {field: value}, "
-    "geometry_wkt: 'POINT(1 2)'}. Returns count of added features.",
+    "geometry_wkt: 'POINT(1 2)'}. geometry_wkt is in the layer's CRS, or in crs when given "
+    "(it is then reprojected). A geometry type the layer cannot hold is refused; invalid "
+    "geometry or 2D on a Z layer comes back in warnings. Returns count of added features.",
 )
 async def add_features(
     ctx: Context,
     layer_id: str,
     features: list[dict],
+    crs: str | None = None,
     instance: str | None = None,
 ) -> dict:
-    return await _send(
-        "add_features", {"layer_id": layer_id, "features": features}, instance=instance
-    )
+    params: dict[str, Any] = {"layer_id": layer_id, "features": features}
+    if crs:
+        params["crs"] = crs
+    return await _send("add_features", params, instance=instance)
 
 
 @mcp.tool(
@@ -1603,23 +1607,23 @@ async def zonal_statistics(
 @mcp.tool(
     title="Sample Raster Values",
     annotations=ToolAnnotations(readOnlyHint=True),
-    description="Sample raster pixel values at points. 'points' is a list of [x, y] in the "
-    "raster's CRS. Omit 'band' to sample all bands. Use transform_coordinates first if your "
-    "points are in a different CRS. A null value is nodata when outside_extent is false; "
-    "outside_extent true means the point is off the raster (often a CRS mix-up).",
+    description="Sample raster pixel values at points. 'points' is a list of [x, y] in crs "
+    "when given (reprojected to the raster), else in the raster's CRS. Omit 'band' to sample "
+    "all bands. A null value is nodata when outside_extent is false; outside_extent true "
+    "means the point is off the raster (often a CRS mix-up).",
 )
 async def sample_raster_values(
     ctx: Context,
     raster_layer: str,
     points: list[list[float]],
     band: int | None = None,
+    crs: str | None = None,
     instance: str | None = None,
 ) -> dict[str, Any]:
-    return await _send(
-        "sample_raster_values",
-        {"raster_layer": raster_layer, "points": points, "band": band},
-        instance=instance,
-    )
+    params: dict[str, Any] = {"raster_layer": raster_layer, "points": points, "band": band}
+    if crs:
+        params["crs"] = crs
+    return await _send("sample_raster_values", params, instance=instance)
 
 
 # --- Export ---
@@ -1936,7 +1940,8 @@ async def get_bookmarks(ctx: Context, instance: str | None = None) -> dict[str, 
 @mcp.tool(
     title="Add Bookmark",
     description="Add a spatial bookmark to the project for quick navigation. "
-    "Provide a name and extent (xmin/ymin/xmax/ymax) with CRS.",
+    "Provide a name and extent (xmin/ymin/xmax/ymax), in crs when given, else the project "
+    "CRS.",
 )
 async def add_bookmark(
     ctx: Context,
@@ -1945,23 +1950,21 @@ async def add_bookmark(
     ymin: float,
     xmax: float,
     ymax: float,
-    crs: str = "EPSG:4326",
+    crs: str | None = None,
     group: str = "",
     instance: str | None = None,
 ) -> dict:
-    return await _send(
-        "add_bookmark",
-        {
-            "name": name,
-            "xmin": xmin,
-            "ymin": ymin,
-            "xmax": xmax,
-            "ymax": ymax,
-            "crs": crs,
-            "group": group,
-        },
-        instance=instance,
-    )
+    params: dict[str, Any] = {
+        "name": name,
+        "xmin": xmin,
+        "ymin": ymin,
+        "xmax": xmax,
+        "ymax": ymax,
+        "group": group,
+    }
+    if crs:
+        params["crs"] = crs
+    return await _send("add_bookmark", params, instance=instance)
 
 
 @mcp.tool(
@@ -2977,10 +2980,11 @@ async def evaluate_expression(
 @mcp.tool(
     title="Identify Features",
     annotations=ToolAnnotations(readOnlyHint=True),
-    description="Identify features at a point [x, y] in project CRS across layers (map-click "
-    "analogue); layers in another CRS are reprojected. tolerance (project CRS units) expands "
-    "the search; 0 = exact hit. layer_ids limits the "
-    "search (default: visible vector layers). limit caps features per layer.",
+    description="Identify features at a point [x, y] across layers (map-click analogue). "
+    "The point and tolerance are in crs when given, else the project CRS; layers in another "
+    "CRS are reprojected. tolerance (in those units) expands the search; 0 = exact hit. "
+    "layer_ids limits the search (default: visible vector layers). limit caps features per "
+    "layer.",
 )
 async def identify_features(
     ctx: Context,
@@ -2988,18 +2992,18 @@ async def identify_features(
     tolerance: float = 0.0,
     layer_ids: list[str] | None = None,
     limit: int = 10,
+    crs: str | None = None,
     instance: str | None = None,
 ) -> dict:
-    return await _send(
-        "identify_features",
-        {
-            "point": point,
-            "tolerance": tolerance,
-            "layer_ids": layer_ids,
-            "limit": limit,
-        },
-        instance=instance,
-    )
+    params: dict[str, Any] = {
+        "point": point,
+        "tolerance": tolerance,
+        "layer_ids": layer_ids,
+        "limit": limit,
+    }
+    if crs:
+        params["crs"] = crs
+    return await _send("identify_features", params, instance=instance)
 
 
 @mcp.tool(

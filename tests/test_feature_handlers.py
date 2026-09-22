@@ -218,6 +218,9 @@ class Crs(str):
     def authid(self):
         return str(self)
 
+    def isValid(self):
+        return True
+
 
 class FakeTransform:
     def __init__(self, src, dst, project):
@@ -500,3 +503,90 @@ def test_field_calculator_reports_the_units_of_area(
         "area_units": "ha",
         "distance_units": "meters",
     }
+
+
+def test_identify_point_in_an_explicit_crs(identify, plugin_handlers, monkeypatch):
+    """With crs given, the point is compared in that CRS, not the project's."""
+    server, layer, features = identify
+    monkeypatch.setattr(plugin_handlers.base, "QgsCoordinateReferenceSystem", lambda s: Crs(s))
+    layer.crs.return_value = Crs("EPSG:2154")
+
+    result = server.identify_features([2.35, 48.85], layer_ids=["lid"], crs="EPSG:4326")
+
+    rect = features.QgsFeatureRequest.return_value.setFilterRect.call_args[0][0]
+    assert rect == ("rect", "EPSG:4326", "EPSG:2154")
+    assert result["crs"] == "EPSG:4326"
+
+
+# --- add_features geometry ---------------------------------------------------------
+
+
+@pytest.fixture
+def adder(server, layer, features, monkeypatch):
+    geom = MagicMock()
+    geom.isNull.return_value = False
+    geom.isGeosValid.return_value = True
+    geom.type.return_value = "polygon"
+    layer.geometryType.return_value = "polygon"
+    layer.isEditable.return_value = False
+    layer.fields.return_value = []
+    layer.dataProvider.return_value.addFeatures.return_value = (True, [MagicMock()])
+    monkeypatch.setattr(features, "QgsGeometry", MagicMock(**{"fromWkt.return_value": geom}))
+    monkeypatch.setattr(features, "QgsFeature", MagicMock())
+    monkeypatch.setattr(
+        features,
+        "QgsWkbTypes",
+        MagicMock(
+            **{"geometryDisplayString.side_effect": str, "hasZ.side_effect": lambda t: t == "z"}
+        ),
+    )
+    return server, layer, geom
+
+
+def test_add_features_refuses_a_geometry_the_layer_cannot_hold(adder, plugin_handlers):
+    server, layer, geom = adder
+    layer.geometryType.return_value = "point"
+
+    with pytest.raises(plugin_handlers.base.CommandError, match="polygon geometry on a point"):
+        server.add_features("lid", [{"geometry_wkt": "POLYGON((0 0,1 0,1 1,0 0))"}])
+
+    layer.dataProvider.return_value.addFeatures.assert_not_called()
+
+
+def test_add_features_warns_about_invalid_and_2d_geometry(adder):
+    """A bowtie (GEOS area 0) or 2D on a Z layer went in without a word."""
+    server, layer, geom = adder
+    geom.isGeosValid.return_value = False
+    layer.wkbType.return_value = "z"
+    geom.wkbType.return_value = "2d"
+
+    result = server.add_features("lid", [{"geometry_wkt": "POLYGON((0 0,10 10,10 0,0 10,0 0))"}])
+
+    assert len(result["warnings"]) == 2
+    assert "invalid geometry" in result["warnings"][0]
+    assert "2D geometry" in result["warnings"][1]
+
+
+def test_add_features_reprojects_from_an_explicit_crs(
+    adder, plugin_handlers, features, monkeypatch
+):
+    server, layer, geom = adder
+    monkeypatch.setattr(plugin_handlers.base, "QgsCoordinateReferenceSystem", lambda s: Crs(s))
+    monkeypatch.setattr(features, "QgsCoordinateTransform", FakeTransform)
+    layer.crs.return_value = Crs("EPSG:2154")
+
+    server.add_features(
+        "lid", [{"geometry_wkt": "POLYGON((2 48,3 48,3 49,2 48))"}], crs="EPSG:4326"
+    )
+
+    (xform,) = geom.transform.call_args[0]
+    assert (xform.src, xform.dst) == ("EPSG:4326", "EPSG:2154")
+
+
+def test_add_features_without_crs_stores_the_wkt_as_given(adder):
+    server, layer, geom = adder
+
+    result = server.add_features("lid", [{"geometry_wkt": "POLYGON((0 0,1 0,1 1,0 0))"}])
+
+    geom.transform.assert_not_called()
+    assert "warnings" not in result

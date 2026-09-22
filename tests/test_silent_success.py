@@ -387,3 +387,22 @@ def test_connection_sql_error_is_a_user_error(db, plugin_handlers, monkeypatch):
 
     with pytest.raises(plugin_handlers.base.CommandError, match="SQL failed: no such table"):
         server.execute_connection_sql("postgres", "db", "SELECT * FROM t")
+
+
+def test_bookmark_without_crs_uses_the_project_crs(server, project, plugin_handlers, monkeypatch):
+    """EPSG:4326 was assumed, so projected coordinates made a bookmark off the globe."""
+    monkeypatch.setattr(plugin_handlers.project, "QgsRectangle", MagicMock())
+    project.crs.return_value.authid.return_value = "EPSG:2154"
+    project.bookmarkManager.return_value.addBookmark.return_value = ("bm1", True)
+
+    result = server.add_bookmark("site", 650000, 6860000, 651000, 6861000)
+
+    assert result["crs"] == "EPSG:2154"
+
+
+def test_bookmark_that_qgis_refuses_is_reported(server, project, plugin_handlers, monkeypatch):
+    monkeypatch.setattr(plugin_handlers.project, "QgsRectangle", MagicMock())
+    project.bookmarkManager.return_value.addBookmark.return_value = ("", False)
+
+    with pytest.raises(plugin_handlers.base.CommandError, match="did not add bookmark"):
+        server.add_bookmark("site", 0, 0, 1, 1)

@@ -187,3 +187,24 @@ def test_raster_info_omits_nodata_when_the_band_has_none(raster_info):
     band = server.get_raster_info("r")["bands"][0]
 
     assert "nodata" not in band and "scale" not in band
+
+
+def test_sample_points_in_an_explicit_crs_are_reprojected(raster, plugin_handlers, monkeypatch):
+    server, layer = raster
+    monkeypatch.setattr(plugin_handlers.base, "QgsCoordinateReferenceSystem", lambda s: Crs(s))
+    layer.crs.return_value = Crs("EPSG:32631")
+
+    class ToRaster:
+        def __init__(self, src, dst, project):
+            assert (src.authid(), dst.authid()) == ("EPSG:4326", "EPSG:32631")
+
+        def transform(self, p):
+            return (1.5, 3.5)  # a data pixel
+
+    monkeypatch.setattr(plugin_handlers.processing, "QgsCoordinateTransform", ToRaster)
+
+    result = server.sample_raster_values("r", [[2.35, 48.85]], band=1, crs="EPSG:4326")
+
+    assert result["samples"][0]["value"] == 6.0
+    assert result["samples"][0]["outside_extent"] is False
+    assert result["crs"] == "EPSG:4326"

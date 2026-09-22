@@ -140,13 +140,19 @@ class ProjectHandlers:
         return {"bookmarks": bookmarks, "count": len(bookmarks)}
 
     @command
-    def add_bookmark(self, name, xmin, ymin, xmax, ymax, crs="EPSG:4326", group="", **kwargs):
-        """Add a spatial bookmark to the project."""
+    def add_bookmark(self, name, xmin, ymin, xmax, ymax, crs=None, group="", **kwargs):
+        """Add a spatial bookmark; the extent is in *crs*, else the project CRS."""
         from qgis.core import QgsBookmark, QgsReferencedRectangle
 
-        crs_obj = QgsCoordinateReferenceSystem(crs)
-        if not crs_obj.isValid():
-            raise CommandError(f"Invalid CRS: {crs}")
+        # EPSG:4326 used to be assumed, so projected coordinates without a crs
+        # made a bookmark off the globe. The project CRS is what every other
+        # extent tool defaults to.
+        if crs:
+            crs_obj = QgsCoordinateReferenceSystem(crs)
+            if not crs_obj.isValid():
+                raise CommandError(f"Invalid CRS: {crs}")
+        else:
+            crs_obj = QgsProject.instance().crs()
         extent = QgsReferencedRectangle(QgsRectangle(xmin, ymin, xmax, ymax), crs_obj)
         bookmark = QgsBookmark()
         bookmark.setName(name)
@@ -155,7 +161,9 @@ class ProjectHandlers:
         result = QgsProject.instance().bookmarkManager().addBookmark(bookmark)
         # addBookmark returns (id, success) tuple in QGIS 3.x+
         bookmark_id = result[0] if isinstance(result, (list, tuple)) else result
-        return {"ok": True, "id": bookmark_id, "name": name}
+        if isinstance(result, (list, tuple)) and not result[1]:
+            raise CommandError(f"QGIS did not add bookmark '{name}'")
+        return {"ok": True, "id": bookmark_id, "name": name, "crs": crs_obj.authid()}
 
     @command
     def remove_bookmark(self, bookmark_id, **kwargs):

@@ -800,7 +800,13 @@ async def test_add_bookmark_tool(mock_connection):
     assert output["ok"] is True
     call_params = mock_connection.send_command.call_args[0][1]
     assert call_params["name"] == "Munich"
-    assert call_params["crs"] == "EPSG:4326"
+    # No crs: the plugin uses the project CRS (EPSG:4326 was assumed before).
+    assert "crs" not in call_params
+
+    await srv.add_bookmark(
+        ctx, name="Munich", xmin=11.3, ymin=48.0, xmax=11.8, ymax=48.3, crs="EPSG:4326"
+    )
+    assert mock_connection.send_command.call_args[0][1]["crs"] == "EPSG:4326"
 
 
 @pytest.mark.asyncio

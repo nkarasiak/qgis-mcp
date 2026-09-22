@@ -8,6 +8,7 @@ from typing import ClassVar
 
 from qgis.core import (
     QgsApplication,
+    QgsCoordinateTransform,
     QgsEllipsoidUtils,
     QgsMapLayer,
     QgsMessageLog,
@@ -1051,10 +1052,15 @@ class ProcessingHandlers:
         return self._register_output(r["OUTPUT"], "zonal_stats")
 
     @command
-    def sample_raster_values(self, raster_layer, points, band=None, **kwargs):
-        """Sample raster values at points [[x, y], ...] in the raster's CRS."""
+    def sample_raster_values(self, raster_layer, points, band=None, crs=None, **kwargs):
+        """Sample raster values at points [[x, y], ...], in *crs* or the raster's CRS."""
         layer = self._get_raster_layer(raster_layer)
         dp = layer.dataProvider()
+        to_raster = None
+        if crs:
+            src = self._parse_crs(crs)
+            if src != layer.crs():
+                to_raster = QgsCoordinateTransform(src, layer.crs(), QgsProject.instance())
         # sample() answers (nan, False) alike for nodata, a point off the raster
         # and a band that does not exist, so the last two are told apart here:
         # a wrong band is refused, and each point says whether it was outside.
@@ -1064,6 +1070,8 @@ class ProcessingHandlers:
         results = []
         for pt in points:
             p = QgsPointXY(pt[0], pt[1])
+            if to_raster is not None:
+                p = to_raster.transform(p)
             sample = {"x": pt[0], "y": pt[1], "outside_extent": not extent.contains(p)}
             if band is not None:
                 val, ok = dp.sample(p, int(band))
@@ -1075,9 +1083,13 @@ class ProcessingHandlers:
                     vals[b] = v if ok else None
                 sample["values"] = vals
             results.append(sample)
-        # Points are read in the raster's CRS; points in another CRS all land
-        # outside, which this makes visible.
-        return {"samples": results, "count": len(results), "crs": layer.crs().authid()}
+        # Points in another CRS than the one read in all land outside, which
+        # outside_extent and this make visible.
+        return {
+            "samples": results,
+            "count": len(results),
+            "crs": crs or layer.crs().authid(),
+        }
 
     @command
     def spatial_join(

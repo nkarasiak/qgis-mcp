@@ -174,9 +174,16 @@ class FeatureHandlers:
         return stats
 
     @command
-    def add_features(self, layer_id, features, **kwargs):
+    def add_features(self, layer_id, features, crs=None, **kwargs):
+        """Add features; geometry_wkt is in *crs* when given, else the layer CRS."""
         layer = self._get_vector_layer(layer_id)
         dp = layer.dataProvider()
+        to_layer = None
+        if crs:
+            src = self._parse_crs(crs)
+            if src != layer.crs():
+                to_layer = QgsCoordinateTransform(src, layer.crs(), QgsProject.instance())
+        warnings = []
         qgs_features = []
         for i, feat_data in enumerate(features):
             unknown = sorted(set(feat_data) - {"attributes", "geometry_wkt"})
@@ -200,6 +207,9 @@ class FeatureHandlers:
                 geom = QgsGeometry.fromWkt(wkt)
                 if geom.isNull():
                     raise CommandError(f"Feature {i}: invalid geometry_wkt: {wkt!r}")
+                warnings.extend(self._geometry_warnings(i, geom, layer))
+                if to_layer is not None:
+                    geom.transform(to_layer)
                 f.setGeometry(geom)
             qgs_features.append(f)
 
@@ -216,7 +226,32 @@ class FeatureHandlers:
                 raise CommandError(f"Failed to add features{self._provider_error(dp)}")
             count = len(added)
         layer.updateExtents()
-        return {"added": count, "buffered": layer.isEditable()}
+        response = {"added": count, "buffered": layer.isEditable()}
+        if warnings:
+            response["warnings"] = warnings
+        return response
+
+    @staticmethod
+    def _geometry_warnings(i, geom, layer):
+        """Refuse a geometry type the layer cannot hold; list what else is off.
+
+        The WKT used to be stored as given: a bowtie polygon (whose area is then
+        0) or 2D coordinates on a Z layer went in without a word.
+        """
+        if geom.type() != layer.geometryType():
+            raise CommandError(
+                f"Feature {i}: {QgsWkbTypes.geometryDisplayString(geom.type())} geometry "
+                f"on a {QgsWkbTypes.geometryDisplayString(layer.geometryType())} layer"
+            )
+        warnings = []
+        if not geom.isGeosValid():
+            warnings.append(
+                f"Feature {i}: invalid geometry (e.g. self-intersecting); areas and "
+                "overlays computed on it are unreliable"
+            )
+        if QgsWkbTypes.hasZ(layer.wkbType()) and not QgsWkbTypes.hasZ(geom.wkbType()):
+            warnings.append(f"Feature {i}: 2D geometry on a layer with Z; Z is not set")
+        return warnings
 
     @command
     def update_features(self, layer_id, updates, **kwargs):
@@ -733,9 +768,13 @@ class FeatureHandlers:
         return {"fields": fields, "rows": rows, "count": len(rows), "truncated": truncated}
 
     @command
-    def identify_features(self, point, tolerance=0.0, layer_ids=None, limit=10, **kwargs):
-        """Identify features at a point [x, y] (project CRS) across layers."""
+    def identify_features(self, point, tolerance=0.0, layer_ids=None, limit=10, crs=None, **kwargs):
+        """Identify features at a point [x, y] across layers.
+
+        The point and tolerance are in *crs* when given, else the project CRS.
+        """
         project = QgsProject.instance()
+        ref_crs = self._parse_crs(crs) if crs else project.crs()
         x, y = float(point[0]), float(point[1])
         pt_geom = QgsGeometry.fromPointXY(QgsPointXY(x, y))
         if layer_ids:
@@ -748,14 +787,14 @@ class FeatureHandlers:
         for layer in targets:
             if layer is None or layer.type() != LAYER_VECTOR:
                 continue
-            # The point and tolerance are in project CRS; the features are in the
+            # The point and tolerance are in ref_crs; the features are in the
             # layer's. Comparing them raw answered "nothing here" whenever the
-            # two differ, so search in layer CRS and compare in project CRS.
-            to_project = QgsCoordinateTransform(layer.crs(), project.crs(), project)
-            reproject = layer.crs() != project.crs() and to_project.isValid()
+            # two differ, so search in layer CRS and compare in ref_crs.
+            to_project = QgsCoordinateTransform(layer.crs(), ref_crs, project)
+            reproject = layer.crs() != ref_crs and to_project.isValid()
             layer_rect = prefilter
             if reproject:
-                to_layer = QgsCoordinateTransform(project.crs(), layer.crs(), project)
+                to_layer = QgsCoordinateTransform(ref_crs, layer.crs(), project)
                 layer_rect = to_layer.transformBoundingBox(prefilter)
             req = QgsFeatureRequest().setFilterRect(layer_rect)
             feats = []
@@ -789,4 +828,4 @@ class FeatureHandlers:
                         "truncated": truncated,
                     }
                 )
-        return {"point": [x, y], "crs": project.crs().authid(), "results": results}
+        return {"point": [x, y], "crs": ref_crs.authid(), "results": results}
