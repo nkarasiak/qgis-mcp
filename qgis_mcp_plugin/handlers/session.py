@@ -176,7 +176,8 @@ class SessionHandlers:
             raise CommandError(f"No checkpoint {checkpoint_id!r}. Known checkpoints: {known}")
         project = QgsProject.instance()
         file_name = project.fileName()
-        if not project.read(checkpoint["path"]):
+        ok, unavailable = self._read_project(checkpoint["path"])
+        if not ok:
             error = project.error()
             raise CommandError(f"Could not read the checkpoint{f': {error}' if error else ''}")
         project.setFileName(file_name)
@@ -193,7 +194,11 @@ class SessionHandlers:
         while self._journal and self._journal[-1]["seq"] > checkpoint["seq"]:
             self._journal.pop()
         QgsMessageLog.logMessage(f"Checkpoint {checkpoint_id} restored", self.LOG_TAG, MSG_INFO)
-        return {"restored": checkpoint_id, **self._checkpoint_summary(checkpoint)}
+        response = {"restored": checkpoint_id, **self._checkpoint_summary(checkpoint)}
+        if unavailable:
+            # Their sources went missing after the checkpoint (or before it).
+            response["unavailable_layers"] = unavailable
+        return response
 
     @command
     def export_session(self, path=None, clear=False, **kwargs):

@@ -723,7 +723,8 @@ async def get_project_info(ctx: Context, instance: str | None = None) -> dict[st
     title="Load Project",
     annotations=ToolAnnotations(destructiveHint=True),
     description="Load a QGIS project from a .qgs/.qgz file path. Replaces the open project; "
-    "unsaved changes to it are lost.",
+    "unsaved changes to it are lost. Layers whose source is missing are kept as unavailable "
+    "and listed in 'unavailable_layers'.",
 )
 async def load_project(ctx: Context, path: str, instance: str | None = None) -> list:
     await ctx.info(f"Loading project: {path}")
@@ -788,7 +789,8 @@ async def list_checkpoints(ctx: Context, instance: str | None = None) -> dict[st
     annotations=ToolAnnotations(destructiveHint=True),
     description="Put the project back as it was at a checkpoint: every change since, and any "
     "uncommitted edit, is discarded. The project keeps its file name and is left unsaved. "
-    "Memory layer features come back with new feature ids. "
+    "Memory layer features come back with new feature ids. Layers whose source is missing "
+    "are kept as unavailable and listed in 'unavailable_layers'. "
     "export_session afterwards replays the restored state, not the undone steps.",
 )
 async def restore_checkpoint(ctx: Context, checkpoint_id: str, instance: str | None = None) -> dict:

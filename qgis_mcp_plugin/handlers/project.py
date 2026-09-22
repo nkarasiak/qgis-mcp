@@ -65,10 +65,14 @@ class ProjectHandlers:
     @command
     def load_project(self, path, **kwargs):
         project = QgsProject.instance()
-        if project.read(path):
+        ok, unavailable = self._read_project(path)
+        if ok:
             self.iface.mapCanvas().refresh()
             QgsMessageLog.logMessage(f"Project loaded: {path}", self.LOG_TAG, MSG_INFO)
-            return {"loaded": path, "layer_count": len(project.mapLayers())}
+            response = {"loaded": path, "layer_count": len(project.mapLayers())}
+            if unavailable:
+                response["unavailable_layers"] = unavailable
+            return response
         else:
             raise CommandError(f"Failed to load project from {path}{_project_error(project)}")
 

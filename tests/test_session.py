@@ -279,3 +279,31 @@ def test_layers_a_job_journaled_mid_command_are_not_the_commands(server, monkeyp
 
     assert response["status"] == "success", response
     assert server._journal[-1]["creates"] == [("own_layer", "own")]
+
+
+def test_only_the_unavailable_layers_dialog_is_dismissed(plugin_handlers, monkeypatch):
+    base = plugin_handlers.base
+    dialogs = []
+
+    def modal(class_name):
+        dialog = MagicMock()
+        dialog.metaObject.return_value.className.return_value = class_name
+        dialogs.append(dialog)
+        return dialog
+
+    for name in ("QgsHandleBadLayers", "QMessageBox"):
+        monkeypatch.setattr(base.QApplication, "activeModalWidget", lambda n=name: modal(n))
+        base.HandlerBase._dismiss_unavailable_layers_dialog()
+
+    assert dialogs[0].reject.called and not dialogs[1].reject.called
+
+
+def test_restore_reports_layers_whose_source_went_missing(server, plugin_handlers, monkeypatch):
+    server.iface = MagicMock()
+    checkpoint = server.create_checkpoint()
+    monkeypatch.setattr(server, "_read_project", lambda path: (True, ["roads"]))
+
+    response = server.restore_checkpoint(checkpoint["id"])
+
+    assert response["unavailable_layers"] == ["roads"]
+    server.stop()

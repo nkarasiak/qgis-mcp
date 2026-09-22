@@ -11,7 +11,8 @@ from qgis.core import (
     QgsExpressionContextUtils,
     QgsProject,
 )
-from qgis.PyQt.QtCore import QVariant
+from qgis.PyQt.QtCore import QTimer, QVariant
+from qgis.PyQt.QtWidgets import QApplication
 
 from ..compat import LAYER_RASTER, LAYER_VECTOR
 from ..errors import CommandError, LayerNotFound, WrongLayerType
@@ -19,6 +20,34 @@ from ..errors import CommandError, LayerNotFound, WrongLayerType
 
 class HandlerBase:
     """Layer lookup and value conversion used by every other mixin."""
+
+    @classmethod
+    def _read_project(cls, path):
+        """``QgsProject.read(path)``, never blocked on the unavailable-layers dialog.
+
+        When a layer's source is missing, QGIS opens its modal "Handle
+        Unavailable Layers" dialog inside read() and waits there for someone to
+        close it: over the socket, until the client gives up. The dialog is
+        dismissed as soon as it opens, which keeps those layers in the project
+        as unavailable (its "Keep Unavailable Layers"), and returns their names
+        so the caller can report them.
+        """
+        timer = QTimer()
+        timer.timeout.connect(cls._dismiss_unavailable_layers_dialog)
+        timer.start(50)  # fires in the dialog's own event loop
+        try:
+            project = QgsProject.instance()
+            if not project.read(path):
+                return False, []
+        finally:
+            timer.stop()
+        return True, [lyr.name() for lyr in project.mapLayers().values() if not lyr.isValid()]
+
+    @staticmethod
+    def _dismiss_unavailable_layers_dialog():
+        dialog = QApplication.activeModalWidget()
+        if dialog is not None and dialog.metaObject().className() == "QgsHandleBadLayers":
+            dialog.reject()
 
     @staticmethod
     def _layer(layer_id):
