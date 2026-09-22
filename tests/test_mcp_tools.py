@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from conftest import SOCKET_BACKED_RESOURCES, TOOL_COUNT, make_ctx
 from mcp.types import ElicitResult
-from mcp_compat import connect
+from mcp_compat import connect, destructive_hint
 
 import qgis_mcp.server as srv
 from qgis_mcp.helpers import BATCH_BLOCKED_COMMANDS
@@ -38,8 +38,9 @@ async def test_get_layer_features_refuses_a_limit_above_the_max(mock_connection)
 @pytest.mark.asyncio
 async def test_create_and_load_project_are_marked_destructive():
     """Both replace the open project, discarding its unsaved changes."""
+    tools = {t.name: t for t in await srv.mcp.list_tools()}
     for name in ("create_new_project", "load_project"):
-        assert srv.mcp._tool_manager.get_tool(name).annotations.destructiveHint is True
+        assert destructive_hint(tools[name]) is True
 
 
 @pytest.mark.asyncio

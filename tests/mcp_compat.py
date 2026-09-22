@@ -31,6 +31,12 @@ def schema(tool):
     return getattr(tool, "inputSchema", None) or tool.input_schema
 
 
+def destructive_hint(tool):
+    """ToolAnnotations.destructiveHint on mcp 1.x, .destructive_hint on 2.0."""
+    annotations = tool.annotations
+    return getattr(annotations, "destructiveHint", None) or annotations.destructive_hint
+
+
 def uri_template(template):
     """ResourceTemplate.uriTemplate on mcp 1.x, .uri_template on 2.0."""
     return getattr(template, "uriTemplate", None) or template.uri_template
