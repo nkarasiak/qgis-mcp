@@ -177,6 +177,7 @@ class ProcessingHandlers:
         if feedback is None:
             feedback = _ResponsiveFeedback(self._PROCESSING_TIMEOUT)
         declared = dict(parameters)
+        existing = self._output_files_before(algorithm, declared)
         runner = processing.runAndLoadResults if load else processing.run
         timeout_message = (
             f"Processing cancelled after {feedback.budget:g}s. Pass a larger 'timeout', "
@@ -197,6 +198,12 @@ class ProcessingHandlers:
             raise CommandError(
                 f"{algorithm} reported success but wrote no {', '.join(missing)}"
                 f"{_error_detail(feedback)}"
+            )
+        stale = self._unchanged_outputs(existing)
+        if stale:
+            raise CommandError(
+                f"{algorithm} reported success but left {', '.join(stale)} unchanged "
+                f"(a file from before this run){_error_detail(feedback)}"
             )
         return result
 
@@ -230,8 +237,8 @@ class ProcessingHandlers:
         context.setEllipsoid(ellipsoid)
         return context
 
-    def _missing_outputs(self, algorithm, parameters):
-        """Output paths the caller asked for that are not on disk after the run."""
+    def _output_paths(self, algorithm, parameters):
+        """The plain filesystem paths among *algorithm*'s destination parameters."""
         from qgis.core import QgsProcessingDestinationParameter
 
         alg = algorithm
@@ -240,7 +247,7 @@ class ProcessingHandlers:
         if alg is None:
             return []
 
-        missing = []
+        paths = []
         for param in alg.parameterDefinitions():
             if not isinstance(param, QgsProcessingDestinationParameter):
                 continue
@@ -256,9 +263,38 @@ class ProcessingHandlers:
             # rather than call the run failed on a guess.
             if parent and not os.path.isdir(parent):
                 continue
-            if not os.path.exists(path):
-                missing.append(path)
-        return missing
+            paths.append(path)
+        return paths
+
+    def _missing_outputs(self, algorithm, parameters):
+        """Output paths the caller asked for that are not on disk after the run."""
+        return [p for p in self._output_paths(algorithm, parameters) if not os.path.exists(p)]
+
+    def _output_files_before(self, algorithm, parameters):
+        """(mtime, size) of each output file that already exists, before a run.
+
+        A failed GDAL run leaves a file from an earlier run in place (on
+        Windows a locked one cannot even be replaced), and "the file exists"
+        then passed for "the run wrote it". Folders are left out: overwriting
+        files inside one does not change its own mtime.
+        """
+        state = {}
+        for path in self._output_paths(algorithm, parameters):
+            if os.path.isfile(path):
+                st = os.stat(path)
+                state[path] = (st.st_mtime_ns, st.st_size)
+        return state
+
+    @staticmethod
+    def _unchanged_outputs(before):
+        """Files from *before* that the run did not touch."""
+        unchanged = []
+        for path, stamp in before.items():
+            if os.path.isfile(path):
+                st = os.stat(path)
+                if (st.st_mtime_ns, st.st_size) == stamp:
+                    unchanged.append(path)
+        return unchanged
 
     @command
     def execute_processing(

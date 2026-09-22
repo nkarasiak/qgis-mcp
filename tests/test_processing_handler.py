@@ -514,3 +514,51 @@ def test_spatial_join_reports_method_and_how_much_joined(plugin_handlers, monkey
         "target_features": 3,
         "joined_count": 2,
     }
+
+
+# --- a leftover output file is not proof of a successful run ------------------
+
+
+@pytest.fixture
+def file_output(processing, monkeypatch, tmp_path):
+    """_run_alg with one real output path; the run callable decides what it writes."""
+    server, _ = processing
+    out = tmp_path / "out.tif"
+    monkeypatch.setattr(server, "_output_paths", lambda alg, params: [str(out)])
+    monkeypatch.setattr(server, "_missing_outputs", lambda alg, params: [])
+
+    def with_run(writes):
+        def run(algorithm, parameters, feedback=None, context=None):
+            if writes is not None:
+                out.write_bytes(writes)
+            return {"OUTPUT": str(out)}
+
+        monkeypatch.setattr(sys.modules["processing"], "run", run)
+        return server
+
+    return with_run, out
+
+
+def test_an_untouched_file_from_an_earlier_run_is_not_success(file_output, plugin_handlers):
+    """GDAL failed and reported it only to the feedback; the old file stood in for the output."""
+    with_run, out = file_output
+    out.write_bytes(b"old")
+    server = with_run(writes=None)
+
+    with pytest.raises(plugin_handlers.processing.CommandError, match="unchanged"):
+        server._run_alg("gdal:translate", {"OUTPUT": str(out)})
+
+
+def test_an_overwritten_output_passes(file_output):
+    with_run, out = file_output
+    out.write_bytes(b"old")
+    server = with_run(writes=b"new and longer")
+
+    assert server._run_alg("gdal:translate", {"OUTPUT": str(out)})["OUTPUT"] == str(out)
+
+
+def test_a_new_output_passes(file_output):
+    with_run, out = file_output
+    server = with_run(writes=b"new")
+
+    assert server._run_alg("gdal:translate", {"OUTPUT": str(out)})["OUTPUT"] == str(out)
