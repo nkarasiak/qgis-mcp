@@ -85,6 +85,7 @@ MSG_CRITICAL = _enum((Qgis, "MessageLevel.Critical"), (Qgis, "Critical"))
 # ── Geometry types ───────────────────────────────────────────────────
 GEOM_POLYGON = _enum((Qgis, "GeometryType.Polygon"), (QgsWkbTypes, "PolygonGeometry"))
 GEOM_LINE = _enum((Qgis, "GeometryType.Line"), (QgsWkbTypes, "LineGeometry"))
+GEOM_UNKNOWN = _enum((Qgis, "GeometryType.Unknown"), (QgsWkbTypes, "UnknownGeometry"))
 
 # ── Raster stats ─────────────────────────────────────────────────────
 RASTER_STATS_ALL = _enum((Qgis, "RasterBandStatistic.All"), (QgsRasterBandStats, "All"))

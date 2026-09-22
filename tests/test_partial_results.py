@@ -16,7 +16,7 @@ def test_unique_values_flags_a_capped_list_and_nulls(server, vector):  # noqa: F
 
     result = server.get_unique_values("lid", "f", limit=2)
 
-    vector.uniqueValues.assert_called_once_with(0, 3)  # one past the limit
+    vector.uniqueValues.assert_called_once_with(0, 4)  # room for NULL plus one past the limit
     assert result["values"] == ["a", "b"]
     assert result["truncated"] is True
     assert result["has_null"] is True
@@ -29,6 +29,15 @@ def test_unique_values_complete_list_is_not_truncated(server, vector):  # noqa: 
     result = server.get_unique_values("lid", "f", limit=2)
 
     assert (result["truncated"], result["has_null"]) == (False, False)
+
+
+def test_unique_values_null_does_not_count_toward_the_limit(server, vector):  # noqa: F811
+    vector.fields.return_value.indexOf.return_value = 0
+    vector.uniqueValues.return_value = {"a", "b", None}
+
+    result = server.get_unique_values("lid", "f", limit=2)
+
+    assert (result["truncated"], result["has_null"]) == (False, True)
 
 
 def test_unique_values_unlimited_passes_minus_one(server, vector):  # noqa: F811

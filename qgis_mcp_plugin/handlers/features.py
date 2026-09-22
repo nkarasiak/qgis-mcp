@@ -36,6 +36,7 @@ from ..compat import (
     AGG_SUM,
     GEOM_LINE,
     GEOM_POLYGON,
+    GEOM_UNKNOWN,
     LAYER_VECTOR,
     QVAR_BOOL,
     QVAR_DATE,
@@ -238,7 +239,8 @@ class FeatureHandlers:
         The WKT used to be stored as given: a bowtie polygon (whose area is then
         0) or 2D coordinates on a Z layer went in without a word.
         """
-        if geom.type() != layer.geometryType():
+        # A generic GEOMETRY column (or GeometryCollection layer) holds any type.
+        if layer.geometryType() not in (GEOM_UNKNOWN, geom.type()):
             raise CommandError(
                 f"Feature {i}: {QgsWkbTypes.geometryDisplayString(geom.type())} geometry "
                 f"on a {QgsWkbTypes.geometryDisplayString(layer.geometryType())} layer"
@@ -638,11 +640,11 @@ class FeatureHandlers:
         idx = layer.fields().indexOf(field)
         if idx < 0:
             raise CommandError(f"Field not found: {field}")
-        # One past the limit, so a capped list says so instead of reading as the
-        # whole set.
-        raw = layer.uniqueValues(idx, limit + 1 if limit >= 0 else -1)
-        truncated = limit >= 0 and len(raw) > limit
+        # Two past the limit (room for NULL plus one), so a capped list says so
+        # instead of reading as the whole set.
+        raw = layer.uniqueValues(idx, limit + 2 if limit >= 0 else -1)
         values = [v for v in raw if v is not None and str(v) != "NULL"]
+        truncated = limit >= 0 and len(values) > limit
         with contextlib.suppress(TypeError):
             values = sorted(values, key=lambda x: (str(type(x)), x))
         if limit >= 0:

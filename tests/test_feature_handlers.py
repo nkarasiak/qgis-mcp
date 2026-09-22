@@ -575,6 +575,15 @@ def test_add_features_refuses_a_geometry_the_layer_cannot_hold(adder, plugin_han
     layer.dataProvider.return_value.addFeatures.assert_not_called()
 
 
+def test_add_features_accepts_any_geometry_on_a_generic_layer(adder, features, monkeypatch):
+    """A GPKG GEOMETRY column reports Unknown and holds points, lines and polygons."""
+    server, layer, _ = adder
+    monkeypatch.setattr(features, "GEOM_UNKNOWN", "unknown")
+    layer.geometryType.return_value = "unknown"
+
+    assert server.add_features("lid", [{"geometry_wkt": "POINT(1 2)"}])["added"] == 1
+
+
 def test_add_features_warns_about_invalid_and_2d_geometry(adder):
     """A bowtie (GEOS area 0) or 2D on a Z layer went in without a word."""
     server, layer, geom = adder

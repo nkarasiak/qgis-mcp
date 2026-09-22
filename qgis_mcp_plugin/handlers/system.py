@@ -217,7 +217,13 @@ class SystemHandlers:
             sys.stdout = original_stdout
             sys.stderr = original_stderr
 
-    _LEVEL_MAP: ClassVar[dict[int, str]] = {0: "info", 1: "warning", 2: "critical", 3: "success"}
+    _LEVEL_MAP: ClassVar[dict[int, str]] = {
+        0: "info",
+        1: "warning",
+        2: "critical",
+        3: "success",
+        4: "none",
+    }
 
     def _capture_message(self, message, tag, level, *_extra):
         """Capture a message log entry into the deque.
