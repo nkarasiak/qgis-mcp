@@ -80,7 +80,7 @@ def processing(plugin_handlers, monkeypatch):
     server = Server()
     budgets = []
 
-    def slow_run(algorithm, params, feedback=None):
+    def slow_run(algorithm, params, feedback=None, context=None):
         budgets.append(feedback.budget)
         time.sleep(params["sleep"])
         return {"OUTPUT": params["sleep"]}

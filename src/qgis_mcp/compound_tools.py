@@ -866,6 +866,8 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
         socket_timeout = with_timeout(payload, kwargs)
         if kwargs.get("load_results"):
             payload["load_results"] = True
+        if kwargs.get("ellipsoid") is not None:
+            payload["ellipsoid"] = kwargs["ellipsoid"]
         result = await _send("execute_processing", payload, timeout=socket_timeout)
         await ctx.report_progress(100, 100)
         return result
@@ -932,7 +934,8 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
             "- execute: algorithm (str), parameters (dict), timeout (int, optional, seconds "
             "before the algorithm is cancelled, default 55), load_results (bool, optional) - "
             "add the outputs to the project and list them in 'loaded_layers'; the only way to "
-            "keep a 'TEMPORARY_OUTPUT'/'memory:' result\n"
+            "keep a 'TEMPORARY_OUTPUT'/'memory:' result, ellipsoid (str, optional) - "
+            "measurement ellipsoid, e.g. 'EPSG:7030' (WGS 84); default is the project's\n"
             "- execute_batch: algorithm (str), parameters_list (list[dict]), timeout (int, optional, "
             "seconds for the whole batch, default 55) - one run per dict, per-run "
             "success/error/skipped status\n"

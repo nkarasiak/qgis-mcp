@@ -7,6 +7,7 @@ from typing import ClassVar
 
 from qgis.core import (
     QgsApplication,
+    QgsEllipsoidUtils,
     QgsMessageLog,
     QgsPointXY,
     QgsProcessingFeedback,
@@ -123,7 +124,7 @@ class ProcessingHandlers:
         "mssql:",
     )
 
-    def _run_alg(self, algorithm, parameters, feedback=None, load=False):
+    def _run_alg(self, algorithm, parameters, feedback=None, load=False, context=None):
         """Run *algorithm*, raising when it did not actually produce its output.
 
         ``processing.run()`` returns an algorithm's declared outputs whether or
@@ -146,7 +147,7 @@ class ProcessingHandlers:
             feedback = _ResponsiveFeedback(self._PROCESSING_TIMEOUT)
         declared = dict(parameters)
         runner = processing.runAndLoadResults if load else processing.run
-        result = runner(algorithm, parameters, feedback=feedback)
+        result = runner(algorithm, parameters, feedback=feedback, context=context)
         if feedback.timed_out:
             raise CommandError(
                 f"Processing cancelled after {feedback.budget:g}s. Pass a larger 'timeout', "
@@ -191,15 +192,37 @@ class ProcessingHandlers:
         return missing
 
     @command
-    def execute_processing(self, algorithm, parameters, timeout=None, load_results=False, **kwargs):
+    def execute_processing(
+        self, algorithm, parameters, timeout=None, load_results=False, ellipsoid=None, **kwargs
+    ):
         feedback = None
         try:
             QgsMessageLog.logMessage(f"Processing: {algorithm}", self.LOG_TAG, MSG_INFO)
             budget = self._PROCESSING_TIMEOUT if timeout is None else float(timeout)
             feedback = _ResponsiveFeedback(budget)
+            context = None
+            if ellipsoid is not None:
+                # Without this the project's ellipsoid applies, and an area asked
+                # for on WGS84 comes back measured on whatever the project uses.
+                known = QgsEllipsoidUtils.ellipsoidParameters(ellipsoid).valid
+                if not known and ellipsoid.upper() != "NONE":
+                    raise CommandError(
+                        f"Unknown ellipsoid: {ellipsoid}. Use 'EPSG:7030' or 'WGS84' for "
+                        "WGS 84, another ellipsoid acronym, or 'NONE' for planimetric "
+                        "measurements."
+                    )
+                from processing.tools import dataobjects
+
+                # createContext is what processing.run builds when given no context
+                # (project, invalid-geometry setting, units), so only the ellipsoid
+                # differs from a default run.
+                context = dataobjects.createContext(feedback)
+                context.setEllipsoid(ellipsoid)
             project = QgsProject.instance()
             before = set(project.mapLayers()) if load_results else ()
-            result = self._run_alg(algorithm, parameters, feedback, load=load_results)
+            result = self._run_alg(
+                algorithm, parameters, feedback, load=load_results, context=context
+            )
             response = {"algorithm": algorithm, "result": {k: str(v) for k, v in result.items()}}
             if load_results:
                 # Which layers appeared is the provider-agnostic answer: only

@@ -1335,7 +1335,9 @@ async def get_raster_info(
     "load_results: add the algorithm's outputs to the project and list them in "
     "'loaded_layers' (the processing.runAndLoadResults() behaviour). This is the only way "
     "to keep a 'TEMPORARY_OUTPUT'/'memory:' result, which is otherwise discarded when the "
-    "run ends. Only vector and raster destinations are loaded, never file or folder ones.",
+    "run ends. Only vector and raster destinations are loaded, never file or folder ones. "
+    "ellipsoid: ellipsoid for distance/area measurements (e.g. 'EPSG:7030' for WGS 84, "
+    "'NONE' for planimetric). Default is the open project's ellipsoid.",
 )
 async def execute_processing(
     ctx: Context,
@@ -1343,6 +1345,7 @@ async def execute_processing(
     parameters: dict,
     timeout: int | None = None,
     load_results: bool = False,
+    ellipsoid: str | None = None,
     instance: str | None = None,
 ) -> dict:
     await ctx.info(f"Running algorithm: {algorithm}")
@@ -1350,6 +1353,8 @@ async def execute_processing(
     params: dict[str, Any] = {"algorithm": algorithm, "parameters": parameters}
     if load_results:
         params["load_results"] = True
+    if ellipsoid is not None:
+        params["ellipsoid"] = ellipsoid
     # Keep the two deadlines ordered: the plugin must give up first so the
     # failure comes back as a real message instead of the client timing out
     # while QGIS keeps grinding on an orphaned job.

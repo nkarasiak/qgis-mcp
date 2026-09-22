@@ -24,13 +24,14 @@ def processing(plugin_handlers, monkeypatch):
         LOG_TAG = "test"
 
     server = Server()
-    calls = {"runner": None, "checked": None}
+    calls = {"runner": None, "checked": None, "context": None}
 
-    def run(algorithm, parameters, feedback=None):
+    def run(algorithm, parameters, feedback=None, context=None):
         calls["runner"] = "run"
+        calls["context"] = context
         return {"OUTPUT": parameters["OUTPUT"]}
 
-    def run_and_load_results(algorithm, parameters, feedback=None):
+    def run_and_load_results(algorithm, parameters, feedback=None, context=None):
         calls["runner"] = "runAndLoadResults"
         parameters["OUTPUT"] = _OutputLayerDefinition(parameters["OUTPUT"])
         return {"OUTPUT": "output layer"}
@@ -109,7 +110,7 @@ def test_failed_run_reports_the_engine_reason_not_just_the_generic_message(
     """processing.run raises a generic exception; the real reason went to the feedback."""
     server, _ = processing
 
-    def run(algorithm, parameters, feedback=None):
+    def run(algorithm, parameters, feedback=None, context=None):
         # What _ResponsiveFeedback.reportError collects (the stub base has no reportError).
         feedback.errors.append("Input layer has fewer than 3 points")
         raise Exception("There were errors executing the algorithm.")
@@ -123,3 +124,50 @@ def test_failed_run_reports_the_engine_reason_not_just_the_generic_message(
     message = str(excinfo.value)
     assert "There were errors executing the algorithm." in message
     assert "Input layer has fewer than 3 points" in message
+
+
+@pytest.fixture
+def dataobjects(monkeypatch):
+    """Stub processing.tools.dataobjects; createContext returns one recording context."""
+    from unittest.mock import MagicMock
+
+    module = MagicMock()
+    monkeypatch.setitem(sys.modules, "processing.tools", MagicMock(dataobjects=module))
+    monkeypatch.setitem(sys.modules, "processing.tools.dataobjects", module)
+    return module
+
+
+def test_default_run_leaves_the_context_to_processing(processing):
+    server, calls = processing
+
+    server.execute_processing("native:buffer", {"INPUT": "c", "OUTPUT": "/tmp/o.gpkg"})
+
+    assert calls["context"] is None
+
+
+def test_ellipsoid_is_set_on_the_processing_context(processing, dataobjects):
+    """Argleton c008/c023: WGS84 areas were measured on the project's ellipsoid."""
+    server, calls = processing
+
+    server.execute_processing(
+        "native:exportaddgeometrycolumns",
+        {"INPUT": "c", "OUTPUT": "TEMPORARY_OUTPUT"},
+        ellipsoid="EPSG:7030",
+    )
+
+    context = dataobjects.createContext.return_value
+    assert calls["context"] is context
+    context.setEllipsoid.assert_called_once_with("EPSG:7030")
+
+
+def test_unknown_ellipsoid_is_refused_before_running(
+    processing, plugin_handlers, dataobjects, monkeypatch
+):
+    server, calls = processing
+    params = plugin_handlers.processing.QgsEllipsoidUtils.ellipsoidParameters.return_value
+    monkeypatch.setattr(params, "valid", False)
+
+    with pytest.raises(plugin_handlers.processing.CommandError, match="Unknown ellipsoid"):
+        server.execute_processing("native:buffer", {"INPUT": "c"}, ellipsoid="bogus")
+
+    assert calls["runner"] is None

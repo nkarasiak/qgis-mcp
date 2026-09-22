@@ -117,6 +117,20 @@ async def test_execute_processing_default_sends_no_plugin_timeout(mock_connectio
 
 
 @pytest.mark.asyncio
+async def test_execute_processing_forwards_ellipsoid_only_when_given(mock_connection):
+    """Unset stays off the wire so an older plugin, which would refuse it, keeps working."""
+    mock_connection.returns({"algorithm": "test", "result": {}})
+
+    await srv.execute_processing(make_ctx(), algorithm="native:buffer", parameters={})
+    assert "ellipsoid" not in mock_connection.send_command.call_args[0][1]
+
+    await srv.execute_processing(
+        make_ctx(), algorithm="native:buffer", parameters={}, ellipsoid="EPSG:7030"
+    )
+    assert mock_connection.send_command.call_args[0][1]["ellipsoid"] == "EPSG:7030"
+
+
+@pytest.mark.asyncio
 async def test_execute_processing_custom_timeout_outlives_plugin_deadline(mock_connection):
     """The socket must outlast the plugin's deadline.
 
