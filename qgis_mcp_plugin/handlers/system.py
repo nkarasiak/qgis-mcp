@@ -239,11 +239,23 @@ class SystemHandlers:
         entries = list(self._message_log)
         entries.reverse()  # newest first
         if level:
+            # An unknown level ("error") used to filter everything out silently.
+            level = level.lower()
+            if level not in self._LEVEL_MAP.values():
+                raise CommandError(
+                    f"Unknown level: {level!r}. Use one of {sorted(self._LEVEL_MAP.values())}"
+                )
             entries = [e for e in entries if e["level"] == level]
         if tag:
             entries = [e for e in entries if e["tag"] == tag]
+        total = len(entries)
         entries = entries[:limit]
-        return {"messages": entries, "count": len(entries)}
+        return {
+            "messages": entries,
+            "count": len(entries),
+            "total": total,
+            "truncated": total > len(entries),
+        }
 
     @command
     def list_plugins(self, enabled_only=False, **kwargs):

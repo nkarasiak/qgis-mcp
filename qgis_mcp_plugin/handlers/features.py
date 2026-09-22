@@ -557,11 +557,23 @@ class FeatureHandlers:
         idx = layer.fields().indexOf(field)
         if idx < 0:
             raise CommandError(f"Field not found: {field}")
-        raw = layer.uniqueValues(idx, limit)
+        # One past the limit, so a capped list says so instead of reading as the
+        # whole set.
+        raw = layer.uniqueValues(idx, limit + 1 if limit >= 0 else -1)
+        truncated = limit >= 0 and len(raw) > limit
         values = [v for v in raw if v is not None and str(v) != "NULL"]
         with contextlib.suppress(TypeError):
             values = sorted(values, key=lambda x: (str(type(x)), x))
-        return {"field": field, "values": values, "count": len(values)}
+        if limit >= 0:
+            values = values[:limit]
+        return {
+            "field": field,
+            "values": values,
+            "count": len(values),
+            "truncated": truncated,
+            # NULL is dropped from values; say whether the field has any.
+            "has_null": any(v is None or str(v) == "NULL" for v in raw),
+        }
 
     @command
     def validate_expression(self, expression, layer_id=None, **kwargs):
@@ -693,6 +705,7 @@ class FeatureHandlers:
                 layer_rect = to_layer.transformBoundingBox(prefilter)
             req = QgsFeatureRequest().setFilterRect(layer_rect)
             feats = []
+            truncated = False
             for feat in layer.getFeatures(req):
                 geom = feat.geometry()
                 if geom.isEmpty():
@@ -705,11 +718,13 @@ class FeatureHandlers:
                         continue
                 elif not geom.intersects(pt_geom):
                     continue
+                if len(feats) >= limit:
+                    # A hit past the limit: stop, and say the list is partial.
+                    truncated = True
+                    break
                 attrs = {f.name(): self._convert_attribute(feat[f.name()]) for f in layer.fields()}
                 attrs["_fid"] = feat.id()
                 feats.append(attrs)
-                if len(feats) >= limit:
-                    break
             if feats:
                 results.append(
                     {
@@ -717,6 +732,7 @@ class FeatureHandlers:
                         "name": layer.name(),
                         "features": feats,
                         "count": len(feats),
+                        "truncated": truncated,
                     }
                 )
         return {"point": [x, y], "crs": project.crs().authid(), "results": results}

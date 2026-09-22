@@ -43,6 +43,8 @@ class ProjectHandlers:
                 "visible": layer.isValid() and self._is_visible(project, layer.id()),
             }
             info["layers"].append(layer_info)
+        # Only the first 10 are listed; layer_count has the real total.
+        info["layers_truncated"] = len(layers) > len(info["layers"])
 
         return info
 
