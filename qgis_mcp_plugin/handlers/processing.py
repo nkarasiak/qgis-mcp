@@ -2,6 +2,7 @@
 
 import contextlib
 import os
+import re
 import time
 from typing import ClassVar
 
@@ -107,6 +108,15 @@ class _ResponsiveFeedback(QgsProcessingFeedback):
         super().reportError(error, fatalError)
 
 
+def _error_detail(feedback):
+    """The errors an algorithm reported, joined whole, as a message suffix.
+
+    Only the feedback carries them (the GDAL providers never raise), and the
+    first stderr line is often a harmless warning with the exit code last.
+    """
+    return f": {'; '.join(feedback.errors)}" if feedback.errors else ""
+
+
 class ProcessingHandlers:
     """Processing algorithms, models and the analysis commands built on them."""
 
@@ -147,17 +157,25 @@ class ProcessingHandlers:
             feedback = _ResponsiveFeedback(self._PROCESSING_TIMEOUT)
         declared = dict(parameters)
         runner = processing.runAndLoadResults if load else processing.run
-        result = runner(algorithm, parameters, feedback=feedback, context=context)
+        timeout_message = (
+            f"Processing cancelled after {feedback.budget:g}s. Pass a larger 'timeout', "
+            "or run heavy raster work with GDAL outside QGIS."
+        )
+        try:
+            result = runner(algorithm, parameters, feedback=feedback, context=context)
+        except Exception as e:
+            if feedback.timed_out:
+                raise CommandError(timeout_message) from e
+            # processing.run raises a generic "There were errors executing the
+            # algorithm."; the reason the algorithm gave went to the feedback.
+            raise CommandError(f"Processing error: {e!s}{_error_detail(feedback)}") from e
         if feedback.timed_out:
-            raise CommandError(
-                f"Processing cancelled after {feedback.budget:g}s. Pass a larger 'timeout', "
-                "or run heavy raster work with GDAL outside QGIS."
-            )
+            raise CommandError(timeout_message)
         missing = self._missing_outputs(algorithm, declared)
         if missing:
-            detail = f": {feedback.errors[0]}" if feedback.errors else ""
             raise CommandError(
-                f"{algorithm} reported success but wrote no {', '.join(missing)}{detail}"
+                f"{algorithm} reported success but wrote no {', '.join(missing)}"
+                f"{_error_detail(feedback)}"
             )
         return result
 
@@ -195,7 +213,6 @@ class ProcessingHandlers:
     def execute_processing(
         self, algorithm, parameters, timeout=None, load_results=False, ellipsoid=None, **kwargs
     ):
-        feedback = None
         try:
             QgsMessageLog.logMessage(f"Processing: {algorithm}", self.LOG_TAG, MSG_INFO)
             budget = self._PROCESSING_TIMEOUT if timeout is None else float(timeout)
@@ -245,10 +262,7 @@ class ProcessingHandlers:
             # after 55s...", which reads like the timeout was itself a failure.
             raise
         except Exception as e:
-            # processing.run raises a generic "There were errors executing the
-            # algorithm."; the reason the algorithm gave went to the feedback.
-            detail = f": {'; '.join(feedback.errors)}" if feedback and feedback.errors else ""
-            raise CommandError(f"Processing error: {e!s}{detail}") from e
+            raise CommandError(f"Processing error: {e!s}") from e
 
     @command
     def list_processing_algorithms(self, search=None, provider=None, **kwargs):
@@ -857,9 +871,8 @@ class ProcessingHandlers:
 
         project = QgsProject.instance()
         entries = []
-        ref = None
         rasters = []
-        for lid, layer in project.mapLayers().items():
+        for layer in project.mapLayers().values():
             if layer.type() != LAYER_RASTER:
                 continue
             rasters.append(layer)
@@ -869,35 +882,63 @@ class ProcessingHandlers:
                 e.raster = layer
                 e.bandNumber = band
                 entries.append(e)
-            if reference_layer and reference_layer in (lid, layer.name()):
-                ref = layer
-        if ref is None:
-            if not rasters:
-                raise CommandError("No raster layers loaded to compute from")
-            ref = rasters[0]
+        if not rasters:
+            raise CommandError("No raster layers loaded to compute from")
 
-        extent = ref.extent()
-        cols = ref.width()
-        rows = ref.height()
-        try:
-            calc = QgsRasterCalculator(
-                expression,
-                output_path,
-                "GTiff",
-                extent,
-                cols,
-                rows,
-                entries,
-                project.transformContext(),
-            )
-        except TypeError:
-            calc = QgsRasterCalculator(
-                expression, output_path, "GTiff", extent, cols, rows, entries
-            )
+        # Same-named rasters register the same 'name@band' ref and the calculator
+        # binds one of them silently, so a referenced name must be unique.
+        names = [layer.name() for layer in rasters]
+        for name in sorted({n for n in names if names.count(n) > 1}):
+            if re.search(rf"(?<![\w]){re.escape(name)}@\d", expression):
+                ids = [layer.id() for layer in rasters if layer.name() == name]
+                raise CommandError(
+                    f"Ambiguous raster name '{name}': {len(ids)} loaded layers share it "
+                    f"({', '.join(ids)}). Rename one so the expression names a single layer."
+                )
+
+        if reference_layer:
+            matches = [lyr for lyr in rasters if reference_layer in (lyr.id(), lyr.name())]
+            if not matches:
+                raise CommandError(f"Reference raster layer not found: {reference_layer}")
+            if len(matches) > 1:
+                raise CommandError(
+                    f"Ambiguous reference_layer '{reference_layer}': matches "
+                    f"{', '.join(lyr.id() for lyr in matches)}. Pass a layer id."
+                )
+            ref = matches[0]
+        else:
+            # A web basemap is a raster too, but has no grid worth inheriting.
+            files = [lyr for lyr in rasters if lyr.providerType() == "gdal"]
+            if not files:
+                raise CommandError("No file-based raster loaded; pass reference_layer")
+            ref = files[0]
+
+        # The output CRS must be passed explicitly: the overload without it takes
+        # the CRS of the first entry, which is project order, not the reference,
+        # and writes the reference's extent under another CRS.
+        calc = QgsRasterCalculator(
+            expression,
+            output_path,
+            "GTiff",
+            ref.extent(),
+            ref.crs(),
+            ref.width(),
+            ref.height(),
+            entries,
+            project.transformContext(),
+        )
         res = calc.processCalculation()
         if int(res) != 0:
-            raise CommandError(f"Raster calculation failed (code {int(res)})")
-        return {"ok": True, "output": output_path, "reference_layer": ref.name()}
+            reason = calc.lastError()
+            detail = f": {reason}" if reason else ""
+            raise CommandError(f"Raster calculation failed (code {int(res)}){detail}")
+        return {
+            "ok": True,
+            "output": output_path,
+            "reference_layer": ref.name(),
+            "reference_layer_id": ref.id(),
+            "crs": ref.crs().authid(),
+        }
 
     @command
     def zonal_statistics(

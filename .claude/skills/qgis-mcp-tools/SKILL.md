@@ -64,7 +64,7 @@ description: Reference for all qgis-mcp MCP tools, resources, and prompts (names
 | `run_model` | Run Model | - | Run a model by registered id or .model3 path (60s, async+progress) |
 | `get_processing_providers` | Get Processing Providers | readOnly | List providers (native/gdal/grass/...) with algo counts + active status |
 | `execute_processing_batch` | Execute Processing Batch | - | Run one algorithm over many parameter dicts; per-run success/error/skipped status (`timeout` bounds the whole batch, default 55s) |
-| `raster_calculator` | Raster Calculator | - | Band math via QgsRasterCalculator, 'Name@band' refs, GeoTIFF out (60s) |
+| `raster_calculator` | Raster Calculator | - | Band math via QgsRasterCalculator, 'Name@band' refs, GeoTIFF out (60s). Grid, extent and CRS from `reference_layer` (unknown or ambiguous refused; default = first file-based raster); a name shared by several loaded rasters is refused when the expression uses it |
 | `zonal_statistics` | Zonal Statistics | - | Per-polygon raster stats (native:zonalstatisticsfb), memory or file out (60s) |
 | `sample_raster_values` | Sample Raster Values | readOnly | Sample pixel values at [x,y] points (raster CRS), one/all bands |
 | `export_layer` | Export Layer | idempotent | Export vector/raster to disk; target_crs reproject, filter_expression subset (60s) |

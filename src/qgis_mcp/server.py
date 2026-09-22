@@ -1539,8 +1539,8 @@ async def execute_processing_batch(
     title="Raster Calculator",
     description="Band math via the QGIS raster calculator. Reference loaded raster layers "
     "in the expression as 'LayerName@band' (e.g. '(\"dem@1\" > 1000) * 1'). Writes a GeoTIFF "
-    "to output_path. Output grid/extent taken from reference_layer (layer id or name), "
-    "defaulting to the first loaded raster.",
+    "to output_path. Output grid, extent and CRS taken from reference_layer (layer id or "
+    "name), defaulting to the first loaded file-based raster.",
 )
 async def raster_calculator(
     ctx: Context,

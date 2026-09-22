@@ -171,3 +171,211 @@ def test_unknown_ellipsoid_is_refused_before_running(
         server.execute_processing("native:buffer", {"INPUT": "c"}, ellipsoid="bogus")
 
     assert calls["runner"] is None
+
+
+# --- every _run_alg caller surfaces the algorithm's reason -------------------
+
+
+def _failing_run(*reasons):
+    def run(algorithm, parameters, feedback=None, context=None):
+        feedback.errors.extend(reasons)
+        raise Exception("There were errors executing the algorithm.")
+
+    return run
+
+
+def test_run_alg_callers_get_the_reason_as_a_command_error(
+    processing, plugin_handlers, monkeypatch
+):
+    """zonal_statistics & co. used to surface the generic text as an internal error."""
+    server, _ = processing
+    monkeypatch.setattr(
+        sys.modules["processing"], "run", _failing_run("Invalid band number for BAND (5)")
+    )
+
+    with pytest.raises(plugin_handlers.processing.CommandError) as excinfo:
+        server._run_alg("native:zonalstatisticsfb", {"INPUT": "c"})
+
+    assert "Invalid band number for BAND (5)" in str(excinfo.value)
+
+
+def test_batch_run_error_carries_the_reason(processing, monkeypatch):
+    server, _ = processing
+    monkeypatch.setattr(sys.modules["processing"], "run", _failing_run("bad input"))
+
+    response = server.execute_processing_batch("native:buffer", [{"INPUT": "c"}])
+
+    assert response["results"][0]["status"] == "error"
+    assert "bad input" in response["results"][0]["message"]
+
+
+def test_missing_output_message_keeps_every_reported_error(processing, monkeypatch):
+    """GDAL's first stderr line is often a warning; the exit code comes last."""
+    server, _ = processing
+    monkeypatch.setattr(server, "_missing_outputs", lambda alg, params: ["/tmp/o.tif"])
+
+    def run(algorithm, parameters, feedback=None, context=None):
+        feedback.errors.extend(["Warning 1: harmless", "Process returned error code 1"])
+        return {"OUTPUT": parameters["OUTPUT"]}
+
+    monkeypatch.setattr(sys.modules["processing"], "run", run)
+
+    with pytest.raises(Exception, match="Process returned error code 1"):
+        server._run_alg("gdal:translate", {"OUTPUT": "/tmp/o.tif"})
+
+
+def test_cancelled_run_that_raises_reports_the_timeout(processing, plugin_handlers, monkeypatch):
+    server, _ = processing
+
+    def run(algorithm, parameters, feedback=None, context=None):
+        feedback.timed_out = True
+        raise Exception("Processing cancelled")
+
+    monkeypatch.setattr(sys.modules["processing"], "run", run)
+
+    with pytest.raises(plugin_handlers.processing.CommandError, match="cancelled after"):
+        server._run_alg("native:buffer", {"INPUT": "c"})
+
+
+# --- raster_calculator -------------------------------------------------------
+
+
+class _Raster:
+    def __init__(self, handlers, lid, name, provider="gdal", crs="EPSG:32631"):
+        self._type = handlers.processing.LAYER_RASTER
+        self._id, self._name, self._provider, self._crs = lid, name, provider, crs
+
+    def type(self):
+        return self._type
+
+    def id(self):
+        return self._id
+
+    def name(self):
+        return self._name
+
+    def providerType(self):
+        return self._provider
+
+    def bandCount(self):
+        return 1
+
+    def crs(self):
+        crs = self._crs
+
+        class _Crs:
+            def authid(self):
+                return crs
+
+        return _Crs()
+
+    def extent(self):
+        return f"extent-of-{self._id}"
+
+    def width(self):
+        return 4
+
+    def height(self):
+        return 4
+
+
+@pytest.fixture
+def calculator(plugin_handlers, monkeypatch):
+    """Record the QgsRasterCalculator constructor arguments; succeed by default."""
+    calls = {}
+
+    class Calc:
+        def __init__(self, *args):
+            calls["args"] = args
+
+        def processCalculation(self):
+            return 0
+
+        def lastError(self):
+            return ""
+
+    monkeypatch.setattr(sys.modules["qgis.analysis"], "QgsRasterCalculator", Calc)
+
+    class Server(plugin_handlers.processing.ProcessingHandlers):
+        LOG_TAG = "test"
+
+    def load(*layers):
+        project = plugin_handlers.processing.QgsProject.instance.return_value
+        monkeypatch.setattr(
+            project.mapLayers, "return_value", {layer.id(): layer for layer in layers}
+        )
+
+    return Server(), calls, load
+
+
+def test_raster_calculator_writes_the_reference_crs_not_the_first_entrys(
+    calculator, plugin_handlers
+):
+    """Argleton-class silent error: z32 loaded first used to label z31's grid EPSG:32632."""
+    server, calls, load = calculator
+    load(
+        _Raster(plugin_handlers, "z32_id", "z32", crs="EPSG:32632"),
+        _Raster(plugin_handlers, "z31_id", "z31", crs="EPSG:32631"),
+    )
+
+    response = server.raster_calculator('"z31@1"', "/tmp/o.tif", reference_layer="z31_id")
+
+    args = calls["args"]
+    assert args[3] == "extent-of-z31_id"
+    assert args[4].authid() == "EPSG:32631", "output CRS must be the reference layer's"
+    assert response["crs"] == "EPSG:32631"
+
+
+def test_raster_calculator_refuses_an_unknown_reference_layer(calculator, plugin_handlers):
+    server, _, load = calculator
+    load(_Raster(plugin_handlers, "a_id", "a"))
+
+    with pytest.raises(plugin_handlers.processing.CommandError, match="not found"):
+        server.raster_calculator('"a@1"', "/tmp/o.tif", reference_layer="typo")
+
+
+def test_raster_calculator_refuses_an_ambiguous_layer_name(calculator, plugin_handlers):
+    server, _, load = calculator
+    load(_Raster(plugin_handlers, "d1", "dem"), _Raster(plugin_handlers, "d2", "dem"))
+
+    with pytest.raises(plugin_handlers.processing.CommandError, match="Ambiguous raster name"):
+        server.raster_calculator('"dem@1" * 2', "/tmp/o.tif", reference_layer="d1")
+
+
+def test_raster_calculator_ignores_duplicates_the_expression_does_not_use(
+    calculator, plugin_handlers
+):
+    server, _, load = calculator
+    load(
+        _Raster(plugin_handlers, "d1", "dem"),
+        _Raster(plugin_handlers, "d2", "dem"),
+        _Raster(plugin_handlers, "s", "slope"),
+    )
+
+    response = server.raster_calculator('"slope@1" > 30', "/tmp/o.tif", reference_layer="s")
+
+    assert response["ok"]
+
+
+def test_raster_calculator_default_reference_skips_web_rasters(calculator, plugin_handlers):
+    server, calls, load = calculator
+    load(
+        _Raster(plugin_handlers, "osm", "OSM", provider="wms"),
+        _Raster(plugin_handlers, "dem_id", "dem"),
+    )
+
+    response = server.raster_calculator('"dem@1"', "/tmp/o.tif")
+
+    assert calls["args"][3] == "extent-of-dem_id"
+    assert response["reference_layer_id"] == "dem_id"
+
+
+def test_raster_calculator_failure_carries_last_error(calculator, plugin_handlers, monkeypatch):
+    server, _, load = calculator
+    load(_Raster(plugin_handlers, "a_id", "a"))
+    calc = sys.modules["qgis.analysis"].QgsRasterCalculator
+    monkeypatch.setattr(calc, "processCalculation", lambda self: 2)
+    monkeypatch.setattr(calc, "lastError", lambda self: "Could not open input a@1")
+
+    with pytest.raises(plugin_handlers.processing.CommandError, match="Could not open input"):
+        server.raster_calculator('"a@1"', "/tmp/o.tif")
