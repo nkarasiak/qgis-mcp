@@ -429,7 +429,7 @@ def calculator(plugin_handlers, server, layer, features, monkeypatch):
 
 def test_field_calculator_counts_and_explains_failed_features(calculator, monkeypatch):
     """A feature the expression failed on was skipped unseen and kept its old value."""
-    server, layer = calculator
+    server, _ = calculator
     monkeypatch.setattr(EvalExpression, "fail", (1,))
 
     result = server.field_calculator("lid", "v", 'to_int("s")')
@@ -544,7 +544,7 @@ def adder(server, layer, features, monkeypatch):
 
 
 def test_add_features_refuses_a_geometry_the_layer_cannot_hold(adder, plugin_handlers):
-    server, layer, geom = adder
+    server, layer, _ = adder
     layer.geometryType.return_value = "point"
 
     with pytest.raises(plugin_handlers.base.CommandError, match="polygon geometry on a point"):
@@ -584,7 +584,7 @@ def test_add_features_reprojects_from_an_explicit_crs(
 
 
 def test_add_features_without_crs_stores_the_wkt_as_given(adder):
-    server, layer, geom = adder
+    server, _, geom = adder
 
     result = server.add_features("lid", [{"geometry_wkt": "POLYGON((0 0,1 0,1 1,0 0))"}])
 

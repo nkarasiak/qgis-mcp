@@ -236,7 +236,7 @@ def test_layout_export_failure_carries_exporter_message(
     exporter_cls = MagicMock(return_value=exporter)
     monkeypatch.setattr(plugin_handlers.layout, "QgsLayoutExporter", exporter_cls)
 
-    with pytest.raises(CommandError, match="Cannot write to /ro/out.pdf"):
+    with pytest.raises(CommandError, match=r"Cannot write to /ro/out\.pdf"):
         server.export_layout("L", "/ro/out.pdf")
 
 
