@@ -3,13 +3,14 @@ name=QGIS MCP
 qgisMinimumVersion=3.28
 qgisMaximumVersion=4.99
 supportsQt6=True
-description=Connect QGIS to Claude AI via the Model Context Protocol (MCP)
+description=Connect QGIS to any LLM through the Model Context Protocol (MCP)
 about=Socket server plugin that exposes QGIS operations to LLMs through the
-    Model Context Protocol. Enables Claude to directly control QGIS: manage
-    layers, edit features, run processing algorithms, render maps, and more.
+    Model Context Protocol. Any MCP client (Claude, Codex, Gemini CLI, Cursor,
+    VS Code, Windsurf, Zed, ...) can then drive QGIS: manage layers, edit
+    features, run processing algorithms, render maps, and more.
 
-    This plugin is only one half of the setup. You also need an MCP server
-    so that Claude (or another LLM) can talk to QGIS.
+    This plugin is only one half of the setup. You also need the qgis-mcp
+    MCP server, which your MCP client runs to talk to QGIS.
     See https://github.com/nkarasiak/qgis-mcp for installation instructions.
 
     Features:
@@ -20,7 +21,7 @@ about=Socket server plugin that exposes QGIS operations to LLMs through the
     - Non-blocking TCP socket server with length-prefixed framing
     - Toolbar button with port configuration dropdown
 
-version=0.14.1
+version=0.15.0
 author=Nicolas Karasiak
 email=nicart@gmail.com
 tags=mcp,ai,claude,llm,automation,socket,remote
@@ -32,22 +33,10 @@ category=Plugins
 icon=icons/icon.png
 experimental=False
 deprecated=False
-changelog=0.14.1 : metadata declares supportsQt6 again, so the Qt6 builds
-    of QGIS 3.x load the plugin instead of refusing it as incompatible.
-    The configurator's client list offers Codex (#50). Reported by
-    wcygsw-tech. Thank you.
-    0.14.0 : execute_processing takes load_results, which loads the
-    algorithm's outputs into the project and reports them in loaded_layers -
-    the only way to keep a TEMPORARY_OUTPUT or memory: result (#46).
-    Requested by karmokar1. Thank you.
-    0.13.1 : execute_code and execute_processing_batch take a timeout
-    (default 55s) enforced in the plugin, so a long script comes back with its
-    output so far and timed_out instead of a client timeout while QGIS keeps
-    running (#43). Every execute_code result carries elapsed. Reported by
-    amnesic. Thank you.
-    0.13.0 : create_postgresql_connection gains connection_mode: an explicit
-    endpoint with an Authentication Manager config, a pg_service.conf service
-    with that config, or the service alone (#37). A refused connection now
-    returns an error instead of opening the Enter Credentials dialog under
-    the MCP call. Contributed by pancost. Thank you.
+changelog=0.15.0 : Fewer silent errors (argleton.org audit): failed processing runs
+    report QGIS's reason, execute_processing takes an ellipsoid, and capped,
+    refused or partial results say so instead of passing as success.
+    identify, sampling and add_features take an optional crs.
+    spatial_join and other wrappers report features QGIS skipped, e.g.
+    invalid geometries (#52). Reported by artbotterell. Thank you.
     Earlier releases: https://github.com/nkarasiak/qgis-mcp/releases
