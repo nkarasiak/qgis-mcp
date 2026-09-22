@@ -337,3 +337,43 @@ def test_create_new_project_reports_when_qgis_refuses(plugin_handlers, project_s
         server.create_new_project("/tmp/p.qgz")
 
     project.write.assert_not_called()
+
+
+# --- geometry output -----------------------------------------------------------
+
+
+def _feature_with(geom):
+    feat = MagicMock()
+    feat.hasGeometry.return_value = True
+    feat.geometry.return_value = geom
+    return feat
+
+
+@pytest.mark.parametrize(("geographic", "decimals"), [(True, 7), (False, 3)])
+def test_point_wkt_precision_follows_the_crs(server, layer, features, geographic, decimals):
+    """3 decimals is a millimetre in metres but ~55 m in degrees."""
+    layer.fields.return_value = []
+    layer.crs.return_value.isGeographic.return_value = geographic
+    layer.crs.return_value.authid.return_value = "EPSG:4326" if geographic else "EPSG:2154"
+    geom = MagicMock()
+    geom.type.return_value = "point"
+    layer.getFeatures.return_value = [_feature_with(geom)]
+
+    result = server.get_layer_features("lid", include_geometry=True)
+
+    geom.asWkt.assert_called_once_with(precision=decimals)
+    assert result["crs"] == ("EPSG:4326" if geographic else "EPSG:2154")
+
+
+def test_polygon_summary_counts_the_real_vertices(server, layer, features):
+    """simplify(0.001) in layer units made the count differ between CRSs."""
+    layer.fields.return_value = []
+    geom = MagicMock()
+    geom.type.return_value = features.GEOM_POLYGON
+    geom.constGet.return_value.nCoordinates.return_value = 9
+    layer.getFeatures.return_value = [_feature_with(geom)]
+
+    result = server.get_layer_features("lid", include_geometry=True)
+
+    assert "with 9 points" in result["features"][0]["_geometry"]["wkt_summary"]
+    geom.simplify.assert_not_called()

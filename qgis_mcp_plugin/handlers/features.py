@@ -70,6 +70,9 @@ class FeatureHandlers:
             counter.setNoAttributes()
             matched = sum(1 for _ in layer.getFeatures(counter))
 
+        # Decimals for point WKT: 3 is a millimetre in metres but ~55 m in
+        # degrees, so geographic coordinates keep 7 (~1 cm).
+        precision = 7 if layer.crs().isGeographic() else 3
         features = []
         skipped = 0
         for feature in layer.getFeatures(request):
@@ -91,8 +94,9 @@ class FeatureHandlers:
                 wkb_type_name = QgsWkbTypes.displayString(geom.wkbType())
 
                 if geom_type in [GEOM_POLYGON, GEOM_LINE]:
-                    simplified_geom = geom.simplify(0.001)
-                    points_count = len(simplified_geom.asWkt().split(","))
+                    # The real vertex count: simplify(0.001) was in layer units,
+                    # ~100 m in degrees and 1 mm in metres, so not comparable.
+                    points_count = geom.constGet().nCoordinates()
                     geom_obj = {
                         "type": geom_type,
                         "wkb_type": wkb_type_name,
@@ -108,7 +112,7 @@ class FeatureHandlers:
                     geom_obj = {
                         "type": geom_type,
                         "wkb_type": wkb_type_name,
-                        "wkt": geom.asWkt(precision=3),
+                        "wkt": geom.asWkt(precision=precision),
                     }
 
                 feature_obj["_geometry"] = geom_obj
@@ -123,6 +127,8 @@ class FeatureHandlers:
             "matched": matched,
             "fields": field_names,
             "features": features,
+            # What coordinates in _geometry are in.
+            "crs": layer.crs().authid(),
         }
 
     @command
