@@ -1661,7 +1661,10 @@ async def export_layer(
     title="Field Calculator",
     description="Add (if missing) + populate a field from a QGIS expression, per feature, in-place. "
     "field_type: string|int|double|bool|date|datetime (default double). "
-    "Example: expression='$area', field_name='area_m2'. Returns updated feature count.",
+    "Example: expression='$area', field_name='area'. $area/$length use the project's "
+    "ellipsoid and units (reported back as 'measurement'), not necessarily m2/m. "
+    "Returns updated and failed counts; failed features keep their old value and "
+    "first_error says why. Refused while the layer has an open edit session.",
 )
 async def field_calculator(
     ctx: Context,

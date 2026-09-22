@@ -139,15 +139,11 @@ def test_unknown_color_ramp_is_refused(server, plugin_handlers, monkeypatch, Com
         server._color_ramp("Spectrall")
 
 
-@pytest.mark.parametrize("call", ["add_field", "field_calculator"])
-def test_unknown_field_type_is_refused(server, vector, CommandError, call):
-    """An unknown type became a string (add_field) or double (field_calculator) field."""
+def test_unknown_field_type_is_refused(server, vector, CommandError):
+    """An unknown type became a string field (field_calculator: test_feature_handlers)."""
     vector.fields.return_value.indexOf.return_value = -1
     with pytest.raises(CommandError, match="Unknown field_type"):
-        if call == "add_field":
-            server.add_field("lid", "f", "integer64")
-        else:
-            server.field_calculator("lid", "f", "1", field_type="integer64")
+        server.add_field("lid", "f", "integer64")
 
     vector.dataProvider.return_value.addAttributes.assert_not_called()
 

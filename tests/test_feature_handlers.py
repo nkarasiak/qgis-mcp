@@ -377,3 +377,126 @@ def test_polygon_summary_counts_the_real_vertices(server, layer, features):
 
     assert "with 9 points" in result["features"][0]["_geometry"]["wkt_summary"]
     geom.simplify.assert_not_called()
+
+
+# --- field_calculator ----------------------------------------------------------
+
+
+class EvalExpression:
+    """Evaluates per feature: feature ids in `fail` raise an eval error."""
+
+    fail = ()
+
+    def __init__(self, text):
+        self._error = ""
+
+    def prepare(self, context):
+        return True
+
+    def evaluate(self, context):
+        fid = context.setFeature.call_args[0][0].id()
+        self._error = f"cannot convert row {fid}" if fid in self.fail else ""
+        return None if self._error else fid * 10
+
+    def hasEvalError(self):
+        return bool(self._error)
+
+    def evalErrorString(self):
+        return self._error
+
+
+@pytest.fixture
+def calculator(plugin_handlers, server, layer, features, monkeypatch):
+    monkeypatch.setattr(features, "QgsExpression", EvalExpression)
+    monkeypatch.setattr(features, "QgsExpressionContext", MagicMock)
+    monkeypatch.setattr(EvalExpression, "fail", ())
+    layer.isEditable.return_value = False
+    layer.fields.return_value.indexOf.return_value = 2  # field exists
+    rows = []
+    for fid in range(3):
+        f = MagicMock()
+        f.id.return_value = fid
+        rows.append(f)
+    layer.getFeatures.return_value = rows
+    layer.startEditing.return_value = True
+    layer.commitChanges.return_value = True
+    layer.changeAttributeValue.return_value = True
+    return server, layer
+
+
+def test_field_calculator_counts_and_explains_failed_features(calculator, monkeypatch):
+    """A feature the expression failed on was skipped unseen and kept its old value."""
+    server, layer = calculator
+    monkeypatch.setattr(EvalExpression, "fail", (1,))
+
+    result = server.field_calculator("lid", "v", 'to_int("s")')
+
+    assert (result["updated"], result["failed"]) == (2, 1)
+    assert result["first_error"] == "fid 1: cannot convert row 1"
+
+
+def test_field_calculator_counts_a_refused_write_as_failed(calculator):
+    server, layer = calculator
+    layer.changeAttributeValue.side_effect = [True, False, True]
+
+    result = server.field_calculator("lid", "v", "1")
+
+    assert (result["updated"], result["failed"]) == (2, 1)
+    assert "could not write" in result["first_error"]
+
+
+def test_field_calculator_checks_the_expression_before_adding_the_field(
+    calculator, plugin_handlers, monkeypatch
+):
+    """A bad expression used to fail after the new field was added, leaving it empty."""
+    server, layer = calculator
+    layer.fields.return_value.indexOf.return_value = -1
+    monkeypatch.setattr(FakeExpression, "prepare_error", "Field 'nmae' not found")
+
+    with pytest.raises(plugin_handlers.base.CommandError, match="nmae"):
+        server.field_calculator("lid", "new", '"nmae" * 2')
+
+    layer.dataProvider.return_value.addAttributes.assert_not_called()
+
+
+def test_field_calculator_refuses_an_open_edit_session_before_touching_the_schema(
+    calculator, plugin_handlers
+):
+    server, layer = calculator
+    layer.isEditable.return_value = True
+    layer.fields.return_value.indexOf.return_value = -1
+
+    with pytest.raises(plugin_handlers.base.CommandError, match="open edit session"):
+        server.field_calculator("lid", "new", "1")
+
+    layer.dataProvider.return_value.addAttributes.assert_not_called()
+
+
+def test_field_calculator_refuses_an_unknown_field_type(calculator, plugin_handlers):
+    """It used to become a double field without a word."""
+    server, layer = calculator
+    layer.fields.return_value.indexOf.return_value = -1
+
+    with pytest.raises(plugin_handlers.base.CommandError, match="Unknown field_type"):
+        server.field_calculator("lid", "new", "1", field_type="integer64")
+
+
+def test_field_calculator_reports_the_units_of_area(
+    calculator, plugin_handlers, features, monkeypatch
+):
+    """$area follows the project's units: area_m2 got hectares with the project in ha."""
+    server, _ = calculator
+    project = MagicMock()
+    project.ellipsoid.return_value = "EPSG:7030"
+    monkeypatch.setattr(features, "QgsProject", MagicMock(**{"instance.return_value": project}))
+    monkeypatch.setattr(
+        features, "QgsUnitTypes", MagicMock(**{"encodeUnit.side_effect": ["ha", "meters"]})
+    )
+
+    result = server.field_calculator("lid", "area", "$area")
+
+    assert result["measurement"] == {
+        "ellipsoid": "EPSG:7030",
+        "area_units": "ha",
+        "distance_units": "meters",
+    }

@@ -7,6 +7,7 @@ took via ``buffered``.
 """
 
 import contextlib
+import re
 
 from qgis.core import (
     QgsCoordinateTransform,
@@ -20,6 +21,7 @@ from qgis.core import (
     QgsPointXY,
     QgsProject,
     QgsRectangle,
+    QgsUnitTypes,
     QgsVectorLayer,
     QgsWkbTypes,
 )
@@ -515,6 +517,14 @@ class FeatureHandlers:
     ):
         """Add (if missing) and populate a field from a QGIS expression, in-place."""
         layer = self._get_vector_layer(layer_id)
+        # Everything that can refuse the call runs before the schema changes:
+        # a bad expression or an open session used to fail after the new
+        # field had been added, leaving it behind empty.
+        if layer.isEditable():
+            raise CommandError(
+                f"'{layer.name()}' has an open edit session; commit_edits or rollback_edits first"
+            )
+        self._check_filter_expression(layer, expression)
         type_map = {
             "string": QVAR_STRING,
             "int": QVAR_INT,
@@ -527,16 +537,15 @@ class FeatureHandlers:
         created = False
         if idx < 0:
             v_type = self._pick(type_map, field_type.lower(), "field_type")
-            layer.dataProvider().addAttributes(
-                [QgsField(field_name, v_type, field_type, length, precision)]
-            )
+            dp = layer.dataProvider()
+            dp.clearErrors()
+            if not dp.addAttributes([QgsField(field_name, v_type, field_type, length, precision)]):
+                raise CommandError(f"Failed to add field: {field_name}{self._provider_error(dp)}")
             layer.updateFields()
             idx = layer.fields().indexOf(field_name)
             created = True
 
         expr = QgsExpression(expression)
-        if expr.hasParserError():
-            raise CommandError(f"Expression parse error: {expr.parserErrorString()}")
         ctx = QgsExpressionContext()
         ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(layer))
         expr.prepare(ctx)
@@ -544,17 +553,45 @@ class FeatureHandlers:
         if not layer.startEditing():
             raise CommandError("Could not start editing layer")
         updated = 0
+        failed = 0
+        first_error = None
         for feat in layer.getFeatures():
             ctx.setFeature(feat)
             val = expr.evaluate(ctx)
+            # A feature the expression fails on keeps its old value; count it
+            # and keep the first reason instead of skipping it unseen.
             if expr.hasEvalError():
+                error = expr.evalErrorString()
+            elif not layer.changeAttributeValue(feat.id(), idx, val):
+                error = f"could not write {val!r} to {field_name}"
+            else:
+                updated += 1
                 continue
-            layer.changeAttributeValue(feat.id(), idx, val)
-            updated += 1
+            failed += 1
+            if first_error is None:
+                first_error = f"fid {feat.id()}: {error}"
         if not layer.commitChanges():
             errs = "; ".join(layer.commitErrors())
             raise CommandError(f"Commit failed: {errs}")
-        return {"ok": True, "field_name": field_name, "created": created, "updated": updated}
+        response = {
+            "ok": True,
+            "field_name": field_name,
+            "created": created,
+            "updated": updated,
+            "failed": failed,
+        }
+        if first_error:
+            response["first_error"] = first_error
+        if re.search(r"\$(area|length|perimeter)\b", expression):
+            # $area/$length follow the project's units and ellipsoid, not the
+            # layer's - say which, since the field name often claims otherwise.
+            project = QgsProject.instance()
+            response["measurement"] = {
+                "ellipsoid": project.ellipsoid(),
+                "area_units": QgsUnitTypes.encodeUnit(project.areaUnits()),
+                "distance_units": QgsUnitTypes.encodeUnit(project.distanceUnits()),
+            }
+        return response
 
     @command
     def get_unique_values(self, layer_id, field, limit=1000, **kwargs):
