@@ -133,7 +133,18 @@ class CanvasHandlers:
             buf.close()
             b64 = base64.b64encode(bytes(ba)).decode("utf-8")
 
-            return {"base64_data": b64, "mime_type": "image/png", "width": width, "height": height}
+            response = {
+                "base64_data": b64,
+                "mime_type": "image/png",
+                "width": width,
+                "height": height,
+            }
+            # A layer that failed to draw (broken WMS, moved file) leaves a blank
+            # area in an image that otherwise looks like a successful render.
+            errors = [f"{e.layerID}: {e.message}" for e in render.errors()]
+            if errors:
+                response["warnings"] = errors
+            return response
 
         except CommandError:
             raise  # the render timeout above - don't re-wrap a deliberate message

@@ -94,11 +94,17 @@ def make_render_response(result: dict, width: int, height: int, path: str | None
             annotations=Annotations(audience=["user", "assistant"], priority=1.0),
         )
     ]
+    info: dict = {}
     if path:
+        info.update({"saved": path, "width": width, "height": height})
+    if result.get("warnings"):
+        # Layers that failed to draw; the image alone looks like a clean render.
+        info["warnings"] = result["warnings"]
+    if info:
         content.append(
             TextContent(
                 type="text",
-                text=json.dumps({"saved": path, "width": width, "height": height}),
+                text=json.dumps(info),
                 annotations=Annotations(audience=["assistant"], priority=0.5),
             )
         )

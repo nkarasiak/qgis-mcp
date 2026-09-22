@@ -598,6 +598,11 @@ class LayerHandlers:
         """Add a table join to a vector layer."""
         target_layer = self._get_vector_layer(target_layer_id)
         join_layer = self._get_vector_layer(join_layer_id)
+        # addJoin accepts field names neither layer has, and every joined
+        # column then reads NULL.
+        for lyr, field in ((target_layer, target_field), (join_layer, join_field)):
+            if lyr.fields().indexOf(field) < 0:
+                raise CommandError(f"Field not found on {lyr.name()}: {field}")
 
         join_info = QgsVectorLayerJoinInfo()
         join_info.setTargetFieldName(target_field)

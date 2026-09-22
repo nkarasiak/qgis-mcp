@@ -445,7 +445,8 @@ class FeatureHandlers:
             "date": QVAR_DATE,
             "datetime": QVAR_DATETIME,
         }
-        v_type = type_map.get(field_type.lower(), QVAR_STRING)
+        # An unknown type used to become a string field without a word.
+        v_type = self._pick(type_map, field_type.lower(), "field_type")
         field = QgsField(field_name, v_type, field_type, length or 0, precision or 0)
 
         if layer.dataProvider().addAttributes([field]):
@@ -506,7 +507,7 @@ class FeatureHandlers:
         idx = layer.fields().indexOf(field_name)
         created = False
         if idx < 0:
-            v_type = type_map.get(field_type.lower(), QVAR_DOUBLE)
+            v_type = self._pick(type_map, field_type.lower(), "field_type")
             layer.dataProvider().addAttributes(
                 [QgsField(field_name, v_type, field_type, length, precision)]
             )
@@ -560,15 +561,14 @@ class FeatureHandlers:
             result["error"] = expr.parserErrorString()
 
         if layer_id:
-            project = QgsProject.instance()
-            if layer_id in project.mapLayers():
-                layer = project.mapLayer(layer_id)
-                if layer.type() == LAYER_VECTOR:
-                    context = QgsExpressionContext()
-                    context.appendScope(QgsExpressionContextUtils.layerScope(layer))
-                    expr.prepare(context)
-                    if expr.hasEvalError():
-                        result["eval_error"] = expr.evalErrorString()
+            # Skipping an unknown layer dropped the column check and said valid.
+            layer = self._get_vector_layer(layer_id)
+            context = QgsExpressionContext()
+            context.appendScope(QgsExpressionContextUtils.layerScope(layer))
+            expr.prepare(context)
+            if expr.hasEvalError():
+                result["valid"] = False
+                result["eval_error"] = expr.evalErrorString()
 
         return result
 

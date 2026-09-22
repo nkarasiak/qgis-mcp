@@ -278,7 +278,13 @@ class SystemHandlers:
             raise CommandError("Cannot reload MCP plugin (would break the connection)")
         if plugin_name not in active_plugins:
             raise CommandError(f"Plugin not active: {plugin_name}")
-        reloadPlugin(plugin_name)
+        started = reloadPlugin(plugin_name)
+        # A plugin whose code no longer loads is dropped from active_plugins
+        # (QGIS 4 also returns False); its error only reaches the message bar.
+        if started is False or plugin_name not in active_plugins:
+            raise CommandError(
+                f"Plugin {plugin_name} failed to start after reload; see the QGIS message log"
+            )
         return {"reloaded": plugin_name, "ok": True}
 
     @command

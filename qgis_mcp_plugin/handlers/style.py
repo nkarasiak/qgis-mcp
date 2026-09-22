@@ -48,10 +48,19 @@ class StyleHandlers:
     """Vector and raster symbology."""
 
     @staticmethod
-    def _color_ramp(name, fallback):
-        """A named ramp from the default style, falling back to *fallback*."""
+    def _color_ramp(name):
+        """A named ramp from the default style, or raise.
+
+        Falling back to another ramp while the response echoed the requested
+        name misreported what was applied.
+        """
         style = QgsStyle.defaultStyle()
-        return style.colorRamp(name) or style.colorRamp(fallback)
+        ramp = style.colorRamp(name)
+        if ramp is None:
+            raise CommandError(
+                f"Unknown color ramp: {name!r}. Use one of {sorted(style.colorRampNames())}"
+            )
+        return ramp
 
     @staticmethod
     def _field_index(layer, field, style_type):
@@ -82,7 +91,7 @@ class StyleHandlers:
         unique_values = sorted(
             layer.uniqueValues(idx), key=lambda x: str(x) if x is not None else ""
         )
-        ramp = cls._color_ramp(color_ramp, "Spectral")
+        ramp = cls._color_ramp(color_ramp)
 
         categories = []
         n = max(len(unique_values) - 1, 1)
@@ -98,7 +107,7 @@ class StyleHandlers:
         cls._field_index(layer, field, "graduated")
         renderer = QgsGraduatedSymbolRenderer(field)
         renderer.setSourceSymbol(QgsSymbol.defaultSymbol(layer.geometryType()).clone())
-        renderer.setSourceColorRamp(cls._color_ramp(color_ramp, "Spectral"))
+        renderer.setSourceColorRamp(cls._color_ramp(color_ramp))
         renderer.setClassificationMethod(QgsClassificationEqualInterval())
         renderer.updateClasses(layer, classes)
         return renderer
@@ -176,7 +185,7 @@ class StyleHandlers:
         shader_fn = QgsColorRampShader(
             lo,
             hi,
-            self._color_ramp(opts["color_ramp"], "Viridis"),
+            self._color_ramp(opts["color_ramp"]),
             self._pick(self._SHADER_INTERPOLATION, opts["interpolation"], "interpolation"),
             self._pick(self._SHADER_CLASSIFICATION, opts["classification"], "classification"),
         )

@@ -153,7 +153,8 @@ class ProjectHandlers:
     def remove_bookmark(self, bookmark_id, **kwargs):
         """Remove a spatial bookmark by ID."""
         bm = QgsProject.instance().bookmarkManager()
-        bm.removeBookmark(bookmark_id)
+        if not bm.removeBookmark(bookmark_id):
+            raise CommandError(f"Bookmark not found: {bookmark_id}")
         return {"ok": True, "id": bookmark_id}
 
     @command

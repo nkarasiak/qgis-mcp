@@ -66,7 +66,10 @@ class LayoutHandlers:
         layout = QgsPrintLayout(project)
         layout.initializeDefaults()
         layout.setName(name)
-        project.layoutManager().addLayout(layout)
+        # addLayout refuses a duplicate name; ignoring that sent every later
+        # item call to the existing layout of that name.
+        if not project.layoutManager().addLayout(layout):
+            raise CommandError(f"Could not add layout '{name}' (a layout with that name exists?)")
         return {"ok": True, "name": name}
 
     @command
@@ -88,15 +91,18 @@ class LayoutHandlers:
         return layout
 
     def _find_layout_map(self, layout, map_item_id=None):
-        """Find a map item in a layout by id/uuid, else the first map item."""
+        """The map item with id/uuid *map_item_id*, else the first map item.
+
+        An explicit id that matches nothing raises: falling back to the first
+        map linked the legend or scale bar to a map the caller did not name.
+        """
         maps = [it for it in layout.items() if isinstance(it, QgsLayoutItemMap)]
-        if not maps:
-            return None
         if map_item_id:
             for m in maps:
                 if m.id() == map_item_id or m.uuid() == map_item_id:
                     return m
-        return maps[0]
+            raise CommandError(f"Map item not found in layout: {map_item_id}")
+        return maps[0] if maps else None
 
     @command
     def get_layout_info(self, layout_name, **kwargs):
@@ -293,7 +299,10 @@ class LayoutHandlers:
             atlas.setPageNameExpression(page_name_expression)
         if filter_expression:
             atlas.setFilterFeatures(True)
-            atlas.setFilterExpression(filter_expression)
+            # Returns (ok, error); a syntax error otherwise left count 0 and ok.
+            ok, error = atlas.setFilterExpression(filter_expression)
+            if not ok:
+                raise CommandError(f"Atlas filter expression error: {error}")
         if sort_expression:
             atlas.setSortFeatures(True)
             atlas.setSortExpression(sort_expression)
