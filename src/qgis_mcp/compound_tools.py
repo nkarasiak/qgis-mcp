@@ -55,6 +55,22 @@ _LAYOUT_ITEM_COMMANDS = {
 _Action = Callable[[Context, dict[str, Any]], Awaitable[Any]]
 
 
+class _Params(dict):
+    """An action's params, where a missing required key is a ToolError.
+
+    Handlers read required params as ``kwargs["x"]``; a bare KeyError reached
+    the client as "Error executing tool <name>: 'x'", and mcp >= 2.1 masks
+    anything that is not a ToolError entirely.
+    """
+
+    def __init__(self, group: str, action: str, params: dict):
+        super().__init__(params)
+        self._where = f"{group} action '{action}'"
+
+    def __missing__(self, key):
+        raise ToolError(f"{self._where}: missing required parameter '{key}'")
+
+
 async def _dispatch(
     group: str, actions: dict[str, _Action], ctx: Context, action: str, params: dict | None
 ) -> Any:
@@ -66,7 +82,7 @@ async def _dispatch(
     handler = actions.get(action)
     if handler is None:
         raise ToolError(f"Unknown {group} action: {action}")
-    return await handler(ctx, params or {})
+    return await handler(ctx, _Params(group, action, params or {}))
 
 
 def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa: C901

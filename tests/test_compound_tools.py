@@ -183,3 +183,14 @@ async def test_compound_unknown_action_is_refused():
     )
     with pytest.raises(ToolError, match="Unknown system action: nope"):
         await mcp._tool_manager.get_tool("system").fn(ctx=None, action="nope")
+
+
+@pytest.mark.asyncio
+async def test_compound_missing_required_param_names_itself():
+    """A bare KeyError reached the client as "'expression'", or masked on mcp >= 2.1."""
+    mcp = FastMCP("compound-missing-param-test")
+    register_compound_tools(
+        mcp, _send=AsyncMock(return_value={}), _confirm_destructive=AsyncMock(return_value=True)
+    )
+    with pytest.raises(ToolError, match="missing required parameter 'expression'"):
+        await mcp._tool_manager.get_tool("expression").fn(ctx=None, action="evaluate", params={})

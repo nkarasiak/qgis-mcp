@@ -50,6 +50,30 @@ class HandlerBase:
         return layer
 
     @staticmethod
+    def _load_error(layer):
+        """Why *layer* is invalid, as a message suffix ("" when QGIS says nothing).
+
+        GDAL puts the reason on the layer, the virtual provider on its provider
+        ("Referenced table x in query not found!"); OGR on neither.
+        """
+        reasons = [layer.error().summary()]
+        provider = layer.dataProvider()
+        if provider is not None:
+            reasons.append(provider.error().summary())
+        reasons = [str(r).strip() for r in dict.fromkeys(reasons) if r and str(r).strip()]
+        return f": {'; '.join(reasons)}" if reasons else ""
+
+    @staticmethod
+    def _provider_error(provider):
+        """A data provider's recorded errors, as a message suffix.
+
+        The list accumulates across calls, so callers clear it before the write
+        whose failure this describes.
+        """
+        errors = [str(e) for e in provider.errors()] if provider.hasErrors() else []
+        return f": {'; '.join(errors)}" if errors else ""
+
+    @staticmethod
     def _check_filter_expression(layer, expression):
         """Raise unless *expression* parses and prepares against *layer*.
 

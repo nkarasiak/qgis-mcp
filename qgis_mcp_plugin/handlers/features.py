@@ -202,9 +202,10 @@ class FeatureHandlers:
                 raise CommandError("Failed to add features to the edit buffer")
             count = len(qgs_features)
         else:
+            dp.clearErrors()
             ok, added = dp.addFeatures(qgs_features)
             if not ok:
-                raise CommandError("Failed to add features")
+                raise CommandError(f"Failed to add features{self._provider_error(dp)}")
             count = len(added)
         layer.updateExtents()
         return {"added": count, "buffered": layer.isEditable()}
@@ -248,8 +249,10 @@ class FeatureHandlers:
                                 f"{applied} of {len(attr_map)} features applied, "
                                 "rollback_edits to discard"
                             )
-            elif not dp.changeAttributeValues(attr_map):
-                raise CommandError("Failed to update features")
+            else:
+                dp.clearErrors()
+                if not dp.changeAttributeValues(attr_map):
+                    raise CommandError(f"Failed to update features{self._provider_error(dp)}")
         return {"updated": len(attr_map), "buffered": layer.isEditable()}
 
     @command
@@ -271,9 +274,10 @@ class FeatureHandlers:
         if layer.isEditable():
             ok = layer.deleteFeatures(target_fids)
         else:
+            dp.clearErrors()
             ok = dp.deleteFeatures(target_fids)
         if not ok:
-            raise CommandError("Failed to delete features")
+            raise CommandError(f"Failed to delete features{self._provider_error(dp)}")
         layer.updateExtents()
         return {
             "requested": len(target_fids),
@@ -398,8 +402,11 @@ class FeatureHandlers:
                             f"Failed to update geometry for fid {fid}; "
                             f"{applied} of {len(geom_map)} applied, rollback_edits to discard"
                         )
-            elif not layer.dataProvider().changeGeometryValues(geom_map):
-                raise CommandError("Failed to update geometries")
+            else:
+                dp = layer.dataProvider()
+                dp.clearErrors()
+                if not dp.changeGeometryValues(geom_map):
+                    raise CommandError(f"Failed to update geometries{self._provider_error(dp)}")
             layer.updateExtents()
             layer.triggerRepaint()
         return {"updated": len(geom_map), "buffered": layer.isEditable()}
@@ -449,11 +456,13 @@ class FeatureHandlers:
         v_type = self._pick(type_map, field_type.lower(), "field_type")
         field = QgsField(field_name, v_type, field_type, length or 0, precision or 0)
 
-        if layer.dataProvider().addAttributes([field]):
+        dp = layer.dataProvider()
+        dp.clearErrors()
+        if dp.addAttributes([field]):
             layer.updateFields()
             return {"ok": True, "field_name": field_name}
         else:
-            raise CommandError(f"Failed to add field: {field_name}")
+            raise CommandError(f"Failed to add field: {field_name}{self._provider_error(dp)}")
 
     @command
     def delete_field(self, layer_id, field_name, **kwargs):
@@ -463,11 +472,13 @@ class FeatureHandlers:
         if idx < 0:
             raise CommandError(f"Field not found: {field_name}")
 
-        if layer.dataProvider().deleteAttributes([idx]):
+        dp = layer.dataProvider()
+        dp.clearErrors()
+        if dp.deleteAttributes([idx]):
             layer.updateFields()
             return {"ok": True, "field_name": field_name}
         else:
-            raise CommandError(f"Failed to delete field: {field_name}")
+            raise CommandError(f"Failed to delete field: {field_name}{self._provider_error(dp)}")
 
     @command
     def rename_field(self, layer_id, old_name, new_name, **kwargs):
@@ -477,11 +488,13 @@ class FeatureHandlers:
         if idx < 0:
             raise CommandError(f"Field not found: {old_name}")
 
-        if layer.dataProvider().renameAttributes({idx: new_name}):
+        dp = layer.dataProvider()
+        dp.clearErrors()
+        if dp.renameAttributes({idx: new_name}):
             layer.updateFields()
             return {"ok": True, "old_name": old_name, "new_name": new_name}
         else:
-            raise CommandError(f"Failed to rename field: {old_name}")
+            raise CommandError(f"Failed to rename field: {old_name}{self._provider_error(dp)}")
 
     @command
     def field_calculator(
@@ -634,7 +647,7 @@ class FeatureHandlers:
         if not vlayer.isValid():
             raise CommandError(
                 f"Invalid SQL/virtual layer for query: {query} "
-                f"(available table names: {sorted(sources)})"
+                f"(available table names: {sorted(sources)}){self._load_error(vlayer)}"
             )
         if as_layer:
             project.addMapLayer(vlayer)

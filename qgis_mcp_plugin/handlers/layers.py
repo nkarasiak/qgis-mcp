@@ -52,7 +52,7 @@ class LayerHandlers:
         """Load *path* with *layer_class*, add it to the project and log it."""
         layer = layer_class(path, name or os.path.basename(path), provider)
         if not layer.isValid():
-            raise CommandError(f"Layer is not valid: {path}")
+            raise CommandError(f"Layer is not valid: {path}{self._load_error(layer)}")
 
         QgsProject.instance().addMapLayer(layer)
         QgsMessageLog.logMessage(f"{kind} layer added: {layer.name()}", self.LOG_TAG, MSG_INFO)
@@ -579,7 +579,7 @@ class LayerHandlers:
         layer = layer_class(uri, name or default_name, provider)
 
         if not layer.isValid():
-            raise CommandError(f"Layer is not valid: {url}")
+            raise CommandError(f"Layer is not valid: {url}{self._load_error(layer)}")
 
         QgsProject.instance().addMapLayer(layer)
         # Report the CRS the layer actually got, so a caller can see what the

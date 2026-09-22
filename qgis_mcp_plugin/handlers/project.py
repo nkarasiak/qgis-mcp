@@ -13,6 +13,12 @@ from ..errors import CommandError
 from ..registry import command
 
 
+def _project_error(project):
+    """QGIS's reason for the last failed read/write, as a message suffix."""
+    error = project.error()
+    return f": {error}" if error else ""
+
+
 class ProjectHandlers:
     """The current project: files, CRS, variables, bookmarks, map themes."""
 
@@ -52,7 +58,7 @@ class ProjectHandlers:
             QgsMessageLog.logMessage(f"Project saved: {save_path}", self.LOG_TAG, MSG_INFO)
             return {"saved": save_path}
         else:
-            raise CommandError(f"Failed to save project to {save_path}")
+            raise CommandError(f"Failed to save project to {save_path}{_project_error(project)}")
 
     @command
     def load_project(self, path, **kwargs):
@@ -62,7 +68,7 @@ class ProjectHandlers:
             QgsMessageLog.logMessage(f"Project loaded: {path}", self.LOG_TAG, MSG_INFO)
             return {"loaded": path, "layer_count": len(project.mapLayers())}
         else:
-            raise CommandError(f"Failed to load project from {path}")
+            raise CommandError(f"Failed to load project from {path}{_project_error(project)}")
 
     @command
     def create_new_project(self, path, **kwargs):
@@ -84,7 +90,7 @@ class ProjectHandlers:
                 "ellipsoid": project.ellipsoid(),
             }
         else:
-            raise CommandError(f"Failed to save project to {path}")
+            raise CommandError(f"Failed to save project to {path}{_project_error(project)}")
 
     @command
     def get_project_variables(self, **kwargs):

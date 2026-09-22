@@ -247,7 +247,9 @@ class CanvasHandlers:
             export_settings.dpi = dpi
             result = exporter.exportToImage(tmp, export_settings)
             if int(result) != int(LAYOUT_SUCCESS) or not os.path.exists(tmp):
-                raise CommandError(f"3D layout export failed (export code {int(result)})")
+                reason = exporter.errorMessage()
+                detail = f": {reason}" if reason else ""
+                raise CommandError(f"3D layout export failed (export code {int(result)}){detail}")
             with open(tmp, "rb") as fh:
                 data = fh.read()
         finally:

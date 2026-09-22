@@ -186,3 +186,71 @@ def test_render_warnings_reach_the_caller():
 
 def test_render_without_path_or_warnings_is_just_the_image():
     assert len(make_render_response({"base64_data": "AAAA"}, 800, 600, None)) == 1
+
+
+# --- failures carry the reason QGIS gave ---------------------------------------
+
+
+def _layer_with_errors(layer_error, provider_error):
+    layer = MagicMock()
+    layer.error.return_value.summary.return_value = layer_error
+    layer.dataProvider.return_value.error.return_value.summary.return_value = provider_error
+    return layer
+
+
+@pytest.mark.parametrize(
+    ("layer_error", "provider_error", "expected"),
+    [
+        (
+            "Cannot open GDAL dataset x",
+            "Cannot open GDAL dataset x",
+            ": Cannot open GDAL dataset x",
+        ),
+        ("", "Referenced table t in query not found!", ": Referenced table t in query not found!"),
+        ("", "", ""),
+    ],
+)
+def test_load_error_reports_what_qgis_recorded(server, layer_error, provider_error, expected):
+    assert server._load_error(_layer_with_errors(layer_error, provider_error)) == expected
+
+
+def test_execute_sql_failure_names_the_missing_table(server, plugin_handlers, vector, monkeypatch):
+    vlayer = _layer_with_errors("", "Referenced table missingtable in query not found!")
+    vlayer.isValid.return_value = False
+    monkeypatch.setattr(plugin_handlers.features, "QgsVectorLayer", lambda *a: vlayer)
+
+    with pytest.raises(plugin_handlers.base.CommandError, match="missingtable in query not found"):
+        server.execute_sql("SELECT * FROM missingtable", layers=["lid"])
+
+
+def test_save_project_failure_carries_project_error(server, project, CommandError):
+    project.write.return_value = False
+    project.error.return_value = "Unable to open file for writing"
+
+    with pytest.raises(CommandError, match="Unable to open file for writing"):
+        server.save_project("/ro/p.qgz")
+
+
+def test_layout_export_failure_carries_exporter_message(
+    server, project, plugin_handlers, monkeypatch, CommandError
+):
+    exporter = MagicMock()
+    exporter.exportToPdf.return_value = "FileError"
+    exporter.errorMessage.return_value = "Cannot write to /ro/out.pdf"
+    exporter_cls = MagicMock(return_value=exporter)
+    monkeypatch.setattr(plugin_handlers.layout, "QgsLayoutExporter", exporter_cls)
+
+    with pytest.raises(CommandError, match="Cannot write to /ro/out.pdf"):
+        server.export_layout("L", "/ro/out.pdf")
+
+
+def test_provider_write_failure_carries_the_providers_own_error(server, vector, CommandError):
+    dp = vector.dataProvider.return_value
+    dp.addAttributes.return_value = False
+    dp.hasErrors.return_value = True
+    dp.errors.return_value = ["OGR error creating field f: read-only"]
+
+    with pytest.raises(CommandError, match="OGR error creating field f: read-only"):
+        server.add_field("lid", "f", "string")
+
+    dp.clearErrors.assert_called_once()  # a stale error must not be blamed on this write

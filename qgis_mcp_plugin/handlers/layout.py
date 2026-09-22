@@ -55,7 +55,9 @@ class LayoutHandlers:
         result = getattr(exporter, method)(path, settings)
 
         if result != LAYOUT_SUCCESS:
-            raise CommandError(f"Export failed with code: {result}")
+            reason = exporter.errorMessage()
+            detail = f": {reason}" if reason else ""
+            raise CommandError(f"Export failed with code: {result}{detail}")
 
         return {"ok": True, "path": path}
 
