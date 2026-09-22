@@ -2647,15 +2647,28 @@ async def rename_field(
 
 @mcp.tool(
     title="Apply Style QML",
-    description="Apply a QGIS QML style file to a layer.",
+    description=(
+        "Apply a QGIS QML style to a layer, from a file (path) or inline QML text (qml); pass "
+        "exactly one. Use it for styles the other styling tools do not model (rule-based "
+        "renderers, data-defined properties, SVG fills, blend modes). Rejected, with the "
+        "previous style restored, if the XML is malformed, targets the other layer kind, or "
+        "QGIS loads a different renderer than the QML declares. Tip: save_style_qml on a "
+        "similar layer gives a template in this QGIS version's format."
+    ),
 )
 async def apply_style_qml(
     ctx: Context,
     layer_id: str,
-    path: str,
+    path: str | None = None,
+    qml: str | None = None,
     instance: str | None = None,
 ) -> dict:
-    return await _send("apply_style_qml", {"layer_id": layer_id, "path": path}, instance=instance)
+    params = {"layer_id": layer_id}
+    if path is not None:
+        params["path"] = path
+    if qml is not None:
+        params["qml"] = qml
+    return await _send("apply_style_qml", params, instance=instance)
 
 
 @mcp.tool(

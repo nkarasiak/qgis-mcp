@@ -352,7 +352,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
             "save_style_qml", {"layer_id": kwargs["layer_id"], "path": kwargs["path"]}
         ),
         "apply_style": lambda ctx, kwargs: _send(
-            "apply_style_qml", {"layer_id": kwargs["layer_id"], "path": kwargs["path"]}
+            "apply_style_qml", {k: kwargs[k] for k in ("layer_id", "path", "qml") if k in kwargs}
         ),
         "add_join": lambda ctx, kwargs: _send(
             "add_table_join",
@@ -401,7 +401,8 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
             "(.gpkg/.shp/.geojson/.tif); target_crs (str, optional) reprojects, "
             "filter_expression (str, optional) exports a subset\n"
             "- save_style: layer_id (str), path (str) - write a .qml\n"
-            "- apply_style: layer_id (str), path (str) - load a .qml\n"
+            "- apply_style: layer_id (str), path (str) or qml (str, inline QML text) - "
+            "apply a style; the previous one is restored if QGIS loads another renderer\n"
             "- add_join: target_layer_id (str), join_layer_id (str), target_field (str), "
             "join_field (str), prefix (str, default '')"
             f"{_PARAMS_NOTE}"

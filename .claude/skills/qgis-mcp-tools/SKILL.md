@@ -106,7 +106,7 @@ description: Reference for all qgis-mcp MCP tools, resources, and prompts (names
 | `get_3d_screenshot` | Get 3D Screenshot | readOnly | Capture an **open** 3D Map View as an inline image (reuses its scene + camera via a layout 3D map item; optional pitch/heading/distance overrides). `get_canvas_screenshot` cannot grab the OpenGL view |
 | `get_layer_labeling` | Get Layer Labeling | readOnly | Labeling config of a vector layer: enabled, field, font size, color |
 | `set_layer_labeling` | Set Layer Labeling | - | Configure labels (`enabled`, `field_name`, `font_size`, `color`) |
-| `apply_style_qml` | Apply Style QML | - | Apply a QML style file to a layer |
+| `apply_style_qml` | Apply Style QML | - | Apply a QML style (file `path` or inline `qml`); previous style restored if QGIS loads another renderer |
 | `save_style_qml` | Save Style QML | - | Save a layer's style to a QML file |
 | `get_layer_crs` | Get Layer CRS | readOnly | Layer CRS: EPSG code, description, geographic flag, PROJ4 string |
 | `set_layer_crs` | Set Layer CRS | - | Set a layer's CRS - reinterprets coordinates, does **not** reproject data |

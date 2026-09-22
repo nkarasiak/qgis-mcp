@@ -1478,3 +1478,66 @@ def test_timeout_closes_the_socket_instead_of_desyncing_it(client):
         assert probe.send_command("ping")["result"] == {"pong": True}
     finally:
         probe.disconnect()
+
+
+_RULE_QML = """<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
+<qgis version="3.34">
+ <renderer-v2 type="RuleRenderer" symbollevels="0" enableorderby="0" forceraster="0">
+  <rules key="root">
+   <rule key="r1" filter="&quot;id&quot; &gt; 2" symbol="0" label="big"/>
+  </rules>
+  <symbols>
+   <symbol type="marker" name="0" alpha="1" clip_to_extent="1" force_rhr="0">
+    <layer class="SimpleMarker" enabled="1" locked="0" pass="0">
+     <Option type="Map"><Option name="color" type="QString" value="255,0,0,255"/></Option>
+    </layer>
+   </symbol>
+  </symbols>
+ </renderer-v2>
+</qgis>"""
+
+
+def test_apply_style_qml_inline_validates_and_restores(client):
+    create = client.send_command(
+        "execute_code",
+        {
+            "code": """
+from qgis.core import QgsProject, QgsVectorLayer
+layer = QgsVectorLayer("Point?crs=epsg:4326&field=id:integer", "live_qml", "memory")
+QgsProject.instance().addMapLayer(layer)
+print(layer.id())
+"""
+        },
+    )
+    assert create["status"] == "success", create.get("message")
+    layer_id = create["result"]["stdout"].strip().splitlines()[-1]
+
+    def renderer():
+        code = (
+            "from qgis.core import QgsProject\n"
+            f"print(QgsProject.instance().mapLayer({layer_id!r}).renderer().type())"
+        )
+        return client.send_command("execute_code", {"code": code})["result"]["stdout"].strip()
+
+    try:
+        ok = client.send_command("apply_style_qml", {"layer_id": layer_id, "qml": _RULE_QML})
+        assert ok["status"] == "success", ok.get("message")
+        assert ok["result"]["renderer"] == "RuleRenderer"
+
+        for bad, fragment in (
+            ("<qgis><renderer-v2", "not well-formed"),
+            ("<style/>", "root element"),
+            ("<qgis><pipe><rasterrenderer type='singlebandgray'/></pipe></qgis>", "raster style"),
+            (_RULE_QML.replace("RuleRenderer", "NoSuchRenderer"), "restored"),
+        ):
+            resp = client.send_command("apply_style_qml", {"layer_id": layer_id, "qml": bad})
+            assert resp["status"] == "error", bad
+            assert fragment in resp["message"], resp["message"]
+            assert renderer() == "RuleRenderer"
+
+        both = client.send_command(
+            "apply_style_qml", {"layer_id": layer_id, "qml": _RULE_QML, "path": "x.qml"}
+        )
+        assert both["status"] == "error"
+    finally:
+        client.send_command("remove_layer", {"layer_id": layer_id})

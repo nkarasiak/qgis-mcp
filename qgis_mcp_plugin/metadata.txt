@@ -39,4 +39,5 @@ changelog=0.15.0 : Fewer silent errors (argleton.org audit): failed processing r
     identify, sampling and add_features take an optional crs.
     spatial_join and other wrappers report features QGIS skipped, e.g.
     invalid geometries (#52). Reported by artbotterell. Thank you.
+    apply_style_qml takes inline QML and rolls back a style QGIS misreads (#42).
     Earlier releases: https://github.com/nkarasiak/qgis-mcp/releases

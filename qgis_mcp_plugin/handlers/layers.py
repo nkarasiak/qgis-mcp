@@ -7,12 +7,15 @@ Layer *content* (features, fields, expressions) lives in ``features``; layer
 import fnmatch
 import math
 import os
+import tempfile
 from typing import ClassVar
+from xml.etree import ElementTree
 
 from qgis.core import (
     QgsCoordinateReferenceSystem,
     QgsLayerTreeGroup,
     QgsLayerTreeLayer,
+    QgsMapLayerStyle,
     QgsMessageLog,
     QgsProject,
     QgsRasterLayer,
@@ -668,17 +671,56 @@ class LayerHandlers:
             raise CommandError("Failed to add table join")
 
     @command
-    def apply_style_qml(self, layer_id, path, **kwargs):
-        """Apply a QML style to a layer."""
+    def apply_style_qml(self, layer_id, path=None, qml=None, **kwargs):
+        """Apply a QML style (file ``path`` or inline ``qml`` text) to a layer.
+
+        loadNamedStyle reports success on a file it only half understood, so the
+        renderer the QML declares is compared with the one the layer ends up
+        with; on any failure the previous style is put back.
+        """
+        if (path is None) == (qml is None):
+            raise CommandError("Pass exactly one of 'path' or 'qml'")
         layer = self._layer(layer_id)
 
-        message, success = layer.loadNamedStyle(path)
-        if success:
-            layer.triggerRepaint()
-            self.iface.layerTreeView().refreshLayerSymbology(layer.id())
-            return {"ok": True, "message": message}
-        else:
-            raise CommandError(f"Failed to apply style: {message}")
+        if qml is None:
+            with open(path, encoding="utf-8") as f:
+                qml = f.read()
+        try:
+            root = ElementTree.fromstring(qml)
+        except ElementTree.ParseError as e:
+            raise CommandError(f"QML is not well-formed XML: {e}") from e
+        if root.tag != "qgis":
+            raise CommandError(f"QML root element must be <qgis>, got <{root.tag}>")
+
+        is_raster = layer.type() == LAYER_RASTER
+        own = root.find("pipe/rasterrenderer" if is_raster else "renderer-v2")
+        other = root.find("renderer-v2" if is_raster else "pipe/rasterrenderer")
+        if own is None and other is not None:
+            kind = "vector" if is_raster else "raster"
+            raise CommandError(f"QML holds a {kind} style; layer {layer.name()} is not {kind}")
+        declared = own.get("type") if own is not None else None
+
+        previous = QgsMapLayerStyle()
+        previous.readFromLayer(layer)
+        fd, tmp = tempfile.mkstemp(suffix=".qml")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(qml)
+            message, success = layer.loadNamedStyle(tmp)
+        finally:
+            os.remove(tmp)
+
+        renderer = layer.renderer()
+        loaded = renderer.type() if renderer is not None else None
+        if not success or (declared and loaded != declared):
+            previous.writeToLayer(layer)
+            if success:
+                message = f"QML declares renderer '{declared}' but QGIS loaded '{loaded}'"
+            raise CommandError(f"Failed to apply style, previous style restored: {message}")
+
+        layer.triggerRepaint()
+        self.iface.layerTreeView().refreshLayerSymbology(layer.id())
+        return {"ok": True, "renderer": loaded, "message": message}
 
     @command
     def save_style_qml(self, layer_id, path, **kwargs):
