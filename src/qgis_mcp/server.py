@@ -788,6 +788,7 @@ async def list_checkpoints(ctx: Context, instance: str | None = None) -> dict[st
     annotations=ToolAnnotations(destructiveHint=True),
     description="Put the project back as it was at a checkpoint: every change since, and any "
     "uncommitted edit, is discarded. The project keeps its file name and is left unsaved. "
+    "Memory layer features come back with new feature ids. "
     "export_session afterwards replays the restored state, not the undone steps.",
 )
 async def restore_checkpoint(ctx: Context, checkpoint_id: str, instance: str | None = None) -> dict:
@@ -1459,8 +1460,9 @@ async def execute_processing(
     "and return its job id at once. QGIS stays usable while it runs. Poll "
     "get_processing_job for progress and the result; cancel_processing_job stops it. Use it "
     "instead of execute_processing for anything that may take more than a minute. Same "
-    "parameters as execute_processing. A 'TEMPORARY_OUTPUT'/'memory:' output needs "
-    "load_results=True, since the job ends after this call returns. Algorithms that must "
+    "parameters as execute_processing. A 'TEMPORARY_OUTPUT'/'memory:' vector (feature "
+    "sink) output needs load_results=True, since that memory layer ends with the job; "
+    "temporary files stay on disk. Algorithms that must "
     "run on QGIS's main thread are refused: use execute_processing for those.",
 )
 async def start_processing_job(

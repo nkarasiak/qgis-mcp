@@ -4,6 +4,7 @@ Against a stubbed qgis: what is checked here is the plugin's bookkeeping - what 
 journaled, what a restore rewinds, what a finished job reports - not QGIS itself.
 """
 
+import ast
 import sys
 from unittest.mock import MagicMock
 
@@ -186,6 +187,8 @@ def algorithm(plugin_handlers, monkeypatch):
     registry = processing.QgsApplication.processingRegistry.return_value
     monkeypatch.setattr(registry, "algorithmById", lambda alg_id: alg)
     monkeypatch.setattr(processing, "PROC_ALG_NO_THREADING", 4)
+    # OUTPUT is a feature sink: a temporary one is a memory layer the job would drop.
+    monkeypatch.setattr(sys.modules["qgis.core"], "QgsProcessingParameterFeatureSink", _Param)
     monkeypatch.setitem(sys.modules, "processing.tools", MagicMock())
     # The stub feedback base answers every call with None; QGIS's reports a float.
     monkeypatch.setattr(processing._CollectingFeedback, "progress", lambda self: 0.0, raising=False)
@@ -242,3 +245,37 @@ def test_a_cancelled_job_says_so(server, algorithm, monkeypatch):
 
     assert server.get_processing_job(job_id)["state"] == "cancelled"
     assert server.get_processing_job()["count"] == 1
+
+
+def test_exported_script_keeps_code_that_ends_in_a_quote(server):
+    code = "x = 1\nname = 'roads'"
+    server._record("execute_code", {"code": code})
+    script = server.export_session()["script"]
+
+    tree = ast.parse(script)
+    call = tree.body[-1].value
+    assert ast.literal_eval(call.keywords[0].value) == code
+
+
+def test_layers_a_job_journaled_mid_command_are_not_the_commands(server, monkeypatch):
+    import qgis_mcp_plugin.server as mod
+
+    layers = {}
+    project = MagicMock()
+    project.mapLayers.side_effect = lambda: dict(layers)
+    monkeypatch.setattr(mod.QgsProject, "instance", lambda: project)
+
+    def handler(key, value, **kwargs):
+        # A background job finishes while this handler pumps the event loop.
+        layers["job_layer"] = MagicMock(**{"name.return_value": "job"})
+        server._record("execute_processing", {}, [("job_layer", "job")])
+        layers["own_layer"] = MagicMock(**{"name.return_value": "own"})
+        return {}
+
+    monkeypatch.setattr(server, "set_project_variable", handler)
+    response = server._dispatch(
+        {"type": "set_project_variable", "params": {"key": "k", "value": "v"}}
+    )
+
+    assert response["status"] == "success", response
+    assert server._journal[-1]["creates"] == [("own_layer", "own")]

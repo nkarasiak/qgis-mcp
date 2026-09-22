@@ -166,6 +166,7 @@ class QgisMCPServer(
         # Every command that changed something, for export_session (_record).
         self._journal = deque(maxlen=self.MAX_JOURNAL)
         self._journal_seq = itertools.count(1)
+        self._journal_truncated = False
         # Project snapshots by id (SessionHandlers), written under one temp dir.
         self._checkpoints = {}
         self._checkpoint_ids = itertools.count(1)
@@ -648,12 +649,19 @@ class QgisMCPServer(
             if record:
                 recorded = copy.deepcopy(params)
                 layers_before = set(QgsProject.instance().mapLayers())
+                mark = self._journal[-1]["seq"] if self._journal else 0
 
             try:
                 QgsMessageLog.logMessage(f"Executing: {cmd_type}", self.LOG_TAG, MSG_INFO)
                 result = handler(**params)
                 # execute_code reports a script that raised as a success.
                 if record and not (isinstance(result, dict) and result.get("executed") is False):
+                    # A background job that finished while this handler pumped
+                    # the event loop journaled its own layers; they are not ours.
+                    for entry in reversed(self._journal):
+                        if entry["seq"] <= mark:
+                            break
+                        layers_before.update(lid for lid, _ in entry["creates"])
                     self._record(cmd_type, recorded, self._layers_added_since(layers_before))
                 return {"status": "success", "result": result}
             except CommandError as e:
@@ -688,6 +696,8 @@ class QgisMCPServer(
         generated anew on every run, so the replay maps them onto the ones it
         gets by name.
         """
+        if len(self._journal) == self._journal.maxlen:
+            self._journal_truncated = True
         self._journal.append(
             {
                 "seq": next(self._journal_seq),

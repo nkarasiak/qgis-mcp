@@ -437,9 +437,11 @@ class ProcessingHandlers:
                 continue
             if load_results and isinstance(param, loadable):
                 run_parameters[param.name()] = QgsProcessingOutputLayerDefinition(value, project)
-            elif value.startswith(("TEMPORARY_OUTPUT", "memory:")):
-                # execute_processing hands back a discarded-layer hint here; a
-                # job would finish long after anyone could act on it.
+            elif value.startswith(("TEMPORARY_OUTPUT", "memory:")) and isinstance(
+                param, QgsProcessingParameterFeatureSink
+            ):
+                # A temporary sink is a memory layer, gone with the job; a
+                # temporary file output stays on disk, so it is left alone.
                 raise CommandError(
                     f"{param.name()} is a temporary output, which a background job "
                     "discards when it ends. Pass load_results=True or an output path."

@@ -68,7 +68,7 @@ def mcp(command, _creates=(), **params):
 
 def _literal(value):
     """*value* as Python source; multi-line text as a raw block, as it was written."""
-    if isinstance(value, str) and "\n" in value and "'''" not in value and value[-1] != "\\":
+    if isinstance(value, str) and "\n" in value and "'''" not in value and value[-1] not in "\\'":
         return f"r'''{value}'''"
     return repr(value)
 
@@ -206,9 +206,11 @@ class SessionHandlers:
         script = _SCRIPT_HEADER.format(created=time.strftime("%Y-%m-%d %H:%M"))
         script += "".join(f"{_replay_line(entry)}\n" for entry in entries)
         response = {"command_count": len(entries)}
-        if len(entries) == self._journal.maxlen:
+        if self._journal_truncated:
             response["truncated"] = True
-            response["note"] = f"Only the last {len(entries)} commands are kept."
+            response["note"] = (
+                f"The oldest commands were dropped: only {self.MAX_JOURNAL} are kept."
+            )
         if path:
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write(script)
@@ -217,4 +219,5 @@ class SessionHandlers:
             response["script"] = script
         if clear:
             self._journal.clear()
+            self._journal_truncated = False
         return response

@@ -1092,7 +1092,7 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
             "- start_job: algorithm (str), parameters (dict), load_results (bool, optional), "
             "ellipsoid (str, optional) - run as a background task with no time limit and return "
             "a job id at once; use it for anything that may take more than a minute. A "
-            "'TEMPORARY_OUTPUT' output needs load_results\n"
+            "'TEMPORARY_OUTPUT' feature sink needs load_results; temporary files are kept\n"
             "- get_job: job_id (str, optional) - omit it to list every job. The state is "
             "running with progress, succeeded with result, failed with error, or cancelled\n"
             "- cancel_job: job_id (str)"
