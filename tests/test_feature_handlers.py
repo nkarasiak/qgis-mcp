@@ -21,11 +21,39 @@ class Row:
         return self.value
 
 
+class FakeExpression:
+    """QgsExpression that parses and prepares unless a test says otherwise."""
+
+    parse_error = ""
+    prepare_error = ""
+
+    def __init__(self, text):
+        self.text = text
+
+    def hasParserError(self):
+        return bool(self.parse_error)
+
+    def parserErrorString(self):
+        return self.parse_error
+
+    def prepare(self, context):
+        return not self.prepare_error
+
+    def hasEvalError(self):
+        return bool(self.prepare_error)
+
+    def evalErrorString(self):
+        return self.prepare_error
+
+
 @pytest.fixture
 def features(plugin_handlers, monkeypatch):
     """The feature mixin with the qgis names it touches freshly mocked per test."""
     base, features = plugin_handlers.base, plugin_handlers.features
     monkeypatch.setattr(base, "QgsProject", MagicMock())
+    monkeypatch.setattr(base, "QgsExpression", FakeExpression)
+    monkeypatch.setattr(FakeExpression, "parse_error", "")
+    monkeypatch.setattr(FakeExpression, "prepare_error", "")
     monkeypatch.setattr(features, "QgsFeatureRequest", MagicMock())
     monkeypatch.setattr(features, "QgsVectorLayer", MagicMock())
     return features
@@ -114,3 +142,71 @@ def test_identify_features_rejects_an_unknown_layer_id(plugin_handlers, server):
 
     with pytest.raises(plugin_handlers.base.LayerNotFound):
         server.identify_features([1.0, 2.0], layer_ids=["nope"])
+
+
+# A filter that fails to parse or names a missing field matches nothing without
+# raising in QGIS, so "0 matches" used to come back for a filter that never ran.
+
+
+@pytest.mark.parametrize(
+    ("attr", "message"),
+    [
+        ("parse_error", "syntax error, unexpected EQ"),
+        ("prepare_error", "Field 'nmae' not found"),
+    ],
+)
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda s: s.get_layer_features("lid", expression="bad"),
+        lambda s: s.delete_features("lid", expression="bad"),
+        lambda s: s.select_features("lid", expression="bad"),
+    ],
+    ids=["get_layer_features", "delete_features", "select_features"],
+)
+def test_a_broken_filter_is_an_error_not_zero_matches(
+    plugin_handlers, server, layer, monkeypatch, attr, message, call
+):
+    monkeypatch.setattr(FakeExpression, attr, message)
+
+    with pytest.raises(plugin_handlers.base.CommandError, match=message):
+        call(server)
+
+    layer.getFeatures.assert_not_called()
+    layer.selectByExpression.assert_not_called()
+    layer.deleteFeatures.assert_not_called()
+
+
+@pytest.fixture
+def exporter(plugin_handlers, features, layer):
+    runs = []
+
+    class Server(plugin_handlers.layers.LayerHandlers, plugin_handlers.base.HandlerBase):
+        def _run_alg(self, algorithm, parameters, *args, **kwargs):
+            runs.append(algorithm)
+            return {"OUTPUT": "out"}
+
+    return Server(), runs
+
+
+def test_export_layer_refuses_a_broken_filter_before_writing(
+    plugin_handlers, exporter, monkeypatch
+):
+    server, runs = exporter
+    monkeypatch.setattr(FakeExpression, "prepare_error", "Field 'nmae' not found")
+
+    with pytest.raises(plugin_handlers.base.CommandError, match="nmae"):
+        server.export_layer("lid", "/tmp/o.gpkg", filter_expression='"nmae" = 1')
+
+    assert runs == []
+
+
+def test_export_layer_refuses_a_filter_on_a_raster(plugin_handlers, exporter, layer):
+    """It used to be ignored, handing back the whole raster as if filtered."""
+    server, runs = exporter
+    layer.type.return_value = plugin_handlers.base.LAYER_RASTER
+
+    with pytest.raises(plugin_handlers.base.CommandError, match="vector layers only"):
+        server.export_layer("lid", "/tmp/o.tif", filter_expression="1 = 1")
+
+    assert runs == []

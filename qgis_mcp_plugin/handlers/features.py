@@ -61,6 +61,7 @@ class FeatureHandlers:
         request = QgsFeatureRequest()
         matched = feature_count
         if expression:
+            self._check_filter_expression(layer, expression)
             request.setFilterExpression(expression)
             # featureCount() is the whole layer. Report what the expression
             # selects too, since that is what limit and offset page through.
@@ -258,6 +259,7 @@ class FeatureHandlers:
         if fids is not None:
             target_fids = fids
         elif expression:
+            self._check_filter_expression(layer, expression)
             request = QgsFeatureRequest().setFilterExpression(expression)
             request.setNoAttributes()
             target_fids = [f.id() for f in layer.getFeatures(request)]
@@ -408,6 +410,7 @@ class FeatureHandlers:
         if fids is not None:
             layer.selectByIds(fids)
         elif expression:
+            self._check_filter_expression(layer, expression)
             layer.selectByExpression(expression)
         else:
             raise CommandError("Either fids or expression must be provided")

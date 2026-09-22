@@ -626,6 +626,7 @@ class LayerHandlers:
         if layer.type() == LAYER_VECTOR:
             src = layer
             if filter_expression:
+                self._check_filter_expression(layer, filter_expression)
                 r = self._run_alg(
                     "native:extractbyexpression",
                     {"INPUT": layer, "EXPRESSION": filter_expression, "OUTPUT": "memory:"},
@@ -641,6 +642,9 @@ class LayerHandlers:
             return {"ok": True, "output": output_path}
 
         if layer.type() == LAYER_RASTER:
+            if filter_expression:
+                # Ignoring it would hand back the whole raster as if filtered.
+                raise CommandError("filter_expression applies to vector layers only")
             if target_crs:
                 self._run_alg(
                     "gdal:warpreproject",

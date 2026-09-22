@@ -4,7 +4,12 @@ Mixed into ``QgisMCPServer`` last, so the domain mixins can rely on these
 without importing each other.
 """
 
-from qgis.core import QgsProject
+from qgis.core import (
+    QgsExpression,
+    QgsExpressionContext,
+    QgsExpressionContextUtils,
+    QgsProject,
+)
 from qgis.PyQt.QtCore import QVariant
 
 from ..compat import LAYER_RASTER, LAYER_VECTOR
@@ -43,6 +48,21 @@ class HandlerBase:
         if layer.type() != LAYER_RASTER:
             raise WrongLayerType(f"Not a raster layer: {layer_id}")
         return layer
+
+    @staticmethod
+    def _check_filter_expression(layer, expression):
+        """Raise unless *expression* parses and prepares against *layer*.
+
+        A filter that fails to parse, or names a field the layer lacks, matches
+        nothing without raising - so "0 features" reads as a real answer when
+        the filter never ran.
+        """
+        expr = QgsExpression(expression)
+        if expr.hasParserError():
+            raise CommandError(f"Expression parse error: {expr.parserErrorString()}")
+        context = QgsExpressionContext(QgsExpressionContextUtils.globalProjectLayerScopes(layer))
+        if not expr.prepare(context) or expr.hasEvalError():
+            raise CommandError(f"Expression error: {expr.evalErrorString()}")
 
     @staticmethod
     def _pick(mapping, key, label):
