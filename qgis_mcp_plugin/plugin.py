@@ -171,13 +171,13 @@ class QgisMCPPlugin:
         layout.addWidget(title)
 
         body = QLabel(
-            "<p>This plugin lets Claude (and other LLMs) control QGIS directly "
+            "<p>This plugin lets AI assistants control QGIS directly "
             "via the Model Context Protocol.</p>"
             "<p><b>Quick start:</b></p>"
             "<ol>"
             "<li>Click the MCP toolbar icon → <b>Start Server</b></li>"
             "<li>Open <b>Configure…</b> in the same menu to connect your AI client</li>"
-            "<li>Ask Claude to work with your QGIS project</li>"
+            "<li>Ask your assistant to work with your project</li>"
             "</ol>"
         )
         body.setWordWrap(True)
