@@ -426,3 +426,64 @@ def test_run_model_default_leaves_the_context_to_processing(processing):
     server.run_model("model:areas", {"OUTPUT": "TEMPORARY_OUTPUT"})
 
     assert calls["context"] is None
+
+
+# --- outputs come back as JSON values -----------------------------------------
+
+
+class _MapLayer:
+    def __init__(self, lid):
+        self._id = lid
+
+    def id(self):
+        return self._id
+
+    def name(self):
+        return "Buffered"
+
+
+@pytest.fixture
+def outputs(processing, plugin_handlers, monkeypatch):
+    server, _ = processing
+    monkeypatch.setattr(plugin_handlers.processing, "QgsMapLayer", _MapLayer)
+    project = plugin_handlers.processing.QgsProject.instance.return_value
+
+    def run_returning(result, in_project=()):
+        monkeypatch.setattr(sys.modules["processing"], "run", lambda *a, **k: result)
+        monkeypatch.setattr(
+            project, "mapLayer", lambda lid: object() if lid in in_project else None
+        )
+        return server
+
+    return run_returning
+
+
+def test_numeric_outputs_stay_numbers(outputs):
+    server = outputs({"MEAN": 1.5, "COUNT": 3, "NULL_VALUES": None, "OUTPUT_HTML_FILE": "/t.html"})
+
+    result = server.execute_processing("qgis:basicstatisticsforfields", {"INPUT_LAYER": "c"})
+
+    assert result["result"] == {
+        "MEAN": 1.5,
+        "COUNT": 3,
+        "NULL_VALUES": None,
+        "OUTPUT_HTML_FILE": "/t.html",
+    }
+
+
+def test_a_temporary_layer_output_says_it_is_discarded(outputs):
+    """It used to come back as its repr, for a layer gone once the call returned."""
+    server = outputs({"OUTPUT": _MapLayer("buf_1")})
+
+    out = server.execute_processing("native:buffer", {"INPUT": "c", "OUTPUT": "TEMPORARY_OUTPUT"})
+
+    assert out["result"]["OUTPUT"]["id"] == "buf_1"
+    assert out["result"]["OUTPUT"]["discarded"] is True
+
+
+def test_a_layer_output_in_the_project_is_just_its_id(outputs):
+    server = outputs({"OUTPUT": _MapLayer("buf_1")}, in_project=("buf_1",))
+
+    out = server.execute_processing("native:buffer", {"INPUT": "c", "OUTPUT": "TEMPORARY_OUTPUT"})
+
+    assert out["result"]["OUTPUT"] == {"id": "buf_1", "name": "Buffered"}

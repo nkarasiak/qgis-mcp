@@ -9,6 +9,7 @@ from typing import ClassVar
 from qgis.core import (
     QgsApplication,
     QgsEllipsoidUtils,
+    QgsMapLayer,
     QgsMessageLog,
     QgsPointXY,
     QgsProcessingFeedback,
@@ -115,6 +116,26 @@ def _error_detail(feedback):
     first stderr line is often a harmless warning with the exit code last.
     """
     return f": {'; '.join(feedback.errors)}" if feedback.errors else ""
+
+
+def _output_value(value):
+    """A processing output as JSON: numbers stay numbers, layers become ids.
+
+    str() turned 123.4 into "123.4", None into "None", and a TEMPORARY_OUTPUT
+    layer into its repr - a layer that is gone once the call returns.
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_output_value(v) for v in value]
+    if isinstance(value, QgsMapLayer):
+        out = {"id": value.id(), "name": value.name()}
+        if QgsProject.instance().mapLayer(value.id()) is None:
+            # Not in the project: dropped when this call returns.
+            out["discarded"] = True
+            out["hint"] = "Pass an output file path (or load_results=True) to keep it"
+        return out
+    return str(value)
 
 
 class ProcessingHandlers:
@@ -253,7 +274,10 @@ class ProcessingHandlers:
             result = self._run_alg(
                 algorithm, parameters, feedback, load=load_results, context=context
             )
-            response = {"algorithm": algorithm, "result": {k: str(v) for k, v in result.items()}}
+            response = {
+                "algorithm": algorithm,
+                "result": {k: _output_value(v) for k, v in result.items()},
+            }
             if load_results:
                 # Which layers appeared is the provider-agnostic answer: only
                 # sink/vector/raster destinations are loaded, and the name QGIS
@@ -821,7 +845,7 @@ class ProcessingHandlers:
         feedback = _ResponsiveFeedback(self._PROCESSING_TIMEOUT)
         context = self._ellipsoid_context(ellipsoid, feedback)
         result = self._run_alg(target, parameters, feedback, context=context)
-        return {"model": model, "result": {k: str(v) for k, v in result.items()}}
+        return {"model": model, "result": {k: _output_value(v) for k, v in result.items()}}
 
     @command
     def get_processing_providers(self, **kwargs):
@@ -875,7 +899,7 @@ class ProcessingHandlers:
                     {
                         "index": i,
                         "status": "success",
-                        "result": {k: str(v) for k, v in r.items()},
+                        "result": {k: _output_value(v) for k, v in r.items()},
                     }
                 )
             except Exception as e:
