@@ -91,3 +91,99 @@ def test_set_canvas_extent_warns_when_the_box_crosses_the_antimeridian(canvas):
 
     assert "antimeridian" in result["warning"]
     assert result["crs"] == "EPSG:4326"
+
+
+# --- rasters ---------------------------------------------------------------------
+
+
+@pytest.fixture
+def raster(plugin_handlers, monkeypatch):
+    """A 1-band raster covering x, y in [0, 4]; pixel (0.5, 3.5) is nodata."""
+    project = MagicMock()
+    qgs_project = MagicMock(**{"instance.return_value": project})
+    monkeypatch.setattr(plugin_handlers.base, "QgsProject", qgs_project)
+    monkeypatch.setattr(plugin_handlers.processing, "QgsPointXY", lambda x, y: (x, y))
+    layer = MagicMock()
+    layer.type.return_value = plugin_handlers.base.LAYER_RASTER
+    layer.bandCount.return_value = 1
+    layer.crs.return_value.authid.return_value = "EPSG:32631"
+    layer.extent.return_value.contains.side_effect = lambda p: 0 <= p[0] <= 4 and 0 <= p[1] <= 4
+    dp = layer.dataProvider.return_value
+    dp.sample.side_effect = lambda p, b: (
+        (float("nan"), False)
+        if p == (0.5, 3.5) or not (0 <= p[0] <= 4 and 0 <= p[1] <= 4)
+        else (6.0, True)
+    )
+    project.mapLayer.return_value = layer
+
+    class Server(plugin_handlers.processing.ProcessingHandlers, plugin_handlers.base.HandlerBase):
+        LOG_TAG = "test"
+
+    return Server(), layer
+
+
+def test_sample_tells_nodata_from_a_point_off_the_raster(raster):
+    """Both came back as value: null, so a CRS mix-up looked like missing data."""
+    server, _ = raster
+
+    result = server.sample_raster_values("r", [[1.5, 3.5], [0.5, 3.5], [2.35, 48.85]], band=1)
+
+    got = [(s["value"], s["outside_extent"]) for s in result["samples"]]
+    assert got == [(6.0, False), (None, False), (None, True)]
+    assert result["crs"] == "EPSG:32631"
+
+
+@pytest.mark.parametrize("band", [0, 5])
+def test_sample_refuses_a_band_the_raster_lacks(raster, plugin_handlers, band):
+    """band=0 used to mean "all bands" and band=5 returned null for every point."""
+    server, _ = raster
+
+    with pytest.raises(plugin_handlers.base.CommandError, match="out of range"):
+        server.sample_raster_values("r", [[1.5, 3.5]], band=band)
+
+
+@pytest.fixture
+def raster_info(plugin_handlers, raster, monkeypatch):
+    _, layer = raster
+
+    class Server(plugin_handlers.layers.LayerHandlers, plugin_handlers.base.HandlerBase):
+        LOG_TAG = "test"
+
+    dp = layer.dataProvider.return_value
+    dp.sourceHasNoDataValue.return_value = True
+    dp.sourceNoDataValue.return_value = -9999.0
+    dp.userNoDataValues.return_value = []
+    dp.bandScale.return_value = 0.1
+    dp.bandOffset.return_value = 5.0
+    return Server(), dp
+
+
+def test_raster_info_says_whether_nodata_is_applied(raster_info):
+    """With "use source nodata" off, the stats count nodata pixels as data."""
+    server, dp = raster_info
+    dp.useSourceNoDataValue.return_value = False
+
+    band = server.get_raster_info("r")["bands"][0]
+
+    assert (band["nodata"], band["nodata_used"]) == (-9999.0, False)
+
+
+def test_raster_info_reports_scale_and_offset(raster_info):
+    """Stats are scaled and nodata is raw; without scale/offset they never match."""
+    server, dp = raster_info
+    dp.useSourceNoDataValue.return_value = True
+
+    band = server.get_raster_info("r")["bands"][0]
+
+    assert (band["scale"], band["offset"]) == (0.1, 5.0)
+    assert "raw" in band["note"]
+
+
+def test_raster_info_omits_nodata_when_the_band_has_none(raster_info):
+    server, dp = raster_info
+    dp.sourceHasNoDataValue.return_value = False
+    dp.bandScale.return_value, dp.bandOffset.return_value = 1.0, 0.0
+
+    band = server.get_raster_info("r")["bands"][0]
+
+    assert "nodata" not in band and "scale" not in band

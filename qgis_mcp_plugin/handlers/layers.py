@@ -169,9 +169,20 @@ class LayerHandlers:
                 QgsMessageLog.logMessage(
                     f"Could not compute stats for band {band}: {e}", self.LOG_TAG, MSG_WARNING
                 )
-            nodata = dp.sourceNoDataValue(band)
-            if nodata is not None:
-                band_info["nodata"] = nodata
+            # The source nodata value only excludes pixels from the statistics
+            # when QGIS is set to use it; reporting it unconditionally implied
+            # nodata pixels were excluded when they were counted as data.
+            if dp.sourceHasNoDataValue(band):
+                band_info["nodata"] = dp.sourceNoDataValue(band)
+                band_info["nodata_used"] = bool(dp.useSourceNoDataValue(band))
+            user_ranges = [[r.min(), r.max()] for r in dp.userNoDataValues(band)]
+            if user_ranges:
+                band_info["user_nodata"] = user_ranges
+            scale, offset = dp.bandScale(band), dp.bandOffset(band)
+            if (scale, offset) != (1.0, 0.0):
+                # Statistics come back scaled; the nodata value is the raw one.
+                band_info.update({"scale": scale, "offset": offset})
+                band_info["note"] = "min/max/mean/stdev are scaled; nodata is the raw stored value"
             info["bands"].append(band_info)
 
         return info

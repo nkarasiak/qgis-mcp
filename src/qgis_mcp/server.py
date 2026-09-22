@@ -1605,7 +1605,8 @@ async def zonal_statistics(
     annotations=ToolAnnotations(readOnlyHint=True),
     description="Sample raster pixel values at points. 'points' is a list of [x, y] in the "
     "raster's CRS. Omit 'band' to sample all bands. Use transform_coordinates first if your "
-    "points are in a different CRS.",
+    "points are in a different CRS. A null value is nodata when outside_extent is false; "
+    "outside_extent true means the point is off the raster (often a CRS mix-up).",
 )
 async def sample_raster_values(
     ctx: Context,
