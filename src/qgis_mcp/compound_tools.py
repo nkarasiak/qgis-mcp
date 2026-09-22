@@ -892,6 +892,8 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
         runs = kwargs["parameters_list"]
         await ctx.info(f"Batch processing {kwargs['algorithm']}: {len(runs)} run(s)")
         payload = {"algorithm": kwargs["algorithm"], "parameters_list": runs}
+        if kwargs.get("ellipsoid") is not None:
+            payload["ellipsoid"] = kwargs["ellipsoid"]
         socket_timeout = with_timeout(payload, kwargs)
         return await _send("execute_processing_batch", payload, timeout=socket_timeout)
 
@@ -905,11 +907,10 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
     async def processing_run_model(ctx, kwargs):
         await ctx.info(f"Running model: {kwargs['model']}")
         await ctx.report_progress(0, 100)
-        result = await _send(
-            "run_model",
-            {"model": kwargs["model"], "parameters": kwargs.get("parameters") or {}},
-            timeout=TIMEOUT_LONG,
-        )
+        payload = {"model": kwargs["model"], "parameters": kwargs.get("parameters") or {}}
+        if kwargs.get("ellipsoid") is not None:
+            payload["ellipsoid"] = kwargs["ellipsoid"]
+        result = await _send("run_model", payload, timeout=TIMEOUT_LONG)
         await ctx.report_progress(100, 100)
         return result
 
@@ -953,15 +954,15 @@ def register_compound_tools(mcp: FastMCP, _send, _confirm_destructive):  # noqa:
             "keep a 'TEMPORARY_OUTPUT'/'memory:' result, ellipsoid (str, optional) - "
             "measurement ellipsoid, e.g. 'EPSG:7030' (WGS 84); default is the project's\n"
             "- execute_batch: algorithm (str), parameters_list (list[dict]), timeout (int, optional, "
-            "seconds for the whole batch, default 55) - one run per dict, per-run "
-            "success/error/skipped status\n"
+            "seconds for the whole batch, default 55), ellipsoid (str, optional) - one run per "
+            "dict, per-run success/error/skipped status\n"
             "- list_algorithms: search (str, optional), provider (str, optional)\n"
             "- get_help: algorithm_id (str)\n"
             "- get_providers: no params - providers with algorithm counts and active status\n"
             "- list_models: no params - registered Processing models (id, name, group)\n"
             "- run_model: model (str: registered id like 'model:myflow', or a .model3 path), "
             "parameters (dict, optional) mapping the model's input names to values; missing "
-            "output/sink parameters default to a temporary layer\n"
+            "output/sink parameters default to a temporary layer; ellipsoid (str, optional)\n"
             "- create_model: name (str), steps (list[dict]), inputs (list[dict], optional), "
             "outputs (list[dict], optional), description (str, optional), group (str, optional).\n"
             "    inputs: [{name, type, description?, default?, optional?, parent_layer? (field/distance), "

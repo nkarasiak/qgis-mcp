@@ -1474,19 +1474,24 @@ async def list_processing_models(ctx: Context, instance: str | None = None) -> d
     title="Run Model",
     description="Run a Processing model by registered id (e.g. 'model:myflow') or by a "
     ".model3 file path. 'parameters' maps the model's input names to values "
-    "(layer ids/paths, numbers, etc.).",
+    "(layer ids/paths, numbers, etc.). ellipsoid: ellipsoid for distance/area measurements "
+    "(e.g. 'EPSG:7030' for WGS 84, 'NONE' for planimetric); default is the project's.",
 )
 async def run_model(
     ctx: Context,
     model: str,
     parameters: dict | None = None,
+    ellipsoid: str | None = None,
     instance: str | None = None,
 ) -> dict:
     await ctx.info(f"Running model: {model}")
     await ctx.report_progress(0, 100)
+    params: dict[str, Any] = {"model": model, "parameters": parameters or {}}
+    if ellipsoid is not None:
+        params["ellipsoid"] = ellipsoid
     result = await _send(
         "run_model",
-        {"model": model, "parameters": parameters or {}},
+        params,
         timeout=TIMEOUT_LONG,
         instance=instance,
     )
@@ -1511,17 +1516,21 @@ async def get_processing_providers(ctx: Context, instance: str | None = None) ->
     "Returns a per-run result with index and success/error status. Use for applying "
     "the same operation over many inputs in a single round-trip. timeout: seconds for the "
     "whole batch (default 55); runs that would start after it has elapsed come back as "
-    "'skipped' with the completed ones intact, so raise it or split the list for big batches.",
+    "'skipped' with the completed ones intact, so raise it or split the list for big batches. "
+    "ellipsoid: measurement ellipsoid for every run (e.g. 'EPSG:7030'); default is the project's.",
 )
 async def execute_processing_batch(
     ctx: Context,
     algorithm: str,
     parameters_list: list[dict],
     timeout: int | None = None,
+    ellipsoid: str | None = None,
     instance: str | None = None,
 ) -> dict:
     await ctx.info(f"Batch processing {algorithm}: {len(parameters_list)} run(s)")
     params: dict[str, Any] = {"algorithm": algorithm, "parameters_list": parameters_list}
+    if ellipsoid is not None:
+        params["ellipsoid"] = ellipsoid
     if timeout is None:
         socket_timeout = TIMEOUT_LONG
     else:

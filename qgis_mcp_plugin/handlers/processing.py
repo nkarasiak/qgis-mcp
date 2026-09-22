@@ -179,6 +179,36 @@ class ProcessingHandlers:
             )
         return result
 
+    @staticmethod
+    def _check_ellipsoid(ellipsoid):
+        """Raise unless *ellipsoid* is one QGIS knows (or 'NONE')."""
+        known = QgsEllipsoidUtils.ellipsoidParameters(ellipsoid).valid
+        # QGIS reports 'NONE' as invalid, but it is the planimetric setting.
+        if not known and ellipsoid.upper() != "NONE":
+            raise CommandError(
+                f"Unknown ellipsoid: {ellipsoid}. Use 'EPSG:7030' or 'WGS84' for "
+                "WGS 84, another ellipsoid acronym, or 'NONE' for planimetric "
+                "measurements."
+            )
+
+    @classmethod
+    def _ellipsoid_context(cls, ellipsoid, feedback):
+        """A processing context measuring on *ellipsoid*, or None for the default.
+
+        Without one the project's ellipsoid applies, and an area asked for on
+        WGS84 comes back measured on whatever the project uses. createContext is
+        what processing.run builds when given no context (project, invalid-
+        geometry setting, units), so only the ellipsoid differs from a default run.
+        """
+        if ellipsoid is None:
+            return None
+        cls._check_ellipsoid(ellipsoid)
+        from processing.tools import dataobjects
+
+        context = dataobjects.createContext(feedback)
+        context.setEllipsoid(ellipsoid)
+        return context
+
     def _missing_outputs(self, algorithm, parameters):
         """Output paths the caller asked for that are not on disk after the run."""
         from qgis.core import QgsProcessingDestinationParameter
@@ -217,24 +247,7 @@ class ProcessingHandlers:
             QgsMessageLog.logMessage(f"Processing: {algorithm}", self.LOG_TAG, MSG_INFO)
             budget = self._PROCESSING_TIMEOUT if timeout is None else float(timeout)
             feedback = _ResponsiveFeedback(budget)
-            context = None
-            if ellipsoid is not None:
-                # Without this the project's ellipsoid applies, and an area asked
-                # for on WGS84 comes back measured on whatever the project uses.
-                known = QgsEllipsoidUtils.ellipsoidParameters(ellipsoid).valid
-                if not known and ellipsoid.upper() != "NONE":
-                    raise CommandError(
-                        f"Unknown ellipsoid: {ellipsoid}. Use 'EPSG:7030' or 'WGS84' for "
-                        "WGS 84, another ellipsoid acronym, or 'NONE' for planimetric "
-                        "measurements."
-                    )
-                from processing.tools import dataobjects
-
-                # createContext is what processing.run builds when given no context
-                # (project, invalid-geometry setting, units), so only the ellipsoid
-                # differs from a default run.
-                context = dataobjects.createContext(feedback)
-                context.setEllipsoid(ellipsoid)
+            context = self._ellipsoid_context(ellipsoid, feedback)
             project = QgsProject.instance()
             before = set(project.mapLayers()) if load_results else ()
             result = self._run_alg(
@@ -774,7 +787,7 @@ class ProcessingHandlers:
         return {"models": models, "count": len(models)}
 
     @command
-    def run_model(self, model, parameters=None, **kwargs):
+    def run_model(self, model, parameters=None, ellipsoid=None, **kwargs):
         """Run a Processing model by registered id or by .model3 file path."""
         from qgis.core import QgsProcessingDestinationParameter
 
@@ -805,7 +818,9 @@ class ProcessingHandlers:
                 if isinstance(param, QgsProcessingDestinationParameter):
                     parameters.setdefault(param.name(), "TEMPORARY_OUTPUT")
 
-        result = self._run_alg(target, parameters)
+        feedback = _ResponsiveFeedback(self._PROCESSING_TIMEOUT)
+        context = self._ellipsoid_context(ellipsoid, feedback)
+        result = self._run_alg(target, parameters, feedback, context=context)
         return {"model": model, "result": {k: str(v) for k, v in result.items()}}
 
     @command
@@ -825,7 +840,9 @@ class ProcessingHandlers:
         return {"providers": providers, "count": len(providers)}
 
     @command
-    def execute_processing_batch(self, algorithm, parameters_list, timeout=None, **kwargs):
+    def execute_processing_batch(
+        self, algorithm, parameters_list, timeout=None, ellipsoid=None, **kwargs
+    ):
         """Run the same algorithm once per parameter dict; collect per-run results.
 
         `timeout` bounds the whole batch (default `_PROCESSING_TIMEOUT`), not each run:
@@ -834,6 +851,9 @@ class ProcessingHandlers:
         them (#43).
         """
         budget = self._PROCESSING_TIMEOUT if timeout is None else float(timeout)
+        if ellipsoid is not None:
+            # Once, up front: a bad ellipsoid is not a per-run failure.
+            self._check_ellipsoid(ellipsoid)
         deadline = time.monotonic() + budget
         results = []
         for i, params in enumerate(parameters_list):
@@ -849,7 +869,8 @@ class ProcessingHandlers:
                 continue
             try:
                 feedback = _ResponsiveFeedback(min(self._PROCESSING_TIMEOUT, remaining))
-                r = self._run_alg(algorithm, params, feedback)
+                context = self._ellipsoid_context(ellipsoid, feedback)
+                r = self._run_alg(algorithm, params, feedback, context=context)
                 results.append(
                     {
                         "index": i,

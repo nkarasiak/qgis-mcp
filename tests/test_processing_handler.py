@@ -379,3 +379,50 @@ def test_raster_calculator_failure_carries_last_error(calculator, plugin_handler
 
     with pytest.raises(plugin_handlers.processing.CommandError, match="Could not open input"):
         server.raster_calculator('"a@1"', "/tmp/o.tif")
+
+
+# --- ellipsoid on batch and model runs ----------------------------------------
+
+
+def test_batch_runs_measure_on_the_requested_ellipsoid(processing, dataobjects):
+    server, calls = processing
+
+    response = server.execute_processing_batch(
+        "native:exportaddgeometrycolumns",
+        [{"INPUT": "c", "OUTPUT": "TEMPORARY_OUTPUT"}],
+        ellipsoid="EPSG:7030",
+    )
+
+    assert response["results"][0]["status"] == "success"
+    assert calls["context"] is dataobjects.createContext.return_value
+    dataobjects.createContext.return_value.setEllipsoid.assert_called_with("EPSG:7030")
+
+
+def test_batch_refuses_an_unknown_ellipsoid_before_any_run(
+    processing, plugin_handlers, dataobjects, monkeypatch
+):
+    server, calls = processing
+    params = plugin_handlers.processing.QgsEllipsoidUtils.ellipsoidParameters.return_value
+    monkeypatch.setattr(params, "valid", False)
+
+    with pytest.raises(plugin_handlers.processing.CommandError, match="Unknown ellipsoid"):
+        server.execute_processing_batch("native:buffer", [{"INPUT": "c"}], ellipsoid="bogus")
+
+    assert calls["runner"] is None
+
+
+def test_run_model_measures_on_the_requested_ellipsoid(processing, dataobjects):
+    server, calls = processing
+
+    server.run_model("model:areas", {"OUTPUT": "TEMPORARY_OUTPUT"}, ellipsoid="EPSG:7030")
+
+    assert calls["context"] is dataobjects.createContext.return_value
+    dataobjects.createContext.return_value.setEllipsoid.assert_called_with("EPSG:7030")
+
+
+def test_run_model_default_leaves_the_context_to_processing(processing):
+    server, calls = processing
+
+    server.run_model("model:areas", {"OUTPUT": "TEMPORARY_OUTPUT"})
+
+    assert calls["context"] is None

@@ -131,6 +131,24 @@ async def test_execute_processing_forwards_ellipsoid_only_when_given(mock_connec
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool", "kwargs"),
+    [
+        ("execute_processing_batch", {"algorithm": "native:buffer", "parameters_list": [{}]}),
+        ("run_model", {"model": "model:m"}),
+    ],
+)
+async def test_batch_and_model_forward_ellipsoid_only_when_given(mock_connection, tool, kwargs):
+    mock_connection.returns({"results": [], "result": {}})
+
+    await getattr(srv, tool)(make_ctx(), **kwargs)
+    assert "ellipsoid" not in mock_connection.send_command.call_args[0][1]
+
+    await getattr(srv, tool)(make_ctx(), **kwargs, ellipsoid="EPSG:7030")
+    assert mock_connection.send_command.call_args[0][1]["ellipsoid"] == "EPSG:7030"
+
+
+@pytest.mark.asyncio
 async def test_execute_processing_custom_timeout_outlives_plugin_deadline(mock_connection):
     """The socket must outlast the plugin's deadline.
 
