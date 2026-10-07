@@ -55,7 +55,11 @@ The QGIS Plugin Repository runs a flake8-based code-quality check on upload and 
 ```bash
 uv run --no-sync ruff check qgis_mcp_plugin/ src/    # E/F/W/I/UP/B/SIM/RUF
 uv run --no-sync flake8 qgis_mcp_plugin/             # mirrors uploader (W503 on, via .flake8)
+uvx bandit@1.9.4 -r qgis_mcp_plugin/ -q              # mirrors the Hub security scan
+git ls-files -z qgis_mcp_plugin/ | xargs -0 uvx --from detect-secrets==1.5.0 detect-secrets-hook
 ```
+
+CI runs all four in `tests.yml`. Use `detect-secrets-hook`, not `detect-secrets scan`: scan exits 0 whatever it finds.
 
 For W503, refactor the boolean onto fewer lines (extract sub-expressions) rather than breaking across the operator - Black/ruff formatting produces the W503 form the uploader rejects.
 
