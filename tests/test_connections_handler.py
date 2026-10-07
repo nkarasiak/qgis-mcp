@@ -174,3 +174,28 @@ def test_connection_test_never_opens_the_credentials_dialog(handlers, qgis):
 def test_redact_uri_leaves_no_secret_behind(server_class, uri, expected):
     """An escaped quote once ended the match early and leaked the tail of the value."""
     assert server_class._redact_uri(uri) == expected
+
+
+@pytest.mark.parametrize(
+    ("params", "geometry_column"),
+    [({"geometry_column": "geom", "primary_key": "gid"}, "geom"), ({}, "detected")],
+)
+def test_table_layer_uri_names_the_geometry_column(handlers, qgis, params, geometry_column):
+    """#53: tableUri() alone loaded PostGIS tables as geometryless layers."""
+    conn = MagicMock()
+    conn.providerKey.return_value = "postgres"
+    conn.table.return_value.geometryColumn.return_value = "detected"
+    qgis.server._connection = lambda *_: conn
+    handlers.QgsVectorLayer.reset_mock()
+    qgis.server.add_layer_from_connection(
+        provider="postgres", connection="c", schema="admin", table="regions", **params
+    )
+    handlers.QgsDataSourceUri.assert_called_with(conn.tableUri.return_value)
+    qgis.uri.setGeometryColumn.assert_called_once_with(geometry_column)
+    if "primary_key" in params:
+        qgis.uri.setKeyColumn.assert_called_once_with("gid")
+    else:
+        qgis.uri.setKeyColumn.assert_not_called()
+    handlers.QgsVectorLayer.assert_called_once_with(
+        qgis.uri.uri.return_value, "regions", "postgres"
+    )

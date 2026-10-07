@@ -335,6 +335,18 @@ class ConnectionHandlers:
             layer = conn.createSqlVectorLayer(options)
         elif table:
             uri = conn.tableUri(schema or "", table)
+            if conn.providerKey() != "ogr":
+                # tableUri() names no geometry column, which the postgres provider
+                # reads as a geometryless table (#53). OGR uris are file paths.
+                ds_uri = QgsDataSourceUri(uri)
+                if not geometry_column:
+                    with contextlib.suppress(Exception):
+                        geometry_column = conn.table(schema or "", table).geometryColumn()
+                if geometry_column:
+                    ds_uri.setGeometryColumn(geometry_column)
+                if primary_key:
+                    ds_uri.setKeyColumn(primary_key)
+                uri = ds_uri.uri(False)
             layer = QgsVectorLayer(uri, name or table, conn.providerKey())
         else:
             raise CommandError("Either table or sql must be provided")
