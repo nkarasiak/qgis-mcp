@@ -21,7 +21,7 @@ about=Socket server plugin that exposes QGIS operations to LLMs through the
     - Non-blocking TCP socket server with length-prefixed framing
     - Toolbar button with port configuration dropdown
 
-version=0.15.0
+version=0.15.1
 author=Nicolas Karasiak
 email=nicart@gmail.com
 tags=mcp,ai,claude,llm,automation,socket,remote
@@ -33,7 +33,8 @@ category=Plugins
 icon=icons/icon.png
 experimental=False
 deprecated=False
-changelog=0.15.0 : Background processing jobs with no time limit, project checkpoints
+changelog=0.15.1 : Tables added with add_layer_from_connection keep their geometry column (#53).
+    0.15.0 : Background processing jobs with no time limit, project checkpoints
     to undo a run of changes, export_session to replay a session as a script.
     Fewer silent errors: failed or partial results say why (#52). Inline QML (#42).
     Earlier releases: https://github.com/nkarasiak/qgis-mcp/releases
