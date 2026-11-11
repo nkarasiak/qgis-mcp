@@ -412,8 +412,86 @@ def test_batch_refuses_an_unknown_ellipsoid_before_any_run(
     assert calls["runner"] is None
 
 
-def test_run_model_measures_on_the_requested_ellipsoid(processing, dataobjects):
-    server, calls = processing
+class _Param:
+    def __init__(self, name, destination=False):
+        self._name, self._destination = name, destination
+
+    def name(self):
+        return self._name
+
+    def isDestination(self):
+        return self._destination
+
+
+@pytest.fixture
+def model(processing, plugin_handlers, monkeypatch):
+    """A registered model with an INPUT and the given sink names."""
+    registry = plugin_handlers.processing.QgsApplication.processingRegistry.return_value
+    alg = registry.algorithmById.return_value
+
+    def define(*sinks):
+        params = [_Param("INPUT")] + [_Param(s, destination=True) for s in sinks]
+        monkeypatch.setattr(alg, "parameterDefinitions", lambda: params)
+
+    define("OUTPUT")
+    monkeypatch.setattr(processing[0], "_output_paths", lambda algorithm, parameters: [])
+    return processing, define
+
+
+def _run_model_parameters(server, monkeypatch, parameters):
+    seen = {}
+
+    def run_alg(target, params, feedback, context=None):
+        seen.update(params)
+        return {}
+
+    monkeypatch.setattr(server, "_run_alg", run_alg)
+    server.run_model("model:m", parameters)
+    return seen
+
+
+@pytest.mark.parametrize("sink", ["fancyout", "s1:FancyOut"])
+def test_run_model_routes_a_declared_output_name_to_the_renamed_sink(model, monkeypatch, sink):
+    (server, _), define = model
+    define(sink)
+
+    seen = _run_model_parameters(server, monkeypatch, {"INPUT": "l", "FancyOut": "/o.gpkg"})
+
+    assert seen == {"INPUT": "l", sink: "/o.gpkg"}
+
+
+def test_run_model_refuses_a_key_the_model_does_not_have(model, plugin_handlers, monkeypatch):
+    (server, _), _ = model
+
+    with pytest.raises(plugin_handlers.processing.CommandError, match="'INPT' is not a param"):
+        _run_model_parameters(server, monkeypatch, {"INPT": "l"})
+
+
+def test_run_model_refuses_a_name_two_sinks_share(model, plugin_handlers, monkeypatch):
+    (server, _), define = model
+    define("s1:out", "s2:out")
+
+    with pytest.raises(plugin_handlers.processing.CommandError, match="ambiguous"):
+        _run_model_parameters(server, monkeypatch, {"out": "/o.gpkg"})
+
+
+def test_expression_parameters_pass_the_formula_through(plugin_handlers):
+    """'=$area' on FORMULA must reach the algorithm as text, not be evaluated
+    once at model level with no feature (#56)."""
+    server = plugin_handlers.processing.ProcessingHandlers()
+    src = plugin_handlers.processing.QgsProcessingModelChildParameterSource
+    src.reset_mock()
+
+    server._build_param_source("=$area", set(), set(), per_feature=True)
+    src.fromStaticValue.assert_called_once_with("$area")
+    src.fromExpression.assert_not_called()
+
+    server._build_param_source("=@dist * 2", set(), set())
+    src.fromExpression.assert_called_once_with("@dist * 2")
+
+
+def test_run_model_measures_on_the_requested_ellipsoid(model, dataobjects):
+    (server, calls), _ = model
 
     server.run_model("model:areas", {"OUTPUT": "TEMPORARY_OUTPUT"}, ellipsoid="EPSG:7030")
 
@@ -421,8 +499,8 @@ def test_run_model_measures_on_the_requested_ellipsoid(processing, dataobjects):
     dataobjects.createContext.return_value.setEllipsoid.assert_called_with("EPSG:7030")
 
 
-def test_run_model_default_leaves_the_context_to_processing(processing):
-    server, calls = processing
+def test_run_model_default_leaves_the_context_to_processing(model):
+    (server, calls), _ = model
 
     server.run_model("model:areas", {"OUTPUT": "TEMPORARY_OUTPUT"})
 

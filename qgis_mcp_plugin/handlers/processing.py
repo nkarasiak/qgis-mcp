@@ -144,6 +144,28 @@ def _warnings(feedback):
     return {"warnings": feedback.errors, "warning_count": feedback.error_count}
 
 
+def _match_model_parameters(definitions, parameters):
+    """Map a model run's keys onto its parameter names, refusing unknown ones.
+
+    QGIS renames a declared model output: output "FancyOut" of step s1 is
+    ``fancyout`` on a registered model and ``s1:FancyOut`` on one loaded from
+    a .model3 file. Processing ignores keys it does not know, so the declared
+    name was dropped and the output went to a temporary layer (#57).
+    """
+    names = [p.name() for p in definitions]
+    matched = {}
+    for key, value in parameters.items():
+        if key in names:
+            matched[key] = value
+            continue
+        hits = [n for n in names if key.lower() in (n.lower(), n.split(":", 1)[-1].lower())]
+        if len(hits) != 1:
+            reason = f"is ambiguous ({hits})" if hits else "is not a parameter of this model"
+            raise CommandError(f"'{key}' {reason}. Parameters: {names}")
+        matched[hits[0]] = value
+    return matched
+
+
 def _output_value(value):
     """A processing output as JSON: numbers stay numbers, layers become ids.
 
@@ -709,7 +731,7 @@ class ProcessingHandlers:
             f"Algorithm hint '{hint_clean}' is ambiguous. Candidates: {sample}. Use the full id."
         )
 
-    def _build_param_source(self, value, defined_inputs, defined_steps):
+    def _build_param_source(self, value, defined_inputs, defined_steps, per_feature=False):
         """Convert a JSON-friendly value into a QgsProcessingModelChildParameterSource.
 
         String prefixes:
@@ -717,11 +739,19 @@ class ProcessingHandlers:
           $step.OUTPUT   -> reference to a previous step's output
           =expression    -> evaluated QGIS expression
         Lists are converted element-wise; everything else becomes a static value.
+
+        ``per_feature`` marks an expression-type parameter: the algorithm evaluates
+        it per feature, so '=expression' passes the text through. A model-level
+        Expression source would evaluate it once with no feature, turning '$area'
+        into an empty formula (#56).
         """
         Src = QgsProcessingModelChildParameterSource
 
         if isinstance(value, list):
-            return [self._build_param_source(v, defined_inputs, defined_steps)[0] for v in value]
+            return [
+                self._build_param_source(v, defined_inputs, defined_steps, per_feature)[0]
+                for v in value
+            ]
 
         if isinstance(value, str):
             if value.startswith("@"):
@@ -735,7 +765,8 @@ class ProcessingHandlers:
                 rest = value[1:]
                 if "." not in rest:
                     raise CommandError(
-                        f"Step output reference '{value}' must be in '$step_id.OUTPUT_NAME' form"
+                        f"Step output reference '{value}' must be in '$step_id.OUTPUT_NAME' "
+                        f"form. For a QGIS expression, prefix it with '=': '={value}'"
                     )
                 child_id, output_name = rest.split(".", 1)
                 if child_id not in defined_steps:
@@ -744,6 +775,8 @@ class ProcessingHandlers:
                     )
                 return [Src.fromChildOutput(child_id, output_name)]
             if value.startswith("="):
+                if per_feature:
+                    return [Src.fromStaticValue(value[1:])]
                 return [Src.fromExpression(value[1:])]
 
         return [Src.fromStaticValue(value)]
@@ -1024,9 +1057,14 @@ class ProcessingHandlers:
             )
             child.setPosition(QPointF(300.0 + step_idx * 250.0, 50.0))
 
+            child_alg = registry.algorithmById(alg_id)
             for pname, pvalue in (step.get("parameters") or {}).items():
                 # Build sources, validating refs against already-defined inputs/steps.
-                sources = self._build_param_source(pvalue, defined_inputs, set(defined_steps))
+                param_def = child_alg.parameterDefinition(pname)
+                per_feature = param_def is not None and param_def.type() == "expression"
+                sources = self._build_param_source(
+                    pvalue, defined_inputs, set(defined_steps), per_feature
+                )
                 child.addParameterSources(pname, sources)
 
             # Final outputs declared for this step
@@ -1095,8 +1133,6 @@ class ProcessingHandlers:
     @command
     def run_model(self, model, parameters=None, ellipsoid=None, **kwargs):
         """Run a Processing model by registered id or by .model3 file path."""
-        from qgis.core import QgsProcessingDestinationParameter
-
         parameters = dict(parameters or {})
         if isinstance(model, str) and model.lower().endswith(".model3"):
             alg = QgsProcessingModelAlgorithm()
@@ -1120,8 +1156,9 @@ class ProcessingHandlers:
         # aborts the run. The Processing GUI defaults them to a temporary layer;
         # do the same so callers only have to supply the model's real inputs.
         if alg is not None:
+            parameters = _match_model_parameters(alg.parameterDefinitions(), parameters)
             for param in alg.parameterDefinitions():
-                if isinstance(param, QgsProcessingDestinationParameter):
+                if param.isDestination():
                     parameters.setdefault(param.name(), "TEMPORARY_OUTPUT")
 
         feedback = _ResponsiveFeedback(self._PROCESSING_TIMEOUT)

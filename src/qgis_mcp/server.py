@@ -1569,7 +1569,8 @@ async def get_algorithm_help(
         "keyword or full id. Param values:\n"
         "    '@input_name'     = model input value\n"
         "    '$step_id.OUTPUT' = earlier step output\n"
-        "    '=expression'     = QGIS expression at run time\n"
+        "    '=expression'     = QGIS expression ('=$area'). Expression params (FORMULA, "
+        "EXPRESSION) get it as text, evaluated per feature; others get its value per run\n"
         "    else              = static literal (number/bool/string/list)\n"
         "  outputs: [{name, from_step, from_output, description?}] = exposed outputs; omit to "
         "expose the last step OUTPUT as 'Result'.\n\n"
@@ -1617,7 +1618,8 @@ async def list_processing_models(ctx: Context, instance: str | None = None) -> d
     title="Run Model",
     description="Run a Processing model by registered id (e.g. 'model:myflow') or by a "
     ".model3 file path. 'parameters' maps the model's input names to values "
-    "(layer ids/paths, numbers, etc.). ellipsoid: ellipsoid for distance/area measurements "
+    "(layer ids/paths, numbers, etc.); outputs take the names declared when the model was "
+    "built, and an unknown key is refused. ellipsoid: ellipsoid for distance/area measurements "
     "(e.g. 'EPSG:7030' for WGS 84, 'NONE' for planimetric); default is the project's.",
 )
 async def run_model(

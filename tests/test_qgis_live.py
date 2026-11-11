@@ -899,6 +899,69 @@ def test_run_model_defaults_destination_parameters(client, setup_test_data):
         )
 
 
+def test_model_expression_formula_and_declared_output_name(client, tmp_path):
+    """'=$area' reaches the field calculator per feature (#56), and the declared
+    output name writes the requested file instead of a temporary layer (#57)."""
+    layer = client.send_command(
+        "create_memory_layer",
+        {"name": "sq", "geometry_type": "Polygon", "crs": "EPSG:3857"},
+    )["result"]["id"]
+    client.send_command(
+        "add_features",
+        {"layer_id": layer, "features": [{"geometry_wkt": "POLYGON((0 0,10 0,10 10,0 10,0 0))"}]},
+    )
+    resp = client.send_command(
+        "create_processing_model",
+        {
+            "name": f"livemodel_{uuid.uuid4().hex[:6]}",
+            "inputs": [{"name": "INPUT", "type": "vector"}],
+            "steps": [
+                {
+                    "id": "s1",
+                    "algorithm": "native:fieldcalculator",
+                    "parameters": {"INPUT": "@INPUT", "FIELD_NAME": "a", "FORMULA": "=$area"},
+                }
+            ],
+            "outputs": [{"name": "FancyOut", "from_step": "s1", "from_output": "OUTPUT"}],
+        },
+    )
+    assert resp["status"] == "success", resp.get("message")
+    model_name, model_path = resp["result"]["name"], resp["result"]["path"]
+    out = str(tmp_path / "out.gpkg")
+    try:
+        resp = client.send_command(
+            "run_model",
+            {
+                "model": f"model:{model_name}",
+                "parameters": {"INPUT": layer, "FancyOut": out},
+                "ellipsoid": "NONE",
+            },
+        )
+        assert resp["status"] == "success", resp.get("message")
+        check = client.send_command(
+            "execute_code",
+            {
+                "code": (
+                    "from qgis.core import QgsVectorLayer\n"
+                    f"print([f['a'] for f in QgsVectorLayer(r'{out}').getFeatures()])"
+                )
+            },
+        )
+        assert check["result"]["stdout"].strip() == "[100.0]", check
+    finally:
+        client.send_command("remove_layer", {"layer_id": layer})
+        client.send_command(
+            "execute_code",
+            {
+                "code": (
+                    f"import os\nos.remove(r'{model_path}')\n"
+                    "from qgis.core import QgsApplication\n"
+                    "QgsApplication.processingRegistry().providerById('model').refreshAlgorithms()"
+                )
+            },
+        )
+
+
 # --- Edit sessions, geometry writes, raster style, connections ---
 
 
