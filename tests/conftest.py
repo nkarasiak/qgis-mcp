@@ -66,12 +66,29 @@ class FakeCredentials(FakeQObject):
         FakeCredentials.current = instance
 
 
+class StubModule(MagicMock):
+    """A MagicMock that survives pytest>=9.2 monkeypatch undo.
+
+    monkeypatch now takes the old value from the instance ``__dict__`` only, where a Mock
+    keeps none of its auto-created children, so undo calls ``delattr`` - and a Mock marks a
+    deleted name gone for good, breaking every later test in the session. Drop only the
+    override instead, so the original child (or a fresh one) comes back.
+    """
+
+    def __delattr__(self, name):
+        if name in self.__dict__:
+            object.__delattr__(self, name)  # the patched value; the child is untouched
+            return
+        super().__delattr__(name)
+        self._mock_children.pop(name, None)  # a patched-in mock: let a fresh child appear
+
+
 @pytest.fixture(scope="session")
 def plugin_handlers():
     """The plugin's handler package imported against a stubbed qgis (no QGIS needed)."""
     saved = {name: sys.modules.get(name) for name in QGIS_MODULES}
     for name in QGIS_MODULES:
-        sys.modules[name] = MagicMock()
+        sys.modules[name] = StubModule()
     sys.modules["qgis.core"].QgsCredentials = FakeCredentials
     sys.modules["qgis.core"].QgsProcessingFeedback = FakeQObject
     sys.modules["qgis.PyQt.QtCore"].QObject = FakeQObject  # QgisMCPServer subclasses it
