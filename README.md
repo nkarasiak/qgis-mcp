@@ -369,6 +369,7 @@ Groups: `system`, `project`, `layer`, `features`, `selection`, `style`, `canvas`
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level |
 | `QGIS_MCP_TOOL_MODE` | `granular` | `granular` (125 tools) or `compound` (27 grouped) |
 | `QGIS_MCP_AUTO_CONFIRM` | on | Confirmation elicitation on destructive tools (`execute_code`, `remove_layer`, `delete_features`, ...) is skipped by default: your client already asks before running them, so it was a second prompt for the same call. Set to `0`/`false`/`no`/`off` to elicit anyway - worth it only for a client that runs tools unattended. |
+| `QGIS_MCP_BIND_HOST` | `localhost` | IP or hostname that the plugin will bind to, change this to allow external connections. consider the security implications before you do this! |
 
 ### Authentication
 

@@ -50,6 +50,7 @@ uv run --no-sync pytest tests/ -v
 | `QGIS_MCP_LOG_LEVEL` | `INFO` | File log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `QGIS_MCP_TOOL_MODE` | `granular` | Tool registration mode: `granular` (125 tools) or `compound` (27 grouped tools) |
 | `QGIS_MCP_AUTO_CONFIRM` | on | `0`/`false`/`no`/`off` makes `_confirm_destructive` elicit; anything else (including unset) skips it. Default-skip because MCP clients gate destructive tool calls themselves - see the confirmation note in Key Details. |
+| `QGIS_MCP_BIND_HOST` | `localhost` | determines the server address to bind to. changing this has security implications. |
 
 ## MCP Tools, Resources, Prompts, Protocol Features
 

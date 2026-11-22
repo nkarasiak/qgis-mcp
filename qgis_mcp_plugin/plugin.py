@@ -370,6 +370,7 @@ class QgisMCPPlugin:
         if checked:
             port = self.port_spin.value()
             self.server = QgisMCPServer(
+                host=os.environ.get("QGIS_MCP_BIND_HOST", "localhost"),
                 port=port,
                 iface=self.iface,
                 on_clients_changed=self._on_clients_changed,
