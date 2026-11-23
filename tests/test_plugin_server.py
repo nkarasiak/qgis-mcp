@@ -151,3 +151,13 @@ def test_convert_attribute_turns_qt_dates_into_iso_strings(server):
     assert server._convert_attribute(FakeQDateTime()) == "2021-03-04T05:06:07"
     assert server._convert_attribute(datetime.date(2020, 1, 2)) == "2020-01-02"
     assert server._convert_attribute(3.5) == 3.5
+
+
+@pytest.mark.parametrize("host", ["", "0.0.0.0"])
+def test_all_interfaces_bind_needs_a_token(server_module, host, monkeypatch):
+    # "" binds INADDR_ANY just like 0.0.0.0, so it must not pass as loopback.
+    monkeypatch.delenv("QGIS_MCP_TOKEN", raising=False)
+    srv = server_module.QgisMCPServer(host=host)
+
+    assert srv.start() is False
+    assert "Refusing to bind" in srv.start_error
